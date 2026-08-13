@@ -1,0 +1,66 @@
+{
+    "version": 6,
+    "include": [
+        "Platforms.json",
+        "Options.json",
+        "Compilers.json",
+        "CompilerFlags.json"
+    ],
+    "configurePresets": [
+        {
+            "name": "base-developer-windows",
+            "hidden": true,
+            "inherits": [
+                "ISWindows",
+                "developer-mode",
+                "Msvc",
+                "flags-msvc"
+            ],
+            "binaryDir": "${sourceDir}/build/Msvc"
+        },
+        {
+            "name": "base-release-windows",
+            "hidden": true,
+            "inherits": [
+                "ISWindows",
+                "release-mode",
+                "Msvc",
+                "flags-msvc"
+            ],
+            "binaryDir": "${sourceDir}/build/Msvc-Release"
+        },
+        {
+            "name": "base-release-linux",
+            "hidden": true,
+            "inherits": [
+                "ISLinux",
+                "release-mode",
+                "Gcc",
+                "flags-gnu"
+            ],
+            "binaryDir": "${sourceDir}/build/linux-gcc-release"
+        },
+        {
+            "name": "base-developer-linux",
+            "hidden": true,
+            "inherits": [
+                "ISLinux",
+                "developer-mode",
+                "Gcc",
+                "flags-gnu"
+            ],
+            "binaryDir": "${sourceDir}/build/linux-gcc-debug"
+        },
+        {
+            "name": "base-release-mac",
+            "hidden": true,
+            "inherits": [
+                "ISMac",
+                "release-mode",
+                "Clang",
+                "flags-appleclang"
+            ],
+            "binaryDir": "${sourceDir}/build/mac-clang-release"
+        }
+    ]
+}

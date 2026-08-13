@@ -1,0 +1,6 @@
+#ifndef TURBO_FLOW_FMQ_TEST_BENCH_STATS_COMPAT_H
+#define TURBO_FLOW_FMQ_TEST_BENCH_STATS_COMPAT_H
+
+#include "../benchmarks/fmq_bench_stats.h"
+
+#endif /* TURBO_FLOW_FMQ_TEST_BENCH_STATS_COMPAT_H */

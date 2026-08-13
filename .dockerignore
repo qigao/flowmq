@@ -1,0 +1,17 @@
+build/
+.git/
+.codegraph/
+.vs/
+.vscode/
+bin/
+lib/
+*.log
+vcpkg_installed/
+.env
+.env.*
+!.env.example
+*.env
+**/state/
+*.key
+*.p12
+*.pfx

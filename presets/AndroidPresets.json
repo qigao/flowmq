@@ -1,0 +1,111 @@
+{
+    "version": 6,
+    "include": [
+        "BasePresets.json"
+    ],
+    "configurePresets": [
+        {
+            "name": "android-base",
+            "hidden": true,
+            "inherits": ["flags-android", "android-vcpkg-chainload"],
+            "generator": "Ninja",
+            "cacheVariables": {
+                "CMAKE_SYSTEM_NAME": "Android",
+                "ANDROID_STL": "c++_shared",
+                "ANDROID_PLATFORM": "android-24",
+                "BUILD_TESTS": false
+            }
+        },
+        {
+            "name": "android-vcpkg-chainload",
+            "hidden": true,
+            "cacheVariables": {
+                "VCPKG_MANIFEST_MODE": true
+            }
+        },
+        {
+            "name": "android-win-paths",
+            "hidden": true,
+            "inherits": "ISWindows",
+            "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+            "cacheVariables": {
+                "CMAKE_MAKE_PROGRAM": "$env{NINJA_ROOT}/ninja.exe",
+                "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/flowmq-android",
+                "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "$env{ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake",
+                "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed"
+            }
+        },
+        {
+            "name": "android-arm64-v8a-debug",
+            "hidden": true,
+            "inherits": ["android-base", "developer-mode"],
+            "binaryDir": "${sourceDir}/build/android-arm64-v8a-debug",
+            "cacheVariables": {
+                "ANDROID_ABI": "arm64-v8a",
+                "VCPKG_TARGET_TRIPLET": "arm64-android",
+                "BUILD_TESTS": false,
+                "BUILD_EXAMPLES": false
+            }
+        },
+        {
+            "name": "android-arm64-v8a-release",
+            "hidden": true,
+            "inherits": ["android-base", "release-mode"],
+            "binaryDir": "${sourceDir}/build/android-arm64-v8a-release",
+            "cacheVariables": {
+                "ANDROID_ABI": "arm64-v8a",
+                "VCPKG_TARGET_TRIPLET": "arm64-android",
+                "BUILD_TESTS": false,
+                "BUILD_EXAMPLES": false
+            }
+        },
+        {
+            "name": "android-x86_64-debug",
+            "hidden": true,
+            "inherits": ["android-base", "developer-mode"],
+            "binaryDir": "${sourceDir}/build/android-x86_64-debug",
+            "cacheVariables": {
+                "ANDROID_ABI": "x86_64",
+                "VCPKG_TARGET_TRIPLET": "x64-android",
+                "BUILD_TESTS": false,
+                "BUILD_EXAMPLES": false
+            }
+        },
+        {
+            "name": "android-x86_64-release",
+            "hidden": true,
+            "inherits": ["android-base", "release-mode"],
+            "binaryDir": "${sourceDir}/build/android-x86_64-release",
+            "cacheVariables": {
+                "ANDROID_ABI": "x86_64",
+                "VCPKG_TARGET_TRIPLET": "x64-android",
+                "BUILD_TESTS": false,
+                "BUILD_EXAMPLES": false
+            }
+        },
+        {
+            "name": "android-x86-debug",
+            "hidden": true,
+            "inherits": ["android-base", "developer-mode"],
+            "binaryDir": "${sourceDir}/build/android-x86-debug",
+            "cacheVariables": {
+                "ANDROID_ABI": "x86",
+                "VCPKG_TARGET_TRIPLET": "x86-android",
+                "BUILD_TESTS": false,
+                "BUILD_EXAMPLES": false
+            }
+        },
+        {
+            "name": "android-x86-release",
+            "hidden": true,
+            "inherits": ["android-base", "release-mode"],
+            "binaryDir": "${sourceDir}/build/android-x86-release",
+            "cacheVariables": {
+                "ANDROID_ABI": "x86",
+                "VCPKG_TARGET_TRIPLET": "x86-android",
+                "BUILD_TESTS": false,
+                "BUILD_EXAMPLES": false
+            }
+        }
+    ]
+}

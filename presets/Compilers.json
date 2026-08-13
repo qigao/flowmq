@@ -1,0 +1,35 @@
+{
+    "version": 6,
+    "cmakeMinimumRequired": {
+        "major": 3,
+        "minor": 23,
+        "patch": 0
+    },
+    "configurePresets": [
+        {
+            "name": "Msvc",
+            "hidden": true, 
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "$env{MSVC_ROOT}/bin/Hostx64/x64/cl.exe",
+                "CMAKE_LINKER": "$env{MSVC_ROOT}/bin/Hostx64/x64/link.exe",
+                "CMAKE_AR": "$env{MSVC_ROOT}/bin/Hostx64/x64/lib.exe",
+                "CMAKE_RC_COMPILER": "$env{WINDOWS_SDK_ROOT}/bin/$env{WINDOWS_SDK_VERSION}/x64/rc.exe",
+                "CMAKE_MT": "$env{WINDOWS_SDK_ROOT}/bin/$env{WINDOWS_SDK_VERSION}/x64/mt.exe"
+            }
+        },
+        {
+            "name": "Clang",
+            "hidden": true,
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang"
+            }
+        },
+        {
+            "name": "Gcc",
+            "hidden": true,
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "gcc"
+            }
+        }
+    ]
+}

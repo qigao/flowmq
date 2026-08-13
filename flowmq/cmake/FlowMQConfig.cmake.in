@@ -1,0 +1,10 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(Threads REQUIRED)
+find_dependency(TurboUtils CONFIG REQUIRED)
+
+include("${CMAKE_CURRENT_LIST_DIR}/FlowMQTargets.cmake")
+
+set(FlowMQ_FlowMQ_FOUND TRUE)
+check_required_components(FlowMQ)

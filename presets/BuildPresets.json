@@ -1,0 +1,39 @@
+{
+  "version": 6,
+  "include": [
+    "ConfigurePresets.json",
+    "Platforms.json"
+  ],
+  "buildPresets": [
+    {
+      "name": "build-default-windows",
+      "displayName": "Build (Default, Windows)",
+      "inherits": "ISWindows",
+      "configurePreset": "dev-win-msvc-ninja"
+    },
+    {
+      "name": "build-release-windows",
+      "displayName": "Build (Release, Windows)",
+      "inherits": "ISWindows",
+      "configurePreset": "release-win-msvc-ninja"
+    },
+    {
+      "name": "build-default-linux",
+      "displayName": "Build (Default, Linux)",
+      "inherits": "ISLinux",
+      "configurePreset": "release-linux-ninja"
+    },
+    {
+      "name": "build-debug-linux",
+      "displayName": "Build Debug (Linux)",
+      "inherits": "ISLinux",
+      "configurePreset": "dev-linux-ninja"
+    },
+    {
+      "name": "build-default-mac",
+      "displayName": "Build (Default, Mac)",
+      "inherits": "ISMac",
+      "configurePreset": "release-mac-ninja"
+    }
+  ]
+}

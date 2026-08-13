@@ -1,0 +1,91 @@
+# Build directories and binary files
+build*/
+install/
+bin/
+out/
+cmake-build-*/
+.vcpkg_installed/
+vcpkg_installed/
+conan-cache/
+coverage.xml
+.codegraph/
+
+# IDE files
+.vs/
+.idea/
+.vscode/
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/settings.json
+*.swp
+*~
+_ReSharper*
+*.log
+.cache/
+.diag-run/
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# OS Generated Files
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+.Trash-*
+$RECYCLE.BIN/
+.TemporaryItems
+ehthumbs.db
+Thumbs.db
+
+# User specific settings
+.env
+ 
+# agents
+.codex-*
+.claude
+.agent
+
+# Security - Entire projects directory (contains generated keys, licenses, and project-specific configs)
+# NEVER commit this directory - it contains:
+# - RSA private/public keys (private_key.rsa, public_key.rsa)
+# - Generated license files (.lic)
+# - Project-specific configuration headers (licensecc_properties.h, public_key.h)
+# - License encryption keys (license_encryption.key)
+projects/
+
+# Security - Additional protection for keys anywhere in the tree
+license_encryption.key
+*.key
+**/license_encryption.key
+**/*_key.rsa
+**/*.lic

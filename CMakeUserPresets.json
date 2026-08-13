@@ -1,0 +1,155 @@
+{
+    "version": 6,
+    "include": [
+        "CMakePresets.json"
+    ],
+    "configurePresets": [
+        {
+            "name": "win-toolchain",
+            "hidden": true,
+            "environment": {
+                "PROJECT_ROOT": "C:/projects/cpp",
+                "PKG_ROOT": "$env{PROJECT_ROOT}/external/pkgs",
+                "VCPKG_ROOT": "C:/tools/vcpkg",
+                "USER_ROOT": "C:/Users/lockg",
+                "PROGRAM_FILES_X86_ROOT": "C:/Program Files (x86)",
+                "WINDOWS_ROOT": "C:/Windows",
+                "NINJA_ROOT": "$env{USER_ROOT}/scoop/shims",
+                "VS_ROOT": "$env{PROGRAM_FILES_X86_ROOT}/Microsoft Visual Studio/2022/BuildTools",
+                "MSVC_VERSION": "14.44.35207",
+                "MSVC_ROOT": "$env{VS_ROOT}/VC/Tools/MSVC/$env{MSVC_VERSION}",
+                "MSVC_AUXILIARY_ROOT": "$env{VS_ROOT}/VC/Auxiliary/VS",
+                "WINDOWS_SDK_ROOT": "$env{PROGRAM_FILES_X86_ROOT}/Windows Kits/10",
+                "WINDOWS_SDK_VERSION": "10.0.26100.0",
+                "INCLUDE": "$env{MSVC_ROOT}/include;$env{MSVC_AUXILIARY_ROOT}/include;$env{WINDOWS_SDK_ROOT}/Include/$env{WINDOWS_SDK_VERSION}/ucrt;$env{WINDOWS_SDK_ROOT}/Include/$env{WINDOWS_SDK_VERSION}/um;$env{WINDOWS_SDK_ROOT}/Include/$env{WINDOWS_SDK_VERSION}/shared;$env{WINDOWS_SDK_ROOT}/Include/$env{WINDOWS_SDK_VERSION}/winrt;$env{WINDOWS_SDK_ROOT}/Include/$env{WINDOWS_SDK_VERSION}/cppwinrt",
+                "LIB": "$env{MSVC_ROOT}/lib/x64;$env{WINDOWS_SDK_ROOT}/Lib/$env{WINDOWS_SDK_VERSION}/ucrt/x64;$env{WINDOWS_SDK_ROOT}/Lib/$env{WINDOWS_SDK_VERSION}/um/x64",
+                "LIBPATH": "$env{MSVC_ROOT}/lib/x64;$env{MSVC_ROOT}/lib/x86/store/references;$env{WINDOWS_SDK_ROOT}/UnionMetadata/$env{WINDOWS_SDK_VERSION};$env{WINDOWS_SDK_ROOT}/References/$env{WINDOWS_SDK_VERSION};$env{WINDOWS_ROOT}/Microsoft.NET/Framework64/v4.0.30319"
+            }
+        },
+        {
+            "name": "win-paths",
+            "hidden": true,
+            "inherits": "win-toolchain",
+            "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+            "cacheVariables": { 
+                "CMAKE_MAKE_PROGRAM": "$env{NINJA_ROOT}/ninja.exe",
+                "TURBO_UTILS_ROOT": "C:/projects/cpp/external/pkgs/turboutils",
+                "TURBO_PARSER_ROOT": "C:/projects/cpp/external/pkgs/turboparser",
+                "TURBO_NET_ROOT": "C:/projects/cpp/external/pkgs/turbonet",
+                "CMAKE_INSTALL_PREFIX": "C:/projects/cpp/external/pkgs/flowmq",
+                "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
+                "VCPKG_TARGET_TRIPLET": "x64-windows",
+                "VCPKG_MANIFEST_MODE": "ON"
+            },
+            "architecture": { "value": "x64", "strategy": "external" },
+            "toolset": { "value": "host=x64", "strategy": "external" }
+        },
+        {
+            "name": "linux-paths",
+            "hidden": true,
+            "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+            "cacheVariables": {
+                "TURBO_UTILS_ROOT": "$env{PKG_ROOT}/turboutils",
+                "TURBO_PARSER_ROOT": "$env{PKG_ROOT}/turboparser",
+                "TURBO_NET_ROOT": "$env{PKG_ROOT}/turbonet",
+                "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/flowmq",
+                "CMAKE_MAKE_PROGRAM": "/usr/bin/ninja",
+                "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
+                "VCPKG_TARGET_TRIPLET": "x64-linux",
+                "VCPKG_MANIFEST_MODE": "ON"
+            },
+            "environment": {
+                "PKG_ROOT": "/opt",
+                "VCPKG_ROOT": "/opt/vcpkg"
+            }
+        },
+        {
+            "name": "android-win-environment",
+            "hidden": true,
+            "inherits": "win-toolchain",
+            "environment": {
+                "ANDROID_SDK_ROOT": "$env{USER_ROOT}/AppData/Local/Android/Sdk",
+                "ANDROID_NDK_VERSION": "28.2.13676358",
+                "ANDROID_NDK_HOME": "$env{ANDROID_SDK_ROOT}/ndk/$env{ANDROID_NDK_VERSION}"
+            }
+        },
+        {
+            "name": "win-dev-user",
+            "cacheVariables": {
+                "ENABLE_ASAN": "ON",
+                "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/x64-windows/debug"
+            },
+            "environment": {
+                "PATH": "${sourceDir}/vcpkg_installed/x64-windows/debug/bin${pathListSep}$penv{PATH}"
+            },
+            "inherits": ["base-win-dev-user", "win-paths"]
+        },
+        {
+            "name": "win-release-user",
+            "cacheVariables": {
+                "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/x64-windows"
+            },
+            "environment": {
+                "PATH": "${sourceDir}/vcpkg_installed/x64-windows/bin${pathListSep}$penv{PATH}"
+            },
+            "inherits": ["base-win-release-user", "win-paths"]
+        },
+        {
+            "name": "linux-dev-user",
+            "cacheVariables": {
+                "ENABLE_ASAN": "ON",
+                "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/x64-linux/debug"
+            },
+            "inherits": ["base-linux-dev-user", "linux-paths"]
+        },
+        {
+            "name": "linux-release-user",
+            "cacheVariables": {
+                "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/x64-linux"
+            },
+            "inherits": ["release-linux-ninja", "linux-paths"]
+        },
+        {
+            "name": "linux-sdk-package",
+            "binaryDir": "${sourceDir}/build/linux-gcc-sdk-package",
+            "cacheVariables": {
+                "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/x64-linux",
+                "ENABLE_ASAN": "OFF",
+                "BUILD_TESTS": "OFF",
+                "BUILD_EXAMPLES": "OFF"
+            },
+            "inherits": ["release-linux-ninja", "linux-paths"]
+        },
+        { "name": "android-arm64-v8a-debug-win", "environment": { "ANDROID_BUILD_VARIANT": "android-arm64-v8a-debug" }, "inherits": ["android-arm64-v8a-debug", "android-win-paths", "android-win-environment"] },
+        { "name": "android-arm64-v8a-release-win", "environment": { "ANDROID_BUILD_VARIANT": "android-arm64-v8a-release" }, "inherits": ["android-arm64-v8a-release", "android-win-paths", "android-win-environment"] },
+        { "name": "android-x86_64-debug-win", "environment": { "ANDROID_BUILD_VARIANT": "android-x86_64-debug" }, "inherits": ["android-x86_64-debug", "android-win-paths", "android-win-environment"] },
+        { "name": "android-x86_64-release-win", "environment": { "ANDROID_BUILD_VARIANT": "android-x86_64-release" }, "inherits": ["android-x86_64-release", "android-win-paths", "android-win-environment"] },
+        { "name": "android-x86-debug-win", "environment": { "ANDROID_BUILD_VARIANT": "android-x86-debug" }, "inherits": ["android-x86-debug", "android-win-paths", "android-win-environment"] },
+        { "name": "android-x86-release-win", "environment": { "ANDROID_BUILD_VARIANT": "android-x86-release" }, "inherits": ["android-x86-release", "android-win-paths", "android-win-environment"] }
+    ],
+    "buildPresets": [
+        { "name": "win-dev-user", "configurePreset": "win-dev-user" },
+        { "name": "win-release-user", "configurePreset": "win-release-user" },
+        { "name": "linux-dev-user", "configurePreset": "linux-dev-user" },
+        { "name": "linux-release-user", "configurePreset": "linux-release-user" },
+        { "name": "linux-sdk-package", "configurePreset": "linux-sdk-package" },
+        { "name": "android-arm64-v8a-debug-win", "configurePreset": "android-arm64-v8a-debug-win" },
+        { "name": "android-arm64-v8a-release-win", "configurePreset": "android-arm64-v8a-release-win" },
+        { "name": "android-x86_64-debug-win", "configurePreset": "android-x86_64-debug-win" },
+        { "name": "android-x86_64-release-win", "configurePreset": "android-x86_64-release-win" },
+        { "name": "android-x86-debug-win", "configurePreset": "android-x86-debug-win" },
+        { "name": "android-x86-release-win", "configurePreset": "android-x86-release-win" },
+        { "name": "install-android-arm64-v8a-debug-win", "configurePreset": "android-arm64-v8a-debug-win", "targets": ["install"] },
+        { "name": "install-android-arm64-v8a-release-win", "configurePreset": "android-arm64-v8a-release-win", "targets": ["install"] },
+        { "name": "install-android-x86_64-debug-win", "configurePreset": "android-x86_64-debug-win", "targets": ["install"] },
+        { "name": "install-android-x86_64-release-win", "configurePreset": "android-x86_64-release-win", "targets": ["install"] },
+        { "name": "install-android-x86-debug-win", "configurePreset": "android-x86-debug-win", "targets": ["install"] },
+        { "name": "install-android-x86-release-win", "configurePreset": "android-x86-release-win", "targets": ["install"] }
+    ],
+    "testPresets": [
+        { "name": "win-dev-user", "inherits": "base-test", "configurePreset": "win-dev-user" },
+        { "name": "win-release-user", "inherits": "base-test", "configurePreset": "win-release-user" },
+        { "name": "linux-dev-user", "inherits": "base-test", "configurePreset": "linux-dev-user" },
+        { "name": "linux-release-user", "inherits": "base-test", "configurePreset": "linux-release-user" }
+    ]
+}

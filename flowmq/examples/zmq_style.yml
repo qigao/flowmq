@@ -1,0 +1,68 @@
+version: 1
+
+fragments:
+  connection:
+    pub-sub:
+      transport: tcp
+      host: 127.0.0.1
+      port: 7711
+    req-rep:
+      transport: tcp
+      host: 127.0.0.1
+      port: 7712
+    router-dealer:
+      transport: tcp
+      host: 127.0.0.1
+      port: 7713
+
+adapters:
+  fmq.example.pub:
+    kind: fmq
+    fragments:
+      connection: pub-sub
+    config:
+      pattern: pub
+      mode: bind
+      topic: orders.created
+
+  fmq.example.sub:
+    kind: fmq
+    fragments:
+      connection: pub-sub
+    config:
+      pattern: sub
+      mode: connect
+      topic: orders.
+
+  fmq.example.rep:
+    kind: fmq
+    fragments:
+      connection: req-rep
+    config:
+      pattern: rep
+      mode: bind
+
+  fmq.example.req:
+    kind: fmq
+    fragments:
+      connection: req-rep
+    config:
+      pattern: req
+      mode: connect
+
+  fmq.example.router:
+    kind: fmq
+    fragments:
+      connection: router-dealer
+    config:
+      pattern: router
+      mode: bind
+
+  fmq.example.dealer:
+    kind: fmq
+    fragments:
+      connection: router-dealer
+    config:
+      pattern: dealer
+      mode: connect
+      identity: worker-17

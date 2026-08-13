@@ -1,0 +1,64 @@
+{
+    "version": 6,
+    "configurePresets": [
+        {
+            "name": "default-options",
+            "hidden": true,
+            "cacheVariables": {
+                "BUILD_TESTS": true
+            }
+        },
+        {
+            "name": "pkg-conan",
+            "hidden": true,
+            "cacheVariables": {
+                "CMAKE_TOOLCHAIN_FILE": "$env{CONAN_INSTALL_ROOT}/conan_toolchain.cmake"
+            }
+        },
+        {
+            "name": "pkg-vcpkg",
+            "hidden": true,
+            "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+            "cacheVariables": {
+                "VCPKG_MANIFEST_MODE": true
+            }
+        },
+        {
+            "name": "cppcheck",
+            "hidden": true,
+            "cacheVariables": {
+                "CMAKE_C_CPPCHECK": "cppcheck;--inline-suppr"
+            }
+        },
+        {
+            "name": "clang-tidy",
+            "hidden": true,
+            "cacheVariables": {
+                "CMAKE_C_CLANG_TIDY": "clang-tidy;--header-filter=^${sourceDir}/"
+            }
+        },
+        {
+            "name": "developer-mode",
+            "hidden": true,
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "ENABLE_ASAN": true,
+                "BUILD_TESTS": true
+            },
+            "inherits": [
+                "default-options"
+            ]
+        },
+        {
+            "name": "release-mode",
+            "hidden": true,
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "BUILD_TESTS": false
+            },
+            "inherits": [
+                "default-options"
+            ]
+        }
+    ]
+}

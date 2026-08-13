@@ -1,0 +1,11 @@
+if(ENABLE_ASAN)
+  message(STATUS "AddressSanitizer: ON")
+  if(MSVC)
+    add_compile_options(/fsanitize=address)
+    add_link_options(/fsanitize=address)
+  else()
+    add_compile_options(-fsanitize=address -fno-omit-frame-pointer
+                        -fno-optimize-sibling-calls)
+    add_link_options(-fsanitize=address)
+  endif()
+endif()
