@@ -1,4 +1,5 @@
 #include "flowmq_protocol.h"
+#include "flowmq_protocol_esb.h"
 
 #include "turbo_buffer.h"
 #include "turbo_error.h"
@@ -53,6 +54,15 @@ typedef flowmq_protocol_heartbeat_deadlines_t flow_fmq_heartbeat_deadlines_t;
 #define flow_fmq_encoded_size_limit flowmq_protocol_encoded_size_limit
 #define flow_fmq_encoded_size flowmq_protocol_encoded_size
 
+static int flow_fmq_is_esb_pattern(flowmq_protocol_pattern_t pattern) {
+  return pattern >= FLOWMQ_PROTOCOL_ESB_PATTERN_MIN &&
+         pattern <= FLOWMQ_PROTOCOL_ESB_PATTERN_MAX;
+}
+
+static int flow_fmq_is_esb_kind(flowmq_protocol_frame_kind_t kind) {
+  return kind >= FLOWMQ_PROTOCOL_ESB_FRAME_MIN && kind <= FLOWMQ_PROTOCOL_ESB_FRAME_MAX;
+}
+
 static void flow_fmq_write_u16(unsigned char *out, uint16_t value) {
   out[0] = (unsigned char)(value >> 8);
   out[1] = (unsigned char)value;
@@ -71,6 +81,28 @@ static uint16_t flow_fmq_read_u16(const unsigned char *data) {
 
 static uint32_t flow_fmq_read_u32(const unsigned char *data) {
   return ((uint32_t)data[0] << 24) | ((uint32_t)data[1] << 16) | ((uint32_t)data[2] << 8) | data[3];
+}
+
+static uint32_t flow_fmq_read_u32_le(const unsigned char *data) {
+  return (uint32_t)data[0] | ((uint32_t)data[1] << 8u) | ((uint32_t)data[2] << 16u) |
+         ((uint32_t)data[3] << 24u);
+}
+
+static int flow_fmq_decode_esb_trailing_payload(const char *data, size_t data_len, size_t *used) {
+  const unsigned char *cursor = (const unsigned char *)data;
+  size_t offset = 0u;
+  if (!used) return TURBO_EINVAL;
+  *used = 0u;
+  if (!data || data_len == 0u) return TURBO_OK;
+  while (offset < data_len) {
+    size_t tlv_len = 0u;
+    if (data_len - offset < 5u) return FLOWMQ_PROTOCOL_INCOMPLETE;
+    tlv_len = (size_t)flow_fmq_read_u32_le(cursor + offset + 1u);
+    if (offset + 5u + tlv_len > data_len) return FLOWMQ_PROTOCOL_INCOMPLETE;
+    offset += 5u + tlv_len;
+  }
+  *used = offset;
+  return TURBO_OK;
 }
 
 static int flow_fmq_security_view_validate(const flowmq_protocol_security_t *security) {
@@ -256,8 +288,9 @@ static int flow_fmq_frame_lengths(const flow_fmq_frame_t *frame, size_t max_fram
   size_t body;
   size_t packet_count;
   if (!frame || !total || frame->kind < FLOW_FMQ_FRAME_HELLO ||
-      frame->kind > FLOW_FMQ_FRAME_UNSUBSCRIBE || frame->pattern < TURBO_FLOW_FMQ_PUB ||
-      frame->pattern > TURBO_FLOW_FMQ_XSUB) {
+      (frame->kind > FLOW_FMQ_FRAME_UNSUBSCRIBE && !flow_fmq_is_esb_kind(frame->kind)) ||
+      frame->pattern < TURBO_FLOW_FMQ_PUB ||
+      (frame->pattern > TURBO_FLOW_FMQ_XSUB && !flow_fmq_is_esb_pattern(frame->pattern))) {
     return TURBO_EINVAL;
   }
   if ((frame->identity.len > 0 && !frame->identity.data) ||
@@ -290,8 +323,14 @@ static int flow_fmq_frame_lengths(const flow_fmq_frame_t *frame, size_t max_fram
     int security_rc = flowmq_protocol_security_decode(frame->payload, &security);
     if (security_rc != TURBO_OK) return security_rc;
   }
-  if (frame->kind == FLOW_FMQ_FRAME_DATA && frame->message_id == 0u) return TURBO_EPROTO;
-  if (frame->kind != FLOW_FMQ_FRAME_DATA && frame->message_id != 0u) return TURBO_EPROTO;
+  if ((frame->kind == FLOW_FMQ_FRAME_DATA || flow_fmq_is_esb_kind(frame->kind)) &&
+      frame->message_id == 0u) {
+    return TURBO_EPROTO;
+  }
+  if (frame->kind != FLOW_FMQ_FRAME_DATA && !flow_fmq_is_esb_kind(frame->kind) &&
+      frame->message_id != 0u) {
+    return TURBO_EPROTO;
+  }
   body = frame->identity.len + frame->topic.len + frame->payload.len;
   if (body > max_frame_size) return TURBO_EMSGSIZE;
   packet_count = frame->kind == FLOW_FMQ_FRAME_DATA && frame->payload.len > 0
@@ -511,8 +550,11 @@ static int flow_fmq_decode_packet(const char *data, size_t data_len, flow_fmq_pa
   if (data_len >= 5u && header[4] != FLOW_FMQ_PROTOCOL_VERSION) return TURBO_EPROTO;
   if (data_len < FLOW_FMQ_HEADER_SIZE) return FLOW_FMQ_INCOMPLETE;
   if ((header[7] & ~(FLOW_FMQ_PACKET_FIRST | FLOW_FMQ_PACKET_LAST)) != 0u) return TURBO_EPROTO;
-  if (header[5] < FLOW_FMQ_FRAME_HELLO || header[5] > FLOW_FMQ_FRAME_UNSUBSCRIBE ||
-      header[6] < TURBO_FLOW_FMQ_PUB || header[6] > TURBO_FLOW_FMQ_XSUB)
+  if (header[5] < FLOW_FMQ_FRAME_HELLO ||
+      (header[5] > FLOW_FMQ_FRAME_UNSUBSCRIBE &&
+       !flow_fmq_is_esb_kind((flowmq_protocol_frame_kind_t)header[5])) ||
+      header[6] < TURBO_FLOW_FMQ_PUB ||
+      (header[6] > TURBO_FLOW_FMQ_XSUB && !flow_fmq_is_esb_pattern(header[6])))
     return TURBO_EPROTO;
   memset(packet, 0, sizeof(*packet));
   packet->kind = (flow_fmq_frame_kind_t)header[5];
@@ -546,7 +588,7 @@ int flow_fmq_encoded_topic(const char *data, size_t data_len, size_t max_frame_s
       (size_t)packet.identity_len + packet.topic_len + packet.payload_len > max_frame_size) {
     return TURBO_EPROTO;
   }
-  if (packet.kind == FLOW_FMQ_FRAME_DATA) {
+  if (packet.kind == FLOW_FMQ_FRAME_DATA || flow_fmq_is_esb_kind(packet.kind)) {
     if (packet.message_id == 0u) return TURBO_EPROTO;
   } else if (packet.message_id != 0u) {
     return TURBO_EPROTO;
@@ -571,7 +613,7 @@ int flow_fmq_decode_frame(const char *data, size_t data_len, size_t max_frame_si
     return TURBO_EPROTO;
   if ((size_t)first.identity_len + first.topic_len + first.payload_len > max_frame_size)
     return TURBO_EMSGSIZE;
-  if (first.kind == FLOW_FMQ_FRAME_DATA) {
+  if (first.kind == FLOW_FMQ_FRAME_DATA || flow_fmq_is_esb_kind(first.kind)) {
     if (first.message_id == 0u) return TURBO_EPROTO;
   } else if (first.message_id != 0u || first.payload_len != first.chunk_len ||
              (first.flags & FLOW_FMQ_PACKET_LAST) == 0u) {
@@ -598,22 +640,36 @@ int flow_fmq_decode_frame(const char *data, size_t data_len, size_t max_frame_si
     if (packet.chunk_len == 0u || payload_copied == first.payload_len) return TURBO_EPROTO;
   }
   if (payload_copied != first.payload_len) return TURBO_EPROTO;
+
+  size_t payload_cursor = cursor;
+  size_t extension_len = 0u;
+  size_t base_payload_len = first.payload_len;
+  if (flow_fmq_is_esb_kind(first.kind)) {
+    rc = flow_fmq_decode_esb_trailing_payload(data + cursor, data_len - cursor, &extension_len);
+    if (rc != TURBO_OK) return rc;
+    if ((size_t)first.identity_len + first.topic_len + base_payload_len + extension_len > max_frame_size)
+      return TURBO_EMSGSIZE;
+  }
+  if (base_payload_len > SIZE_MAX - extension_len) return TURBO_ERANGE;
+  size_t total_payload_len = base_payload_len + extension_len;
+  cursor += extension_len;
+
   out->kind = first.kind;
   out->pattern = first.pattern;
   out->message_id = first.message_id;
   out->identity = tstr_v_from_buf(data + FLOW_FMQ_HEADER_SIZE, first.identity_len);
   out->topic = tstr_v_from_buf(data + FLOW_FMQ_HEADER_SIZE + first.identity_len, first.topic_len);
-  if (packet_count == 1u) {
+  if (packet_count == 1u && extension_len == 0u) {
     out->payload = tstr_v_from_buf(
-        data + FLOW_FMQ_HEADER_SIZE + first.identity_len + first.topic_len, first.payload_len);
+        data + FLOW_FMQ_HEADER_SIZE + first.identity_len + first.topic_len, base_payload_len);
   } else {
     size_t read_cursor = 0u;
     size_t write_offset = 0u;
-    out->owned_payload = tstr_new_len(NULL, first.payload_len);
+    out->owned_payload = tstr_new_len(NULL, total_payload_len);
     if (!out->owned_payload) return TURBO_ENOMEM;
-    while (read_cursor < cursor) {
+    while (read_cursor < payload_cursor) {
       flow_fmq_packet_t packet;
-      rc = flow_fmq_decode_packet(data + read_cursor, cursor - read_cursor, &packet);
+      rc = flow_fmq_decode_packet(data + read_cursor, payload_cursor - read_cursor, &packet);
       if (rc != TURBO_OK) {
         flow_fmq_frame_cleanup(out);
         return rc;
@@ -626,7 +682,10 @@ int flow_fmq_decode_frame(const char *data, size_t data_len, size_t max_frame_si
       }
       read_cursor += packet.record_len;
     }
-    out->payload = tstr_to_v(out->owned_payload);
+    if (extension_len > 0u) {
+      memcpy(out->owned_payload + write_offset, data + payload_cursor, extension_len);
+    }
+    out->payload = tstr_v_from_buf((const char *)out->owned_payload, base_payload_len);
   }
   if ((out->kind == FLOW_FMQ_FRAME_PING || out->kind == FLOW_FMQ_FRAME_PONG) &&
       (out->identity.len != 0 || out->topic.len != 0 || out->payload.len != 0)) {

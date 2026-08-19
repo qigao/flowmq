@@ -44,28 +44,6 @@ if(NOT FLOWMQ_TBE_COMPILER_EXECUTABLE)
   message(FATAL_ERROR
     "FlowMQ media-provider contract requires the TurboParser tbe_compiler")
 endif()
-set(FLOWMQ_MEDIA_PROVIDER_SCHEMA
-    "${CMAKE_CURRENT_SOURCE_DIR}/flowmq/application/schema/flowmq_media_provider_v1.schema")
-set(FLOWMQ_MEDIA_PROVIDER_GENERATED_DIR
-    "${CMAKE_CURRENT_BINARY_DIR}/generated/media_provider")
-set(FLOWMQ_MEDIA_PROVIDER_GENERATED_HEADER
-    "${FLOWMQ_MEDIA_PROVIDER_GENERATED_DIR}/flowmq_media_provider_v1.h")
-set(FLOWMQ_MEDIA_PROVIDER_GENERATED_SOURCE
-    "${FLOWMQ_MEDIA_PROVIDER_GENERATED_DIR}/flowmq_media_provider_v1.c")
-file(MAKE_DIRECTORY "${FLOWMQ_MEDIA_PROVIDER_GENERATED_DIR}")
-add_custom_command(
-  OUTPUT "${FLOWMQ_MEDIA_PROVIDER_GENERATED_HEADER}"
-         "${FLOWMQ_MEDIA_PROVIDER_GENERATED_SOURCE}"
-  COMMAND "${CMAKE_COMMAND}" -E env
-          "PATH=$<TARGET_FILE_DIR:TurboParser::DataBind>\;$<TARGET_FILE_DIR:TurboParser::Parser>\;$<TARGET_FILE_DIR:TurboUtils::Core>\;$<TARGET_FILE_DIR:OpenSSL::Crypto>\;$ENV{PATH}"
-          "${FLOWMQ_TBE_COMPILER_EXECUTABLE}"
-          "${FLOWMQ_MEDIA_PROVIDER_SCHEMA}"
-          --lang c
-          --output "${FLOWMQ_MEDIA_PROVIDER_GENERATED_HEADER}"
-          --source-output "${FLOWMQ_MEDIA_PROVIDER_GENERATED_SOURCE}"
-  DEPENDS "${FLOWMQ_MEDIA_PROVIDER_SCHEMA}"
-  COMMENT "Generating FlowMQ media-provider v1 typed contract"
-  VERBATIM)
 
 get_target_property(FLOWMQ_OPENSSL_RELEASE_DLL OpenSSL::SSL IMPORTED_LOCATION_RELEASE)
 if(WIN32 AND FLOWMQ_OPENSSL_RELEASE_DLL)
@@ -88,8 +66,13 @@ if(MSVC)
        "PATH=path_list_prepend:${FLOWMQ_COMPILER_RUNTIME_DIR}")
 endif()
 
-add_subdirectory(flowmq/protocol)
-add_subdirectory(flowmq/runtime)
+add_subdirectory(flowmq)
+add_subdirectory(patterns)
+add_subdirectory(application)
+
+if(BUILD_EXAMPLES)
+  add_subdirectory(examples)
+endif()
 
 # Protocol, Core, and Transport remain build-tree static libraries. The
 # installed product compiles the same sources into one shared-library ABI.
@@ -98,7 +81,7 @@ add_library(flowmq SHARED
             ${FLOWMQ_CORE_SOURCES}
             ${FLOWMQ_TRANSPORT_SOURCES}
             ${FLOWMQ_MEDIA_PROVIDER_GENERATED_SOURCE}
-            ${CMAKE_CURRENT_SOURCE_DIR}/flowmq/application/src/flowmq_media_provider.c
+            ${FLOWMQ_MEDIA_PROVIDER_SOURCE}
             ${FLOWMQ_PROTOCOL_HEADERS}
             ${FLOWMQ_RUNTIME_PUBLIC_HEADERS}
             ${FLOWMQ_MEDIA_PROVIDER_GENERATED_HEADER}
@@ -117,13 +100,12 @@ target_include_directories(
          $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/flowmq/include>
          $<BUILD_INTERFACE:${FLOWMQ_MEDIA_PROVIDER_GENERATED_DIR}>
          $<INSTALL_INTERFACE:include>
-  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/flowmq/runtime/src)
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/patterns/src)
 target_link_libraries(flowmq
                       PUBLIC TurboUtils::Core TurboParser::Parser TurboParser::DataBind
                       PRIVATE TurboNet::CoroNet OpenSSL::SSL)
-
-if(BUILD_TESTS)
-  add_subdirectory(flowmq/application/tests)
+if(TARGET flowmq_media_provider_codegen)
+  add_dependencies(flowmq flowmq_media_provider_codegen)
 endif()
 
 install(

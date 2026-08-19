@@ -33,10 +33,10 @@
             "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
             "cacheVariables": { 
                 "CMAKE_MAKE_PROGRAM": "$env{NINJA_ROOT}/ninja.exe",
-                "TURBO_UTILS_ROOT": "C:/projects/cpp/external/pkgs/turboutils",
-                "TURBO_PARSER_ROOT": "C:/projects/cpp/external/pkgs/turboparser",
-                "TURBO_NET_ROOT": "C:/projects/cpp/external/pkgs/turbonet",
-                "CMAKE_INSTALL_PREFIX": "C:/projects/cpp/external/pkgs/flowmq",
+                "TURBO_UTILS_ROOT": "$env{PKG_ROOT}/turboutils",
+                "TURBO_PARSER_ROOT": "$env{PKG_ROOT}/turboparser",
+                "TURBO_NET_ROOT": "$env{PKG_ROOT}/turbonet",
+                "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/flowmq",
                 "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
                 "VCPKG_TARGET_TRIPLET": "x64-windows",
                 "VCPKG_MANIFEST_MODE": "ON"

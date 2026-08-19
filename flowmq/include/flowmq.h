@@ -7,6 +7,7 @@
 #include "flowmq_connect_endpoint.h"
 #include "flowmq_coronet.h"
 #include "flowmq_protocol.h"
+#include "flowmq_protocol_esb.h"
 #include "flowmq_router_endpoint.h"
 #include "flowmq_send_admission.h"
 #include "flowmq_tls_identity_map.h"

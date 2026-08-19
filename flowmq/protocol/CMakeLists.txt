@@ -1,9 +1,11 @@
 set(TARGET_NAME flowmq_protocol)
 
 set(FLOWMQ_PROTOCOL_HEADERS
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/flowmq_protocol.h)
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/flowmq_protocol.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/flowmq_protocol_esb.h)
 set(FLOWMQ_PROTOCOL_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/flowmq_protocol.c)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/flowmq_protocol.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/flowmq_protocol_esb.c)
 
 add_library(${TARGET_NAME} STATIC
             ${FLOWMQ_PROTOCOL_SOURCES}
