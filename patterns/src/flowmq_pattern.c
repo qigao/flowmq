@@ -103,15 +103,15 @@ int flowmq_pattern_data_direction_validate(flowmq_protocol_pattern_t local,
   return TURBO_OK;
 }
 
-int flowmq_pattern_encode_hello(flowmq_protocol_pattern_t pattern, tstr_v identity, tstr_v topic,
-                                size_t max_frame_size, tstr_t *encoded) {
-  return flowmq_pattern_encode_hello_ex(pattern, identity, topic, (tstr_v){0}, max_frame_size,
+int flowmq_pattern_encode_hello(flowmq_protocol_pattern_t pattern, vstr identity, vstr topic,
+                                size_t max_frame_size, tstr *encoded) {
+  return flowmq_pattern_encode_hello_ex(pattern, identity, topic, (vstr){0}, max_frame_size,
                                         encoded);
 }
 
-int flowmq_pattern_encode_hello_ex(flowmq_protocol_pattern_t pattern, tstr_v identity, tstr_v topic,
-                                   tstr_v security_payload, size_t max_frame_size,
-                                   tstr_t *encoded) {
+int flowmq_pattern_encode_hello_ex(flowmq_protocol_pattern_t pattern, vstr identity, vstr topic,
+                                   vstr security_payload, size_t max_frame_size,
+                                   tstr *encoded) {
   flowmq_protocol_frame_t frame;
   if (flowmq_pattern_validate(pattern) != TURBO_OK || !encoded) return TURBO_EINVAL;
   frame = (flowmq_protocol_frame_t){0};
@@ -125,7 +125,7 @@ int flowmq_pattern_encode_hello_ex(flowmq_protocol_pattern_t pattern, tstr_v ide
 
 int flowmq_pattern_encode_heartbeat(flowmq_protocol_pattern_t pattern,
                                     flowmq_protocol_frame_kind_t kind, size_t max_frame_size,
-                                    tstr_t *encoded) {
+                                    tstr *encoded) {
   flowmq_protocol_frame_t frame;
   if (flowmq_pattern_validate(pattern) != TURBO_OK || !encoded ||
       (kind != FLOWMQ_PROTOCOL_FRAME_PING && kind != FLOWMQ_PROTOCOL_FRAME_PONG))
@@ -137,8 +137,8 @@ int flowmq_pattern_encode_heartbeat(flowmq_protocol_pattern_t pattern,
 }
 
 int flowmq_pattern_encode_subscription(flowmq_protocol_pattern_t pattern,
-                                       flowmq_protocol_frame_kind_t kind, tstr_v topic,
-                                       size_t max_frame_size, tstr_t *encoded) {
+                                       flowmq_protocol_frame_kind_t kind, vstr topic,
+                                       size_t max_frame_size, tstr *encoded) {
   flowmq_protocol_frame_t frame;
   if ((pattern != FLOWMQ_PROTOCOL_SUB && pattern != FLOWMQ_PROTOCOL_XSUB) || !encoded ||
       (kind != FLOWMQ_PROTOCOL_FRAME_SUBSCRIBE && kind != FLOWMQ_PROTOCOL_FRAME_UNSUBSCRIBE))

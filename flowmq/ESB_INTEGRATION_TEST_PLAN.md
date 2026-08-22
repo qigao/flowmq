@@ -478,7 +478,7 @@ Rebalance 耗时：<100ms
 ### 消息生成器
 ```c
 /* 生成指定大小的测试消息 */
-void generate_test_message(tstr_t *out, size_t size) {
+void generate_test_message(tstr *out, size_t size) {
     tstr_reserve(out, size);
     for (size_t i = 0; i < size; i++) {
         tstr_append_char(out, 'A' + (i % 26));
@@ -486,7 +486,7 @@ void generate_test_message(tstr_t *out, size_t size) {
 }
 
 /* 生成带序列号的消息 */
-void generate_seq_message(tstr_t *out, uint64_t seq) {
+void generate_seq_message(tstr *out, uint64_t seq) {
     char buf[128];
     snprintf(buf, sizeof(buf), "{\"seq\":%lu,\"ts\":%lu}", seq, turbo_time_now_ns());
     tstr_copy_cstr(out, buf);
@@ -989,7 +989,7 @@ int transactional_consume(transactional_consumer_t *tc, uint32_t partition_id) {
   flowmq_stream_topic_fetch(/* ... */, &messages, &count);
   
   /* 2. 创建 SAGA */
-  tstr_t saga_id = TSTR_NULL;
+  tstr saga_id = NULL;
   flowmq_saga_coordinator_create(tc->saga_coordinator, 2, deadline, NULL, &saga_id);
   
   /* Step 1: 业务处理 */

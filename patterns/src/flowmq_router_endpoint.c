@@ -1,4 +1,5 @@
 #include "flowmq_router_endpoint.h"
+#include "flowmq_stl_adapter.h"
 
 #include "flowmq_coronet_transport.h"
 #include "flowmq_pattern.h"
@@ -8,7 +9,7 @@
 #include "turbo_error.h"
 #include "turbo_str.h"
 #include "turbo_thread.h"
-#include "turbo_vec.h"
+#include <turbostl/vec.h>
 
 #include <stdatomic.h>
 #include <stdlib.h>
@@ -18,8 +19,8 @@ typedef struct flowmq_router_peer_s {
   flowmq_router_endpoint_t *endpoint;
   coro_socket_t *socket;
   flowmq_router_route_t route;
-  tstr_t identity;
-  tstr_t topic;
+  tstr identity;
+  tstr topic;
   flowmq_stream_decoder_t reader;
 } flowmq_router_peer_t;
 
@@ -31,16 +32,16 @@ struct flowmq_router_endpoint_s {
   int loop_thread_started;
   turbo_vec_t peers;
   int peers_initialized;
-  tstr_t host;
-  tstr_t path;
-  tstr_t topic;
-  tstr_t identity;
-  tstr_t multicast_group;
-  tstr_t multicast_interface;
-  tstr_t tls_ca_file;
-  tstr_t tls_cert_file;
-  tstr_t tls_key_file;
-  tstr_t tls_key_password;
+  tstr host;
+  tstr path;
+  tstr topic;
+  tstr identity;
+  tstr multicast_group;
+  tstr multicast_interface;
+  tstr tls_ca_file;
+  tstr tls_cert_file;
+  tstr tls_key_file;
+  tstr tls_key_password;
   flowmq_coronet_tls_server_config_t tls;
   turbo_kcp_config_t kcp_config;
   int kcp_configured;
@@ -205,7 +206,7 @@ static int flowmq_router_socket_send(flowmq_router_peer_t *peer, const char *dat
 
 static int flowmq_router_send_hello(flowmq_router_peer_t *peer) {
   flowmq_router_endpoint_t *endpoint = peer->endpoint;
-  tstr_t encoded = NULL;
+  tstr encoded = NULL;
   int rc = flowmq_pattern_encode_hello(
       FLOWMQ_PROTOCOL_ROUTER, tstr_to_v(endpoint->identity), tstr_to_v(endpoint->topic),
       endpoint->config.max_frame_size, &encoded);
@@ -216,7 +217,7 @@ static int flowmq_router_send_hello(flowmq_router_peer_t *peer) {
 
 static int flowmq_router_send_heartbeat(flowmq_router_peer_t *peer,
                                         flowmq_protocol_frame_kind_t kind) {
-  tstr_t encoded = NULL;
+  tstr encoded = NULL;
   int rc = flowmq_pattern_encode_heartbeat(FLOWMQ_PROTOCOL_ROUTER, kind,
                                            peer->endpoint->config.max_frame_size, &encoded);
   if (rc == TURBO_OK) rc = flowmq_router_socket_send(peer, encoded, tstr_len(encoded));
@@ -569,13 +570,16 @@ int flowmq_router_endpoint_create(const flowmq_router_endpoint_config_t *config,
   turbo_mutex_init(&endpoint->mutex);
   turbo_cond_init(&endpoint->changed);
   endpoint->sync_initialized = 1;
-  rc = turbo_vec_init(&endpoint->peers, sizeof(flowmq_router_peer_t *));
-  if (rc == TURBO_OK) endpoint->peers_initialized = 1;
-  if (rc == TURBO_OK) rc = turbo_vec_reserve(&endpoint->peers, config->max_connections);
-  if (rc == TURBO_OK)
+  rc = turbo_vec_init_bytes(&endpoint->peers, sizeof(flowmq_router_peer_t *),
+                            _Alignof(flowmq_router_peer_t *), config->max_connections);
+  if (rc == TURBO_STL_OK) endpoint->peers_initialized = 1;
+  if (rc == TURBO_STL_OK) rc = turbo_vec_reserve(&endpoint->peers, config->max_connections);
+  if (rc == TURBO_STL_OK)
     rc = flowmq_posted_send_init(&endpoint->posted_send, endpoint->context,
                                  endpoint, flowmq_router_execute_posted_send,
                                  &config->send_admission);
+  else
+    rc = flowmq_stl_status_to_error((turbo_stl_status)rc);
   if (rc != TURBO_OK) {
     flowmq_router_endpoint_destroy(endpoint);
     return rc;

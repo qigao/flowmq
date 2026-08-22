@@ -1,8 +1,10 @@
 #include "turbo_flow_fmq_retry.h"
 
+#include "flowmq_stl_adapter.h"
 #include "turbo_error.h"
-#include "turbo_hash.h"
-#include "turbo_vec.h"
+#include <turbostl/hash_map.h>
+#include <turbostl/typed.h>
+#include <turbostl/vec.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -170,8 +172,13 @@ turbo_flow_fmq_retry_ledger_create(const turbo_flow_fmq_retry_config_t *config) 
   if (!flow_fmq_retry_config_valid(config)) return NULL;
   ledger = (turbo_flow_fmq_retry_ledger_t *)calloc(1, sizeof(*ledger));
   if (!ledger) return NULL;
-  if (flow_fmq_retry_records_init(&ledger->records) != TURBO_OK ||
-      flow_fmq_retry_index_init(&ledger->index) != TURBO_OK ||
+  if (turbo_vec_init_bytes(&ledger->records.raw, sizeof(turbo_flow_fmq_retry_record_t),
+                           _Alignof(turbo_flow_fmq_retry_record_t), config->capacity) !=
+          TURBO_STL_OK ||
+      turbo_hash_map_init_bytes(&ledger->index.raw,
+                                sizeof(flow_fmq_retry_key_t), _Alignof(flow_fmq_retry_key_t),
+                                sizeof(size_t), _Alignof(size_t), config->capacity,
+                                turbo_hash_bytes, turbo_hash_key_equal, NULL) != TURBO_STL_OK ||
       flow_fmq_retry_records_reserve(&ledger->records, config->capacity) != TURBO_OK ||
       turbo_hash_map_reserve(&ledger->index.raw, config->capacity) != TURBO_OK) {
     turbo_flow_fmq_retry_ledger_destroy(ledger);

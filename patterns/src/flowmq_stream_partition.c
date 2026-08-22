@@ -4,8 +4,11 @@
  */
 
 #include "flowmq_stream_partition.h"
-#include "turbo_hash_map.h"
-#include "turbo_set.h"
+#include "flowmq_stl_adapter.h"
+
+#include <turbostl/hash_map.h>
+#include <turbostl/hash_set.h>
+#include <turbostl/typed.h>
 
 #include <stdlib.h>
 #include <stdint.h>
@@ -15,7 +18,7 @@
 static size_t flowmq_stream_tstr_v_hash(const void *key, size_t key_size, void *ctx) {
   (void)key_size;
   (void)ctx;
-  const tstr_v *view = (const tstr_v *)key;
+  const vstr *view = (const vstr *)key;
   if (!view || !view->data) {
     return 0;
   }
@@ -33,8 +36,8 @@ static bool flowmq_stream_tstr_v_eq(const void *left,
                                     void *ctx) {
   (void)key_size;
   (void)ctx;
-  const tstr_v *lhs = (const tstr_v *)left;
-  const tstr_v *rhs = (const tstr_v *)right;
+  const vstr *lhs = (const vstr *)left;
+  const vstr *rhs = (const vstr *)right;
   if (!lhs || !rhs) {
     return lhs == rhs;
   }
@@ -52,10 +55,10 @@ static bool flowmq_stream_tstr_v_eq(const void *left,
 
 /* Define container types */
 TURBO_DEQUE_DEFINE(message_deque, flowmq_stream_message_t)
-TURBO_HASH_MAP_DEFINE(consumer_map, tstr_t, flowmq_stream_consumer_t *)
+TURBO_HASH_MAP_DEFINE(consumer_map, tstr, flowmq_stream_consumer_t *)
 TURBO_HASH_MAP_DEFINE(offset_map, uint32_t, uint64_t)
-TURBO_HASH_MAP_DEFINE(group_map, tstr_t, flowmq_stream_consumer_group_t *)
-TURBO_SET_DEFINE(partition_set, uint32_t)
+TURBO_HASH_MAP_DEFINE(group_map, tstr, flowmq_stream_consumer_group_t *)
+TURBO_HASH_SET_DEFINE(partition_set, uint32_t)
 
 /* Partition management */
 static int flowmq_stream_partition_init(flowmq_stream_partition_t *partition,
@@ -75,7 +78,9 @@ static int flowmq_stream_partition_init(flowmq_stream_partition_t *partition,
   partition->max_bytes = max_bytes;
   partition->retention_ms = retention_ms;
   
-  if (turbo_deque_init(&partition->messages, sizeof(flowmq_stream_message_t)) != TURBO_OK) {
+  if (turbo_deque_init_bytes(&partition->messages, sizeof(flowmq_stream_message_t),
+                             _Alignof(flowmq_stream_message_t),
+                             max_messages == 0u ? SIZE_MAX : max_messages) != TURBO_STL_OK) {
     return TURBO_ENOMEM;
   }
   if (turbo_deque_reserve(&partition->messages, max_messages > 0 ? max_messages : 1000) != 0) {
@@ -212,7 +217,9 @@ static int flowmq_stream_consumer_init(flowmq_stream_consumer_t *consumer,
   consumer->joined_ns = now_ns;
   consumer->last_heartbeat_ns = now_ns;
   
-  if (turbo_set_init(&consumer->assigned_partitions, sizeof(uint32_t), NULL, NULL, NULL) != TURBO_OK) {
+  if (turbo_hash_set_init_bytes(&consumer->assigned_partitions, sizeof(uint32_t),
+                                _Alignof(uint32_t), FLOWMQ_STREAM_MAX_PARTITIONS,
+                                turbo_hash_bytes, turbo_hash_key_equal, NULL) != TURBO_STL_OK) {
     tstr_free(consumer->member_id);
     return TURBO_ENOMEM;
   }
@@ -226,7 +233,7 @@ static void flowmq_stream_consumer_destroy(flowmq_stream_consumer_t *consumer) {
   }
   
   tstr_free(consumer->member_id);
-  turbo_set_destroy(&consumer->assigned_partitions);
+  turbo_hash_set_destroy(&consumer->assigned_partitions);
   memset(consumer, 0, sizeof(*consumer));
 }
 
@@ -246,21 +253,21 @@ static int flowmq_stream_consumer_group_init(flowmq_stream_consumer_group_t *gro
   group->generation = 0;
   group->rebalancing = 0;
   
-  if (turbo_hash_map_init(&group->members,
-                          sizeof(tstr_v),
-                          sizeof(flowmq_stream_consumer_t *),
-                          flowmq_stream_tstr_v_hash,
-                          flowmq_stream_tstr_v_eq,
-                          NULL) != TURBO_OK) {
+  if (turbo_hash_map_init_bytes(&group->members,
+                                sizeof(vstr), _Alignof(vstr),
+                                sizeof(flowmq_stream_consumer_t *),
+                                _Alignof(flowmq_stream_consumer_t *),
+                                FLOWMQ_STREAM_MAX_GROUP_MEMBERS,
+                                flowmq_stream_tstr_v_hash, flowmq_stream_tstr_v_eq,
+                                NULL) != TURBO_STL_OK) {
     tstr_free(group->group_id);
     return TURBO_ENOMEM;
   }
-  if (turbo_hash_map_init(&group->offsets,
-                          sizeof(uint32_t),
-                          sizeof(uint64_t),
-                          NULL,
-                          NULL,
-                          NULL) != TURBO_OK) {
+  if (turbo_hash_map_init_bytes(&group->offsets,
+                                sizeof(uint32_t), _Alignof(uint32_t),
+                                sizeof(uint64_t), _Alignof(uint64_t),
+                                FLOWMQ_STREAM_MAX_PARTITIONS,
+                                turbo_hash_bytes, turbo_hash_key_equal, NULL) != TURBO_STL_OK) {
     turbo_hash_map_destroy(&group->members);
     tstr_free(group->group_id);
     return TURBO_ENOMEM;
@@ -298,7 +305,7 @@ int flowmq_stream_consumer_group_join(flowmq_stream_consumer_group_t *group,
   }
   
   /* Check if already member */
-  tstr_v member_key = tstr_v_from_cstr(member_id);
+  vstr member_key = vstr_from_cstr(member_id);
   if (turbo_hash_map_contains(&group->members, &member_key)) {
     /* Already joined - update heartbeat */
     flowmq_stream_consumer_t **consumer_ptr =
@@ -328,7 +335,7 @@ int flowmq_stream_consumer_group_join(flowmq_stream_consumer_group_t *group,
   }
   
   /* Add to group */
-  tstr_v key = tstr_v_from_cstr(consumer->member_id);
+  vstr key = vstr_from_cstr(consumer->member_id);
   if (turbo_hash_map_put(&group->members, &key, &consumer) != TURBO_OK) {
     flowmq_stream_consumer_destroy(consumer);
     free(consumer);
@@ -347,7 +354,7 @@ int flowmq_stream_consumer_group_leave(flowmq_stream_consumer_group_t *group,
     return TURBO_EINVAL;
   }
   
-  tstr_v member_key = tstr_v_from_cstr(member_id);
+  vstr member_key = vstr_from_cstr(member_id);
   flowmq_stream_consumer_t **consumer_ptr =
       (flowmq_stream_consumer_t **)turbo_hash_map_get(&group->members, &member_key);
   if (!consumer_ptr || !*consumer_ptr) {
@@ -393,7 +400,8 @@ int flowmq_stream_consumer_group_get_offset(const flowmq_stream_consumer_group_t
     return TURBO_EINVAL;
   }
   
-  const uint64_t *offset = (const uint64_t *)turbo_hash_map_get(&group->offsets, &partition_id);
+  const uint64_t *offset =
+      (const uint64_t *)turbo_hash_map_get_const(&group->offsets, &partition_id);
   *out_offset = offset ? *offset : 0;
   return TURBO_OK;
 }
@@ -416,7 +424,7 @@ int flowmq_stream_consumer_group_rebalance(flowmq_stream_consumer_group_t *group
     if (!consumer || !*consumer) {
       continue;
     }
-    turbo_set_clear(&(*consumer)->assigned_partitions);
+    turbo_hash_set_clear(&(*consumer)->assigned_partitions);
   }
   
   /* Round-robin assignment */
@@ -439,8 +447,10 @@ int flowmq_stream_consumer_group_rebalance(flowmq_stream_consumer_group_t *group
   
   for (uint32_t partition_id = 0; partition_id < partition_count; partition_id++) {
     flowmq_stream_consumer_t *consumer = members[member_idx];
-    if (consumer) {
-      turbo_set_add(&consumer->assigned_partitions, &partition_id);
+    if (consumer &&
+        turbo_hash_set_add(&consumer->assigned_partitions, &partition_id) != TURBO_STL_OK) {
+      free(members);
+      return TURBO_ENOMEM;
     }
     member_idx = (member_idx + 1) % group->members.size;
   }
@@ -501,12 +511,13 @@ int flowmq_stream_topic_init(flowmq_stream_topic_t *topic,
   }
   
   /* Initialize consumer groups map */
-  if (turbo_hash_map_init(&topic->consumer_groups,
-                          sizeof(tstr_v),
-                          sizeof(flowmq_stream_consumer_group_t *),
-                          flowmq_stream_tstr_v_hash,
-                          flowmq_stream_tstr_v_eq,
-                          NULL) != TURBO_OK) {
+  if (turbo_hash_map_init_bytes(&topic->consumer_groups,
+                                sizeof(vstr), _Alignof(vstr),
+                                sizeof(flowmq_stream_consumer_group_t *),
+                                _Alignof(flowmq_stream_consumer_group_t *),
+                                FLOWMQ_STREAM_MAX_CONSUMER_GROUPS,
+                                flowmq_stream_tstr_v_hash, flowmq_stream_tstr_v_eq,
+                                NULL) != TURBO_STL_OK) {
     for (uint32_t j = 0; j < topic->partition_count; j++) {
       flowmq_stream_partition_destroy(&topic->partitions[j]);
     }
@@ -551,8 +562,8 @@ void flowmq_stream_topic_destroy(flowmq_stream_topic_t *topic) {
 
 int flowmq_stream_topic_publish(flowmq_stream_topic_t *topic,
                                 uint32_t partition_id,
-                                tstr_t *payload,
-                                tstr_t *topic_str,
+                                tstr *payload,
+                                tstr *topic_str,
                                 uint64_t timestamp_ns,
                                 uint64_t *out_offset) {
   if (!topic || !payload || !topic_str || !out_offset) {
@@ -650,7 +661,7 @@ int flowmq_stream_topic_get_consumer_group(flowmq_stream_topic_t *topic,
     return TURBO_EINVAL;
   }
   
-  tstr_v group_key = tstr_v_from_cstr(group_id);
+  vstr group_key = vstr_from_cstr(group_id);
   
   /* Check if group exists */
   flowmq_stream_consumer_group_t **existing =
@@ -679,7 +690,7 @@ int flowmq_stream_topic_get_consumer_group(flowmq_stream_topic_t *topic,
   }
   
   /* Add to topic */
-  tstr_v inserted_key = tstr_v_from_cstr(group->group_id);
+  vstr inserted_key = vstr_from_cstr(group->group_id);
   if (turbo_hash_map_put(&topic->consumer_groups, &inserted_key, &group) != TURBO_OK) {
     flowmq_stream_consumer_group_destroy(group);
     free(group);

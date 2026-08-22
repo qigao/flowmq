@@ -94,6 +94,12 @@ cmake_config_target(
   EXPORT_NAME FlowMQ)
 target_compile_definitions(flowmq
   PRIVATE SHARED_CXX TBE_GENERATED_BUILD_SHARED)
+if(WIN32)
+  target_compile_definitions(
+    flowmq
+    PRIVATE "FLOWMQ_API=__declspec(dllexport)"
+    INTERFACE "FLOWMQ_API=__declspec(dllimport)")
+endif()
 target_include_directories(
   flowmq
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/flowmq/protocol/include>
@@ -103,7 +109,7 @@ target_include_directories(
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/patterns/src)
 target_link_libraries(flowmq
                       PUBLIC TurboUtils::Core TurboParser::Parser TurboParser::DataBind
-                      PRIVATE TurboNet::CoroNet OpenSSL::SSL)
+                      PRIVATE TurboUtils::STL TurboNet::CoroNet OpenSSL::SSL)
 if(TARGET flowmq_media_provider_codegen)
   add_dependencies(flowmq flowmq_media_provider_codegen)
 endif()

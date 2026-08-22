@@ -809,9 +809,9 @@ static void fmq_bench_tcp_req_rep(const fmq_bench_case_t *bench_case) {
   check_not_null(bench_case);
   if (!bench_case) return;
   check_not_null(bench_case->title);
-  check_size_gt(bench_case->payload_bytes, 0u);
-  check_size_gt(bench_case->warmup, 0u);
-  check_size_gt(bench_case->samples, 0u);
+  check_greater(bench_case->payload_bytes, 0u);
+  check_greater(bench_case->warmup, 0u);
+  check_greater(bench_case->samples, 0u);
   if (!bench_case->title || bench_case->payload_bytes == 0u || bench_case->warmup == 0u ||
       bench_case->samples == 0u)
     return;
@@ -819,7 +819,7 @@ static void fmq_bench_tcp_req_rep(const fmq_bench_case_t *bench_case) {
   port = fmq_bench_loopback_port();
   payload = (unsigned char *)malloc(bench_case->payload_bytes);
   latencies = (uint64_t *)calloc(bench_case->samples, sizeof(*latencies));
-  check_int_gt(port, 0);
+  check_greater(port, 0);
   check_not_null(payload);
   check_not_null(latencies);
   if (port == 0u || !payload || !latencies) goto cleanup;
@@ -845,22 +845,22 @@ static void fmq_bench_tcp_req_rep(const fmq_bench_case_t *bench_case) {
   client_options.message_ctx = &receive_state;
 
   rc = turbo_flow_fmq_app_create(&server_endpoint, &server_options, &server);
-  check_int_eq(rc, TURBO_OK);
+  check_equal(rc, TURBO_OK);
   if (rc != TURBO_OK) goto cleanup;
   rc = turbo_flow_fmq_app_create(&client_endpoint, &client_options, &client);
-  check_int_eq(rc, TURBO_OK);
+  check_equal(rc, TURBO_OK);
   if (rc != TURBO_OK) goto cleanup;
   rc = turbo_flow_fmq_app_start(server);
-  check_int_eq(rc, TURBO_OK);
+  check_equal(rc, TURBO_OK);
   if (rc != TURBO_OK) goto cleanup;
   server_started = 1;
   rc = turbo_flow_fmq_app_start(client);
-  check_int_eq(rc, TURBO_OK);
+  check_equal(rc, TURBO_OK);
   if (rc != TURBO_OK) goto cleanup;
   client_started = 1;
 
   rc = fmq_bench_first_roundtrip(client, &receive_state, payload, bench_case->payload_bytes);
-  check_int_eq(rc, TURBO_OK);
+  check_equal(rc, TURBO_OK);
   if (rc != TURBO_OK) goto cleanup;
   expected_replies = 1u;
   for (size_t i = 1u; i < bench_case->warmup; ++i) {
@@ -869,7 +869,7 @@ static void fmq_bench_tcp_req_rep(const fmq_bench_case_t *bench_case) {
                              expected_replies, NULL);
     if (rc != TURBO_OK) break;
   }
-  check_int_eq(rc, TURBO_OK);
+  check_equal(rc, TURBO_OK);
   if (rc != TURBO_OK) goto cleanup;
 
   profile_enabled = fmq_bench_profile_begin();
@@ -890,12 +890,12 @@ static void fmq_bench_tcp_req_rep(const fmq_bench_case_t *bench_case) {
     flow_fmq_send_profile_set_enabled(0);
     profile_enabled = 0;
     profile_status = flow_fmq_send_profile_snapshot(&profile);
-    check_int_eq(profile_status, TURBO_OK);
+    check_equal(profile_status, TURBO_OK);
   }
 
-  check_int_eq(rc, TURBO_OK);
-  check_size_eq(sample_index, bench_case->samples);
-  check_size_eq(completed, bench_case->samples);
+  check_equal(rc, TURBO_OK);
+  check_equal(sample_index, bench_case->samples);
+  check_equal(completed, bench_case->samples);
   if (rc != TURBO_OK || completed != bench_case->samples) goto cleanup;
 
   turbo_mutex_lock(&receive_state.mutex);
@@ -903,9 +903,9 @@ static void fmq_bench_tcp_req_rep(const fmq_bench_case_t *bench_case) {
   captured_payload_bytes = receive_state.last_payload_bytes;
   captured_status = receive_state.status;
   turbo_mutex_unlock(&receive_state.mutex);
-  check_int_eq(captured_status, TURBO_OK);
-  check_size_eq(captured_replies, bench_case->warmup + bench_case->samples);
-  check_size_eq(captured_payload_bytes, bench_case->payload_bytes);
+  check_equal(captured_status, TURBO_OK);
+  check_equal(captured_replies, bench_case->warmup + bench_case->samples);
+  check_equal(captured_payload_bytes, bench_case->payload_bytes);
   if (captured_status != TURBO_OK || captured_replies != bench_case->warmup + bench_case->samples ||
       captured_payload_bytes != bench_case->payload_bytes)
     goto cleanup;
@@ -932,8 +932,8 @@ static void fmq_bench_tcp_req_rep(const fmq_bench_case_t *bench_case) {
          fmq_bench_percentile(latencies, completed, 99u), latencies[completed - 1u],
          fmq_bench_count_at_least(latencies, completed, FMQ_BENCH_SLOW_SAMPLE_NS));
   if (profile_status == TURBO_OK) {
-    check_uint_eq(profile.samples, (uint64_t)bench_case->samples * 2u);
-    check_uint_eq(profile.socket_samples, profile.samples);
+    check_equal(profile.samples, (uint64_t)bench_case->samples * 2u);
+    check_equal(profile.socket_samples, profile.samples);
     check_true(profile.socket_cpu_samples == 0u ||
                profile.socket_cpu_samples == profile.socket_samples);
     fmq_bench_profile_print("req_rep", &profile);
@@ -941,8 +941,8 @@ static void fmq_bench_tcp_req_rep(const fmq_bench_case_t *bench_case) {
 
 cleanup:
   if (profile_enabled) flow_fmq_send_profile_set_enabled(0);
-  if (client_started) check_int_eq(turbo_flow_fmq_app_stop(client), TURBO_OK);
-  if (server_started) check_int_eq(turbo_flow_fmq_app_stop(server), TURBO_OK);
+  if (client_started) check_equal(turbo_flow_fmq_app_stop(client), TURBO_OK);
+  if (server_started) check_equal(turbo_flow_fmq_app_stop(server), TURBO_OK);
   turbo_flow_fmq_app_destroy(client);
   turbo_flow_fmq_app_destroy(server);
   if (receive_state_initialized) fmq_bench_receive_state_destroy(&receive_state);
@@ -1003,10 +1003,10 @@ static void fmq_bench_tcp_one_way(const fmq_bench_throughput_case_t *bench_case)
   if (!bench_case) return;
   check_not_null(bench_case->title);
   check_not_null(bench_case->result_pattern);
-  check_size_gt(bench_case->payload_bytes, 0u);
-  check_size_gt(bench_case->messages_per_sample, 0u);
-  check_size_gt(bench_case->warmup_messages, 0u);
-  check_size_gt(bench_case->samples, 0u);
+  check_greater(bench_case->payload_bytes, 0u);
+  check_greater(bench_case->messages_per_sample, 0u);
+  check_greater(bench_case->warmup_messages, 0u);
+  check_greater(bench_case->samples, 0u);
   check_true(bench_case->sender_mode != bench_case->receiver_mode);
   check_true(bench_case->payload_bytes <= SIZE_MAX / bench_case->messages_per_sample);
   check_true(bench_case->messages_per_sample <= SIZE_MAX / bench_case->samples);
@@ -1051,7 +1051,7 @@ static void fmq_bench_tcp_one_way(const fmq_bench_throughput_case_t *bench_case)
     receive_thread_hops =
         (int *)calloc(bench_case->samples, sizeof(*receive_thread_hops));
   }
-  check_int_gt(port, 0);
+  check_greater(port, 0);
   check_not_null(payload);
   check_not_null(latencies);
   if (bench_case->use_batch_api) {
@@ -1107,7 +1107,7 @@ static void fmq_bench_tcp_one_way(const fmq_bench_throughput_case_t *bench_case)
   receiver_options.message_ctx = &receive_state;
 
   rc = turbo_flow_fmq_app_create(&sender_endpoint, &sender_options, &sender);
-  check_int_eq(rc, TURBO_OK);
+  check_equal(rc, TURBO_OK);
   if (rc != TURBO_OK) goto cleanup;
   if (bench_case->receiver_stream_recv_buffer_bytes != 0u) {
     receiver_context = coro_context_create(NULL);
@@ -1118,10 +1118,10 @@ static void fmq_bench_tcp_one_way(const fmq_bench_throughput_case_t *bench_case)
     }
     rc = coro_context_set_stream_recv_buffer_size(
         receiver_context, bench_case->receiver_stream_recv_buffer_bytes);
-    check_int_eq(rc, TURBO_OK);
+    check_equal(rc, TURBO_OK);
     if (rc != TURBO_OK) goto cleanup;
     rc = fmq_bench_context_runner_start(&receiver_runner, receiver_context);
-    check_int_eq(rc, TURBO_OK);
+    check_equal(rc, TURBO_OK);
     if (rc != TURBO_OK) goto cleanup;
     receiver_execution.size = sizeof(receiver_execution);
     receiver_execution.kind = TURBO_FLOW_CORONET_EXECUTION_BORROWED_CONTEXT;
@@ -1131,39 +1131,39 @@ static void fmq_bench_tcp_one_way(const fmq_bench_throughput_case_t *bench_case)
   } else {
     rc = turbo_flow_fmq_app_create(&receiver_endpoint, &receiver_options, &receiver);
   }
-  check_int_eq(rc, TURBO_OK);
+  check_equal(rc, TURBO_OK);
   if (rc != TURBO_OK) goto cleanup;
   if (bench_case->use_async_api) {
     turbo_flow_fmq_app_async_send_config_t async_config =
         TURBO_FLOW_FMQ_APP_ASYNC_SEND_CONFIG_INIT;
     async_config.batch_size = bench_case->messages_per_sample;
     rc = turbo_flow_fmq_app_configure_async_send(sender, &async_config);
-    check_int_eq(rc, TURBO_OK);
+    check_equal(rc, TURBO_OK);
     if (rc != TURBO_OK) goto cleanup;
   }
 
   if (bench_case->sender_mode == TURBO_FLOW_FMQ_BIND) {
     rc = turbo_flow_fmq_app_start(sender);
-    check_int_eq(rc, TURBO_OK);
+    check_equal(rc, TURBO_OK);
     if (rc != TURBO_OK) goto cleanup;
     sender_started = 1;
     rc = turbo_flow_fmq_app_start(receiver);
-    check_int_eq(rc, TURBO_OK);
+    check_equal(rc, TURBO_OK);
     if (rc != TURBO_OK) goto cleanup;
     receiver_started = 1;
   } else {
     rc = turbo_flow_fmq_app_start(receiver);
-    check_int_eq(rc, TURBO_OK);
+    check_equal(rc, TURBO_OK);
     if (rc != TURBO_OK) goto cleanup;
     receiver_started = 1;
     rc = turbo_flow_fmq_app_start(sender);
-    check_int_eq(rc, TURBO_OK);
+    check_equal(rc, TURBO_OK);
     if (rc != TURBO_OK) goto cleanup;
     sender_started = 1;
   }
 
   rc = fmq_bench_first_message(sender, &receive_state, payload, bench_case->payload_bytes);
-  check_int_eq(rc, TURBO_OK);
+  check_equal(rc, TURBO_OK);
   if (rc != TURBO_OK) goto cleanup;
   expected_received = 1u;
   if (bench_case->warmup_messages > 1u) {
@@ -1182,7 +1182,7 @@ static void fmq_bench_tcp_one_way(const fmq_bench_throughput_case_t *bench_case)
       rc = fmq_bench_send_batch(sender, &receive_state, payload, bench_case->payload_bytes,
                                 remaining_warmup, expected_received, NULL);
     }
-    check_int_eq(rc, TURBO_OK);
+    check_equal(rc, TURBO_OK);
     if (rc != TURBO_OK) goto cleanup;
   }
 
@@ -1225,12 +1225,12 @@ static void fmq_bench_tcp_one_way(const fmq_bench_throughput_case_t *bench_case)
     flow_fmq_send_profile_set_enabled(0);
     profile_enabled = 0;
     profile_status = flow_fmq_send_profile_snapshot(&profile);
-    check_int_eq(profile_status, TURBO_OK);
+    check_equal(profile_status, TURBO_OK);
   }
 
-  check_int_eq(rc, TURBO_OK);
-  check_size_eq(sample_index, bench_case->samples);
-  check_size_eq(completed_samples, bench_case->samples);
+  check_equal(rc, TURBO_OK);
+  check_equal(sample_index, bench_case->samples);
+  check_equal(completed_samples, bench_case->samples);
   if (rc != TURBO_OK || completed_samples != bench_case->samples) goto cleanup;
 
   turbo_mutex_lock(&receive_state.mutex);
@@ -1238,9 +1238,9 @@ static void fmq_bench_tcp_one_way(const fmq_bench_throughput_case_t *bench_case)
   captured_payload_bytes = receive_state.last_payload_bytes;
   captured_status = receive_state.status;
   turbo_mutex_unlock(&receive_state.mutex);
-  check_int_eq(captured_status, TURBO_OK);
-  check_size_eq(captured_received, bench_case->warmup_messages + measured_messages);
-  check_size_eq(captured_payload_bytes, bench_case->payload_bytes);
+  check_equal(captured_status, TURBO_OK);
+  check_equal(captured_received, bench_case->warmup_messages + measured_messages);
+  check_equal(captured_payload_bytes, bench_case->payload_bytes);
   if (captured_status != TURBO_OK ||
       captured_received != bench_case->warmup_messages + measured_messages ||
       captured_payload_bytes != bench_case->payload_bytes)
@@ -1368,16 +1368,16 @@ static void fmq_bench_tcp_one_way(const fmq_bench_throughput_case_t *bench_case)
     }
   }
   if (profile_status == TURBO_OK) {
-    check_uint_eq(profile.samples, measured_messages);
+    check_equal(profile.samples, measured_messages);
     if (bench_case->use_batch_api || bench_case->use_async_api) {
-      check_uint_eq(profile.socket_samples, 0u);
+      check_equal(profile.socket_samples, 0u);
       check_true(profile.batch_samples > 0u);
       check_true(profile.batch_socket_calls > 0u);
-      check_uint_eq(profile.batch_socket_frames, measured_messages);
+      check_equal(profile.batch_socket_frames, measured_messages);
       check_true(profile.batch_socket_cpu_samples == 0u ||
                  profile.batch_socket_cpu_samples == profile.batch_socket_calls);
     } else {
-      check_uint_eq(profile.socket_samples, profile.samples);
+      check_equal(profile.socket_samples, profile.samples);
       check_true(profile.socket_cpu_samples == 0u ||
                  profile.socket_cpu_samples == profile.socket_samples);
     }
@@ -1387,11 +1387,11 @@ static void fmq_bench_tcp_one_way(const fmq_bench_throughput_case_t *bench_case)
 cleanup:
   if (profile_enabled) flow_fmq_send_profile_set_enabled(0);
   if (bench_case && bench_case->sender_mode == TURBO_FLOW_FMQ_CONNECT) {
-    if (sender_started) check_int_eq(turbo_flow_fmq_app_stop(sender), TURBO_OK);
-    if (receiver_started) check_int_eq(turbo_flow_fmq_app_stop(receiver), TURBO_OK);
+    if (sender_started) check_equal(turbo_flow_fmq_app_stop(sender), TURBO_OK);
+    if (receiver_started) check_equal(turbo_flow_fmq_app_stop(receiver), TURBO_OK);
   } else {
-    if (receiver_started) check_int_eq(turbo_flow_fmq_app_stop(receiver), TURBO_OK);
-    if (sender_started) check_int_eq(turbo_flow_fmq_app_stop(sender), TURBO_OK);
+    if (receiver_started) check_equal(turbo_flow_fmq_app_stop(receiver), TURBO_OK);
+    if (sender_started) check_equal(turbo_flow_fmq_app_stop(sender), TURBO_OK);
   }
   turbo_flow_fmq_app_destroy(receiver);
   turbo_flow_fmq_app_destroy(sender);
@@ -1423,14 +1423,14 @@ static void fmq_bench_tcp_large_batch_one_way(
   check_not_null(base_case);
   if (!base_case) return;
   rc = fmq_bench_windows_tuning_begin(&windows_tuning);
-  check_int_eq(rc, TURBO_OK);
+  check_equal(rc, TURBO_OK);
   if (rc != TURBO_OK) {
     fprintf(stderr, "%s must be exactly 0 or 1 and supported by this platform\n",
             FMQ_BENCH_WINDOWS_TIMER_RESOLUTION_ENV);
     return;
   }
   rc = fmq_bench_large_batch_messages(&messages_per_sample);
-  check_int_eq(rc, TURBO_OK);
+  check_equal(rc, TURBO_OK);
   if (rc != TURBO_OK) {
     const char *value = getenv(FMQ_BENCH_LARGE_BATCH_MESSAGES_ENV);
     fprintf(stderr, "%s must be exactly 2, 4, or 8; received \"%s\"\n",
@@ -1439,7 +1439,7 @@ static void fmq_bench_tcp_large_batch_one_way(
     return;
   }
   rc = fmq_bench_stream_recv_buffer_bytes(&stream_recv_buffer_bytes);
-  check_int_eq(rc, TURBO_OK);
+  check_equal(rc, TURBO_OK);
   if (rc != TURBO_OK) {
     const char *value = getenv(FMQ_BENCH_STREAM_RECV_BUFFER_ENV);
     fprintf(stderr, "%s must be exactly 131072, 262144, or 524288; received \"%s\"\n",

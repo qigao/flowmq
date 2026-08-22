@@ -1,8 +1,10 @@
 #include "turbo_flow_fmq_deployment.h"
 
+#include "flowmq_stl_adapter.h"
 #include "turbo_error.h"
-#include "turbo_str_view.h"
-#include "turbo_vec.h"
+#include "turbo_str.h"
+#include <turbostl/vec.h>
+#include <turbostl/typed.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -38,7 +40,7 @@ static int flow_fmq_deployment_text_valid(const char *value, size_t capacity) {
   const char *end;
   if (!value || capacity == 0u) return 0;
   end = (const char *)memchr(value, '\0', capacity);
-  return end && end != value && tstr_v_utf8_valid(tstr_v_from_buf(value, (size_t)(end - value)));
+  return end && end != value && vstr_utf8_valid(vstr_from_buf(value, (size_t)(end - value)));
 }
 
 static int flow_fmq_deployment_uuid_is_zero(const turbo_uuid_t *value) {
@@ -233,8 +235,14 @@ int turbo_flow_fmq_deployment_controller_create(const turbo_flow_fmq_deployment_
   controller = (turbo_flow_fmq_deployment_controller_t *)calloc(1u, sizeof(*controller));
   if (!controller) return TURBO_ENOMEM;
   controller->config = *config;
-  if (flow_fmq_deployment_members_init(&controller->members) != TURBO_OK ||
-      flow_fmq_deployment_routes_init(&controller->routes) != TURBO_OK ||
+  if (turbo_vec_init_bytes(&controller->members.raw,
+                           sizeof(flow_fmq_deployment_member_record_t),
+                           _Alignof(flow_fmq_deployment_member_record_t),
+                           config->member_capacity) != TURBO_STL_OK ||
+      turbo_vec_init_bytes(&controller->routes.raw,
+                           sizeof(turbo_flow_fmq_route_snapshot_t),
+                           _Alignof(turbo_flow_fmq_route_snapshot_t),
+                           config->member_capacity) != TURBO_STL_OK ||
       flow_fmq_deployment_members_reserve(&controller->members, config->member_capacity) !=
           TURBO_OK ||
       flow_fmq_deployment_routes_reserve(&controller->routes, config->member_capacity) !=

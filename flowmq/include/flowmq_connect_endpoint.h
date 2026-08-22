@@ -1,6 +1,8 @@
 #ifndef FLOWMQ_CONNECT_ENDPOINT_H
 #define FLOWMQ_CONNECT_ENDPOINT_H
 
+#include "flowmq_export.h"
+
 #include "flowmq_coronet.h"
 #include "flowmq_protocol.h"
 #include "flowmq_send_admission.h"
@@ -46,8 +48,8 @@ typedef struct flowmq_connect_endpoint_event_s {
   flowmq_connect_endpoint_event_kind_t kind;
   int status;
   uint64_t delay_ms;
-  tstr_v peer_identity;
-  tstr_v peer_topic;
+  vstr peer_identity;
+  vstr peer_topic;
 } flowmq_connect_endpoint_event_t;
 
 /** Decoded frame views remain valid only until this callback returns. */
@@ -67,7 +69,7 @@ typedef void (*flowmq_connect_endpoint_event_fn)(void *ctx,
  * endpoint context and must not block, perform I/O, or call lifecycle APIs.
  */
 typedef int (*flowmq_connect_endpoint_peer_identity_fn)(
-    void *ctx, const char *certificate_sha256, tstr_v claimed_identity);
+    void *ctx, const char *certificate_sha256, vstr claimed_identity);
 
 /**
  * Configuration is copied by create, including all referenced strings.
@@ -120,7 +122,7 @@ typedef struct flowmq_connect_endpoint_config_s {
  * Initialize a configuration with bounded standalone defaults.
  * @param config Output configuration; NULL is ignored.
  */
-CXX_C_API void flowmq_connect_endpoint_config_init(flowmq_connect_endpoint_config_t *config);
+FLOWMQ_C_API void flowmq_connect_endpoint_config_init(flowmq_connect_endpoint_config_t *config);
 
 /**
  * Create a stopped CONNECT endpoint and copy its configuration.
@@ -128,7 +130,7 @@ CXX_C_API void flowmq_connect_endpoint_config_init(flowmq_connect_endpoint_confi
  * @param out Receives the owned endpoint on success and is set to NULL on validated failures.
  * @return TURBO_OK, TURBO_EINVAL, TURBO_ERANGE, or TURBO_ENOMEM.
  */
-CXX_C_API int flowmq_connect_endpoint_create(const flowmq_connect_endpoint_config_t *config,
+FLOWMQ_C_API int flowmq_connect_endpoint_create(const flowmq_connect_endpoint_config_t *config,
                                               flowmq_connect_endpoint_t **out);
 /**
  * Connect, complete FMQ HELLO, and wait until ready or the deadline expires.
@@ -136,22 +138,22 @@ CXX_C_API int flowmq_connect_endpoint_create(const flowmq_connect_endpoint_confi
  * @param timeout_ns Non-zero caller wait budget in nanoseconds.
  * @return TURBO_OK or the concrete connect, protocol, timeout, or shutdown error.
  */
-CXX_C_API int flowmq_connect_endpoint_start(flowmq_connect_endpoint_t *endpoint,
+FLOWMQ_C_API int flowmq_connect_endpoint_start(flowmq_connect_endpoint_t *endpoint,
                                              uint64_t timeout_ns);
 /** Stop accepting sends, interrupt waits, and join endpoint-owned execution. NULL is accepted. */
-CXX_C_API void flowmq_connect_endpoint_stop(flowmq_connect_endpoint_t *endpoint);
+FLOWMQ_C_API void flowmq_connect_endpoint_stop(flowmq_connect_endpoint_t *endpoint);
 /** Stop and release the endpoint, its socket, copied strings, and any owned context. */
-CXX_C_API void flowmq_connect_endpoint_destroy(flowmq_connect_endpoint_t *endpoint);
+FLOWMQ_C_API void flowmq_connect_endpoint_destroy(flowmq_connect_endpoint_t *endpoint);
 
 /** Borrow the endpoint context. The pointer becomes invalid when an owned endpoint is destroyed. */
-CXX_C_API coro_context_t *flowmq_connect_endpoint_context(flowmq_connect_endpoint_t *endpoint);
+FLOWMQ_C_API coro_context_t *flowmq_connect_endpoint_context(flowmq_connect_endpoint_t *endpoint);
 
 /**
  * Send one already encoded FMQ v3 frame. This function must run on the endpoint
  * context (for example from on_frame/on_state or a caller-managed coro_post).
  * The input is borrowed only for the duration of the call.
  */
-CXX_C_API int flowmq_connect_endpoint_send(flowmq_connect_endpoint_t *endpoint,
+FLOWMQ_C_API int flowmq_connect_endpoint_send(flowmq_connect_endpoint_t *endpoint,
                                            const char *encoded, size_t encoded_size);
 /**
  * Copy and admit one encoded frame from any thread. TURBO_OK transfers the
@@ -159,34 +161,34 @@ CXX_C_API int flowmq_connect_endpoint_send(flowmq_connect_endpoint_t *endpoint,
  * send_admission.on_complete. TURBO_ENOSPC and other failures retain caller
  * ownership and do not invoke completion.
  */
-CXX_C_API int flowmq_connect_endpoint_send_copy(
+FLOWMQ_C_API int flowmq_connect_endpoint_send_copy(
     flowmq_connect_endpoint_t *endpoint, uint64_t completion_id,
     const char *encoded, size_t encoded_size);
 /** Snapshot the bounded copied-send queue and cumulative completion counters. */
-CXX_C_API void flowmq_connect_endpoint_send_stats(
+FLOWMQ_C_API void flowmq_connect_endpoint_send_stats(
     flowmq_connect_endpoint_t *endpoint, flowmq_send_admission_stats_t *stats);
 /**
  * Interrupt the active receive/reconnect wait. May be called from another thread.
  * @return TURBO_OK when posted, TURBO_ENOTCONN when no socket is active, or a concrete error.
  */
-CXX_C_API int flowmq_connect_endpoint_interrupt(flowmq_connect_endpoint_t *endpoint, int status);
+FLOWMQ_C_API int flowmq_connect_endpoint_interrupt(flowmq_connect_endpoint_t *endpoint, int status);
 /**
  * Atomically replace copied address strings while stopped.
  * @return TURBO_OK, TURBO_EINVAL, TURBO_EBUSY, or TURBO_ENOMEM.
  */
-CXX_C_API int flowmq_connect_endpoint_update_endpoint(flowmq_connect_endpoint_t *endpoint,
+FLOWMQ_C_API int flowmq_connect_endpoint_update_endpoint(flowmq_connect_endpoint_t *endpoint,
                                                        const char *host, int port,
                                                        const char *path);
 /** Begin one strict REQ exchange and return its generation. */
-CXX_C_API int flowmq_connect_endpoint_request_begin(flowmq_connect_endpoint_t *endpoint,
+FLOWMQ_C_API int flowmq_connect_endpoint_request_begin(flowmq_connect_endpoint_t *endpoint,
                                                      uint64_t correlation_id,
                                                      uint64_t *generation);
 /** Finish the matching strict REQ exchange. */
-CXX_C_API int flowmq_connect_endpoint_request_finish(
+FLOWMQ_C_API int flowmq_connect_endpoint_request_finish(
     flowmq_connect_endpoint_t *endpoint, uint64_t generation, uint64_t correlation_id,
     flowmq_connect_endpoint_exchange_state_t terminal_state);
 /** Read the current strict exchange state without advancing it. */
-CXX_C_API int flowmq_connect_endpoint_exchange_snapshot(
+FLOWMQ_C_API int flowmq_connect_endpoint_exchange_snapshot(
     const flowmq_connect_endpoint_t *endpoint, flowmq_connect_endpoint_exchange_state_t *state,
     uint64_t *generation, uint64_t *correlation_id);
 

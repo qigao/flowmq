@@ -65,11 +65,11 @@ static unsigned short example_loopback_port(void) {
 }
 
 static int example_router_frame(void *ctx, const flowmq_router_route_t *route,
-                                tstr_v identity, tstr_v topic,
+                                vstr identity, vstr topic,
                                 const flowmq_protocol_frame_t *request) {
   example_state_t *state = (example_state_t *)ctx;
   flowmq_protocol_frame_t reply;
-  tstr_t encoded = NULL;
+  tstr encoded = NULL;
   int rc;
   (void)identity;
   (void)topic;
@@ -77,7 +77,7 @@ static int example_router_frame(void *ctx, const flowmq_router_route_t *route,
   reply.kind = FLOWMQ_PROTOCOL_FRAME_DATA;
   reply.pattern = FLOWMQ_PROTOCOL_ROUTER;
   reply.message_id = request->message_id;
-  reply.payload = tstr_v_from_cstr("pong");
+  reply.payload = vstr_from_cstr("pong");
   rc = flowmq_protocol_encode_frame(&reply,
                                     FLOWMQ_ROUTER_ENDPOINT_DEFAULT_MAX_FRAME_SIZE,
                                     &encoded);
@@ -94,7 +94,7 @@ static int example_dealer_frame(void *ctx, const flowmq_protocol_frame_t *reply,
   example_state_t *state = (example_state_t *)ctx;
   (void)generation;
   if (reply->message_id != 1u ||
-      !tstr_v_eq(reply->payload, tstr_v_from_cstr("pong")))
+      !vstr_eq(reply->payload, vstr_from_cstr("pong")))
     return TURBO_EPROTO;
   atomic_store_explicit(&state->reply_received, 1, memory_order_release);
   return TURBO_OK;
@@ -115,7 +115,7 @@ int main(void) {
   flowmq_connect_endpoint_config_t dealer_config;
   flowmq_connect_endpoint_t *dealer = NULL;
   flowmq_protocol_frame_t request;
-  tstr_t encoded = NULL;
+  tstr encoded = NULL;
   unsigned short port = example_loopback_port();
   int rc = port == 0u ? TURBO_EIO : TURBO_OK;
 
@@ -160,7 +160,7 @@ int main(void) {
   request.kind = FLOWMQ_PROTOCOL_FRAME_DATA;
   request.pattern = FLOWMQ_PROTOCOL_DEALER;
   request.message_id = 1u;
-  request.payload = tstr_v_from_cstr("ping");
+  request.payload = vstr_from_cstr("ping");
   if (rc == TURBO_OK)
     rc = flowmq_protocol_encode_frame(&request,
                                       FLOWMQ_CONNECT_ENDPOINT_DEFAULT_MAX_FRAME_SIZE,

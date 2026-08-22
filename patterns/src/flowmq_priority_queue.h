@@ -16,8 +16,9 @@
  * - Maintains max_priority tracker for O(1) peek
  */
 
-#include "turbo_deque.h"
+#include <turbostl/deque.h>
 #include "turbo_error.h"
+#include "turbo_str.h"
 
 #include <stdint.h>
 
@@ -37,8 +38,8 @@ extern "C" {
 typedef struct flowmq_priority_message_s {
   uint8_t priority;           /* Message priority (0-255) */
   uint64_t enqueued_ns;       /* Enqueue timestamp */
-  tstr_t payload;             /* Owned payload */
-  tstr_t topic;               /* Owned topic */
+  tstr payload;             /* Owned payload */
+  tstr topic;               /* Owned topic */
 } flowmq_priority_message_t;
 
 /**
@@ -65,8 +66,8 @@ void flowmq_priority_queue_destroy(flowmq_priority_queue_t *pq);
 /* Enqueue message with priority (takes ownership of payload/topic) */
 int flowmq_priority_queue_enqueue(flowmq_priority_queue_t *pq,
                                  uint8_t priority,
-                                 tstr_t *payload,
-                                 tstr_t *topic,
+                                 tstr *payload,
+                                 tstr *topic,
                                  uint64_t timestamp_ns);
 
 /* Dequeue highest priority message (caller must free message) */

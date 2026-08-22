@@ -8,14 +8,14 @@
 _Static_assert(CORO_TLS_CHANNEL_BINDING_SIZE == FLOWMQ_PROTOCOL_CHANNEL_BINDING_SIZE,
                "FMQ and CoroNet channel binding sizes must match");
 
-static int flowmq_security_text_equals(tstr_v left, const char *right) {
+static int flowmq_security_text_equals(vstr left, const char *right) {
   size_t right_len;
   if (!right) return 0;
   right_len = strlen(right);
   return left.len == right_len && (right_len == 0u || memcmp(left.data, right, right_len) == 0);
 }
 
-static int flowmq_security_bytes_equal(tstr_v left, const uint8_t *right, size_t right_size) {
+static int flowmq_security_bytes_equal(vstr left, const uint8_t *right, size_t right_size) {
   volatile unsigned char difference = 0u;
   if (!right || left.len != right_size || (left.len != 0u && !left.data)) return 0;
   for (size_t i = 0u; i < right_size; ++i)
@@ -116,16 +116,16 @@ int flowmq_security_binding_init(flowmq_security_binding_runtime_t *runtime,
 
 static int flowmq_security_get_channel_binding(flowmq_security_binding_runtime_t *runtime,
                                                coro_socket_t *socket, uint8_t *binding,
-                                               tstr_v *binding_view) {
+                                               vstr *binding_view) {
   int rc;
   if (!runtime || !socket || !binding || !binding_view) return TURBO_EINVAL;
-  *binding_view = tstr_v_from_buf(NULL, 0u);
+  *binding_view = vstr_from_buf(NULL, 0u);
   if (runtime->transport != TURBO_FLOW_FMQ_TLS && runtime->transport != TURBO_FLOW_FMQ_WSS) {
     return TURBO_OK;
   }
   rc = coro_socket_tls_export_channel_binding(socket, binding);
   if (rc != TURBO_OK) return rc;
-  *binding_view = tstr_v_from_buf((const char *)binding, CORO_TLS_CHANNEL_BINDING_SIZE);
+  *binding_view = vstr_from_buf((const char *)binding, CORO_TLS_CHANNEL_BINDING_SIZE);
   return TURBO_OK;
 }
 
@@ -138,11 +138,11 @@ void flowmq_security_binding_destroy(flowmq_security_binding_runtime_t *runtime)
 }
 
 int flowmq_security_client_hello(flowmq_security_binding_runtime_t *runtime, coro_socket_t *socket,
-                                 tstr_v identity, tstr_t *payload) {
+                                 vstr identity, tstr *payload) {
   turbo_flow_security_secret_lease_t lease = TURBO_FLOW_SECURITY_SECRET_LEASE_INIT;
   flowmq_protocol_security_t security;
   uint8_t binding[CORO_TLS_CHANNEL_BINDING_SIZE];
-  tstr_v binding_view;
+  vstr binding_view;
   int rc;
   if (!runtime || !runtime->enabled || runtime->mode != TURBO_FLOW_FMQ_CONNECT || !socket ||
       !payload || *payload || identity.len == 0u || !identity.data) {
@@ -162,7 +162,7 @@ int flowmq_security_client_hello(flowmq_security_binding_runtime_t *runtime, cor
   security.mode = FLOWMQ_PROTOCOL_SECURITY_AUTH;
   security.identity = identity;
   security.method = tstr_to_v(runtime->auth_method);
-  security.secret = tstr_v_from_buf((const char *)lease.bytes, lease.byte_count);
+  security.secret = vstr_from_buf((const char *)lease.bytes, lease.byte_count);
   security.channel_binding = binding_view;
   rc = flowmq_protocol_security_encode(&security, payload);
 
@@ -173,10 +173,10 @@ done:
 }
 
 int flowmq_security_client_accept(flowmq_security_binding_runtime_t *runtime, coro_socket_t *socket,
-                                  tstr_v payload) {
+                                  vstr payload) {
   flowmq_protocol_security_t security;
   uint8_t binding[CORO_TLS_CHANNEL_BINDING_SIZE];
-  tstr_v binding_view;
+  vstr binding_view;
   int rc;
   if (!runtime || !runtime->enabled || runtime->mode != TURBO_FLOW_FMQ_CONNECT || !socket)
     return TURBO_EINVAL;
@@ -214,16 +214,16 @@ int flowmq_security_authorize(flowmq_security_binding_runtime_t *runtime,
 }
 
 int flowmq_security_server_authenticate(flowmq_security_binding_runtime_t *runtime,
-                                        coro_socket_t *socket, tstr_v claimed_identity,
-                                        tstr_v payload, const char *connection_resource,
+                                        coro_socket_t *socket, vstr claimed_identity,
+                                        vstr payload, const char *connection_resource,
                                         turbo_flow_security_principal_t *principal_out) {
   flowmq_protocol_security_t security;
   turbo_flow_security_auth_request_t request = TURBO_FLOW_SECURITY_AUTH_REQUEST_INIT;
   turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
   uint8_t binding[CORO_TLS_CHANNEL_BINDING_SIZE];
   char certificate_sha256[CORO_TLS_PEER_CERT_SHA256_CAPACITY] = {0};
-  tstr_v binding_view;
-  tstr_t identity = NULL;
+  vstr binding_view;
+  tstr identity = NULL;
   int rc;
   if (!runtime || !runtime->enabled || runtime->mode != TURBO_FLOW_FMQ_BIND || !socket ||
       !principal_out || !connection_resource || !connection_resource[0]) {
@@ -281,10 +281,10 @@ done:
 }
 
 int flowmq_security_server_accept(flowmq_security_binding_runtime_t *runtime, coro_socket_t *socket,
-                                  tstr_t *payload) {
+                                  tstr *payload) {
   flowmq_protocol_security_t security;
   uint8_t binding[CORO_TLS_CHANNEL_BINDING_SIZE];
-  tstr_v binding_view;
+  vstr binding_view;
   int rc;
   if (!runtime || !runtime->enabled || runtime->mode != TURBO_FLOW_FMQ_BIND || !socket ||
       !payload || *payload) {

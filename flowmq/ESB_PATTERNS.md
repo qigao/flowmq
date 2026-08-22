@@ -115,7 +115,7 @@ flowmq_frame_t response_frame;
 /* 从 endpoint 接收... */
 
 uint32_t partial_index = 0;
-tstr_t response_payload = TSTR_NULL;
+tstr response_payload = NULL;
 flowmq_protocol_esb_decode_gather_response(&response_frame, &partial_index, &response_payload);
 
 /* 记录响应 */
@@ -213,7 +213,7 @@ typedef struct {
 
 /* 消费者组 */
 typedef struct {
-    tstr_t group_id;                 /* 组 ID */
+    tstr group_id;                 /* 组 ID */
     uint64_t generation;             /* Rebalance 世代 */
     turbo_set_t members;             /* 成员列表（最多 32） */
     turbo_hash_map_t committed_offsets;  /* 已提交 offset */
@@ -240,8 +240,8 @@ flowmq_stream_topic_init(
 );
 
 /* 发布消息到分区 0 */
-tstr_t payload = TSTR_NULL;
-tstr_t topic_name = TSTR_NULL;
+tstr payload = NULL;
+tstr topic_name = NULL;
 tstr_copy_cstr(&payload, "{\"event\":\"user_login\",\"user_id\":123}");
 tstr_copy_cstr(&topic_name, "events");
 

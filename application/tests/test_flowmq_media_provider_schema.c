@@ -20,7 +20,7 @@ spec("FlowMQ media-provider typed contract") {
 
   before_all() {
     DataBindError error = DATA_BIND_ERROR_INIT;
-    check_int_eq(FlowMqMediaProviderV1_codec_create(&codec, &error), DATA_BIND_OK);
+    check_equal(FlowMqMediaProviderV1_codec_create(&codec, &error), DATA_BIND_OK);
     check_not_null(codec);
   }
 
@@ -44,24 +44,24 @@ spec("FlowMQ media-provider typed contract") {
         "\"semantic_fingerprint\":\"sha256:abc\","
         "\"payload_json\":\"{\\\"text\\\":\\\"hello\\\"}\"}",
         provider_envelope_fields);
-    check_int_gt(written, 0);
-    check_int_lt(written, (int)sizeof(input));
+    check_greater(written, 0);
+    check_less(written, (int)sizeof(input));
     ProviderCommandV1_init(&command);
     parse_status = ProviderCommandV1_from_json(codec, &command, input,
                                                (size_t)written, &error);
     info("parse error code=%d path=%s message=%s", error.code, error.path,
          error.message);
-    check_int_eq(parse_status, DATA_BIND_OK);
-    check_str_eq(command.dispatch_epoch, "18446744073709551615");
-    check_int_eq(ProviderCommandV1_to_json(codec, &command, &output,
+    check_equal(parse_status, DATA_BIND_OK);
+    check_equal(command.dispatch_epoch, "18446744073709551615");
+    check_equal(ProviderCommandV1_to_json(codec, &command, &output,
                                            &output_size, &error),
                  DATA_BIND_OK);
     check_not_null(output);
-    check_str_contains(output, "\"dispatch_epoch\":\"18446744073709551615\"");
-    check_str_contains(output, "\"command_id\":\"command-1\"");
+    check_contains(output, "\"dispatch_epoch\":\"18446744073709551615\"");
+    check_contains(output, "\"command_id\":\"command-1\"");
     {
       flowmq_media_provider_limits_t limits = FLOWMQ_MEDIA_PROVIDER_LIMITS_INIT;
-      check_int_eq(flowmq_media_provider_validate_command(&command, &limits),
+      check_equal(flowmq_media_provider_validate_command(&command, &limits),
                    TURBO_OK);
     }
     tbe_typed_serialized_free(output);
@@ -80,17 +80,17 @@ spec("FlowMQ media-provider typed contract") {
         "\"disposition\":\"DurableAccepted\",\"status_code\":0,"
         "\"retry_after_ms\":0,\"error_code\":\"\",\"error_message\":\"\"}",
         provider_envelope_fields);
-    check_int_gt(written, 0);
-    check_int_lt(written, (int)sizeof(input));
+    check_greater(written, 0);
+    check_less(written, (int)sizeof(input));
     ProviderReceiptV1_init(&receipt);
     parse_status = ProviderReceiptV1_from_json(codec, &receipt, input,
                                                (size_t)written, &error);
     info("parse error code=%d path=%s message=%s", error.code, error.path,
          error.message);
-    check_int_eq(parse_status, DATA_BIND_OK);
-    check_int_eq(receipt.disposition,
+    check_equal(parse_status, DATA_BIND_OK);
+    check_equal(receipt.disposition,
                  ProviderReceiptDisposition_DurableAccepted);
-    check_str_eq(receipt.command_id, "command-1");
+    check_equal(receipt.command_id, "command-1");
     ProviderReceiptV1_clear(&receipt);
   }
 
@@ -110,20 +110,20 @@ spec("FlowMQ media-provider typed contract") {
         "\"result_json\":\"{}\",\"error_code\":\"\","
         "\"error_message\":\"\"}",
         provider_envelope_fields);
-    check_int_gt(written, 0);
-    check_int_lt(written, (int)sizeof(input));
+    check_greater(written, 0);
+    check_less(written, (int)sizeof(input));
     ProviderCompletionV1_init(&completion);
-    check_int_eq(ProviderCompletionV1_from_json(codec, &completion, input,
+    check_equal(ProviderCompletionV1_from_json(codec, &completion, input,
                                                 (size_t)written, &error),
                  DATA_BIND_OK);
-    check_str_eq(completion.message_id, "msg-1");
-    check_str_eq(completion.event_id, "event-result-1");
-    check_int_eq(flowmq_media_provider_validate_completion(&completion, &limits),
+    check_equal(completion.message_id, "msg-1");
+    check_equal(completion.event_id, "event-result-1");
+    check_equal(flowmq_media_provider_validate_completion(&completion, &limits),
                  TURBO_OK);
     tstr_freep(&completion.event_id);
     completion.event_id = tstr_dup("");
     check_not_null(completion.event_id);
-    check_int_ne(flowmq_media_provider_validate_completion(&completion, &limits),
+    check_not_equal(flowmq_media_provider_validate_completion(&completion, &limits),
                  TURBO_OK);
     ProviderCompletionV1_clear(&completion);
   }
@@ -140,16 +140,16 @@ spec("FlowMQ media-provider typed contract") {
         "\"18446744073709551615\",\"error_code\":\"\","
         "\"error_message\":\"\"}",
         provider_envelope_fields);
-    check_int_gt(written, 0);
-    check_int_lt(written, (int)sizeof(input));
+    check_greater(written, 0);
+    check_less(written, (int)sizeof(input));
     ProviderEventAckV1_init(&ack);
     parse_status = ProviderEventAckV1_from_json(codec, &ack, input,
                                                 (size_t)written, &error);
     info("parse error code=%d path=%s message=%s", error.code, error.path,
          error.message);
-    check_int_eq(parse_status, DATA_BIND_OK);
-    check_int_eq(ack.disposition, ProviderEventAckDisposition_Committed);
-    check_str_eq(ack.committed_sequence, "18446744073709551615");
+    check_equal(parse_status, DATA_BIND_OK);
+    check_equal(ack.disposition, ProviderEventAckDisposition_Committed);
+    check_equal(ack.committed_sequence, "18446744073709551615");
     ProviderEventAckV1_clear(&ack);
   }
 
@@ -165,18 +165,18 @@ spec("FlowMQ media-provider typed contract") {
         "\"committed_sequence\":\"42\",\"error_code\":\"\","
         "\"error_message\":\"\"}",
         provider_envelope_fields);
-    check_int_gt(written, 0);
-    check_int_lt(written, (int)sizeof(input));
+    check_greater(written, 0);
+    check_less(written, (int)sizeof(input));
     ProviderCompletionAckV1_init(&ack);
-    check_int_eq(ProviderCompletionAckV1_from_json(codec, &ack, input,
+    check_equal(ProviderCompletionAckV1_from_json(codec, &ack, input,
                                                    (size_t)written, &error),
                  DATA_BIND_OK);
     {
       flowmq_media_provider_limits_t limits = FLOWMQ_MEDIA_PROVIDER_LIMITS_INIT;
-      check_int_eq(flowmq_media_provider_validate_completion_ack(&ack, &limits),
+      check_equal(flowmq_media_provider_validate_completion_ack(&ack, &limits),
                    TURBO_OK);
     }
-    check_int_eq(ack.disposition,
+    check_equal(ack.disposition,
                  ProviderCompletionAckDisposition_CompletionCommitted);
     ProviderCompletionAckV1_clear(&ack);
   }
@@ -192,10 +192,10 @@ spec("FlowMQ media-provider typed contract") {
         "\"disposition\":\"HttpAccepted\",\"status_code\":0,"
         "\"retry_after_ms\":0,\"error_code\":\"\",\"error_message\":\"\"}",
         provider_envelope_fields);
-    check_int_gt(written, 0);
-    check_int_lt(written, (int)sizeof(input));
+    check_greater(written, 0);
+    check_less(written, (int)sizeof(input));
     ProviderReceiptV1_init(&receipt);
-    check_int_ne(ProviderReceiptV1_from_json(codec, &receipt, input,
+    check_not_equal(ProviderReceiptV1_from_json(codec, &receipt, input,
                                              (size_t)written, &error),
                  DATA_BIND_OK);
     ProviderReceiptV1_clear(&receipt);
@@ -203,13 +203,13 @@ spec("FlowMQ media-provider typed contract") {
 
   it("rejects non-canonical and overflowing uint64 decimal strings") {
     uint64_t value = 0u;
-    check_int_eq(flowmq_media_provider_parse_u64("0", &value), TURBO_OK);
-    check_uint_eq(value, 0u);
-    check_int_eq(flowmq_media_provider_parse_u64("18446744073709551615", &value),
+    check_equal(flowmq_media_provider_parse_u64("0", &value), TURBO_OK);
+    check_equal(value, 0u);
+    check_equal(flowmq_media_provider_parse_u64("18446744073709551615", &value),
                  TURBO_OK);
-    check_int_eq(flowmq_media_provider_parse_u64("01", &value), TURBO_EPROTO);
-    check_int_eq(flowmq_media_provider_parse_u64("-1", &value), TURBO_EPROTO);
-    check_int_eq(flowmq_media_provider_parse_u64("18446744073709551616", &value),
+    check_equal(flowmq_media_provider_parse_u64("01", &value), TURBO_EPROTO);
+    check_equal(flowmq_media_provider_parse_u64("-1", &value), TURBO_EPROTO);
+    check_equal(flowmq_media_provider_parse_u64("18446744073709551616", &value),
                  TURBO_ERANGE);
   }
 
@@ -227,10 +227,10 @@ spec("FlowMQ media-provider typed contract") {
         "\"disposition\":\"DurableAccepted\",\"status_code\":0,"
         "\"retry_after_ms\":0,\"error_code\":\"\",\"error_message\":\"\"}",
         provider_envelope_fields);
-    check_int_gt(written, 0);
-    check_int_lt(written, (int)sizeof(input));
+    check_greater(written, 0);
+    check_less(written, (int)sizeof(input));
     ProviderReceiptV1_init(&receipt);
-    check_int_eq(ProviderReceiptV1_from_json(codec, &receipt, input,
+    check_equal(ProviderReceiptV1_from_json(codec, &receipt, input,
                                              (size_t)written, &error),
                  DATA_BIND_OK);
     {
@@ -238,13 +238,13 @@ spec("FlowMQ media-provider typed contract") {
           ProviderReceiptV1_to_bin(&receipt, &encoded, &encoded_size, &error);
       info("binary error code=%d path=%s message=%s", error.code, error.path,
            error.message);
-      check_int_eq(status, DATA_BIND_OK);
+      check_equal(status, DATA_BIND_OK);
     }
-    check_int_eq(flowmq_media_provider_peek_kind(encoded, encoded_size, &kind),
+    check_equal(flowmq_media_provider_peek_kind(encoded, encoded_size, &kind),
                  TURBO_OK);
-    check_int_eq(kind, ProviderMessageKind_Receipt);
+    check_equal(kind, ProviderMessageKind_Receipt);
     encoded[4] = 0xffu;
-    check_int_eq(flowmq_media_provider_peek_kind(encoded, encoded_size, &kind),
+    check_equal(flowmq_media_provider_peek_kind(encoded, encoded_size, &kind),
                  TURBO_EPROTO);
     tbe_typed_serialized_free(encoded);
     ProviderReceiptV1_clear(&receipt);

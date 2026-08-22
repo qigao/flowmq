@@ -136,8 +136,8 @@ send API。
 读取 metadata 使用：
 
 ```c
-tstr_v topic;
-tstr_v identity;
+vstr topic;
+vstr identity;
 uint64_t correlation_id;
 
 int topic_rc = turbo_flow_fmq_message_topic(message, &topic);

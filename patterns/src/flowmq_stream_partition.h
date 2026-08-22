@@ -13,10 +13,10 @@
  */
 
 #include "flowmq_protocol_esb.h"
-#include "turbo_deque.h"
+#include <turbostl/deque.h>
 #include "turbo_error.h"
-#include "turbo_hash_map.h"
-#include "turbo_set.h"
+#include <turbostl/hash_map.h>
+#include <turbostl/hash_set.h>
 
 #include <stdint.h>
 
@@ -27,6 +27,7 @@ extern "C" {
 /* Configuration limits */
 #define FLOWMQ_STREAM_MAX_PARTITIONS FLOWMQ_PROTOCOL_ESB_MAX_STREAM_PARTITIONS
 #define FLOWMQ_STREAM_MAX_CONSUMER_GROUPS FLOWMQ_PROTOCOL_ESB_MAX_STREAM_CONSUMER_GROUPS
+#define FLOWMQ_STREAM_MAX_GROUP_MEMBERS FLOWMQ_PROTOCOL_ESB_MAX_STREAM_GROUP_MEMBERS
 #define FLOWMQ_STREAM_MAX_GROUP_MEMBERS FLOWMQ_PROTOCOL_ESB_MAX_STREAM_GROUP_MEMBERS
 #define FLOWMQ_STREAM_DEFAULT_RETENTION_MS (7 * 24 * 60 * 60 * 1000ULL)  /* 7 days */
 
@@ -43,8 +44,8 @@ typedef char flowmq_stream_partition_runtime_limits_check[
 typedef struct flowmq_stream_message_s {
   uint64_t offset;              /* Monotonic offset in partition */
   uint64_t timestamp_ns;        /* Publish timestamp */
-  tstr_t payload;               /* Owned payload */
-  tstr_t topic;                 /* Owned topic */
+  tstr payload;               /* Owned payload */
+  tstr topic;                 /* Owned topic */
 } flowmq_stream_message_t;
 
 /**
@@ -72,12 +73,12 @@ typedef struct flowmq_stream_partition_s {
  * Consumer group member.
  */
 typedef struct flowmq_stream_consumer_s {
-  tstr_t member_id;             /* Unique member identifier (owned) */
+  tstr member_id;             /* Unique member identifier (owned) */
   uint64_t joined_ns;           /* Join timestamp */
   uint64_t last_heartbeat_ns;   /* Last heartbeat */
   
   /* Assigned partitions */
-  turbo_set_t assigned_partitions;  /* Set<uint32_t> */
+  turbo_hash_set_t assigned_partitions;  /* HashSet<uint32_t> */
 } flowmq_stream_consumer_t;
 
 /**
@@ -85,7 +86,7 @@ typedef struct flowmq_stream_consumer_s {
  * Manages group membership and partition assignment.
  */
 typedef struct flowmq_stream_consumer_group_s {
-  tstr_t group_id;              /* Group identifier (owned) */
+  tstr group_id;              /* Group identifier (owned) */
   uint64_t generation;          /* Rebalance generation */
   
   turbo_hash_map_t members;     /* Map<member_id, consumer*> */
@@ -101,7 +102,7 @@ typedef struct flowmq_stream_consumer_group_s {
  * Manages multiple partitions and consumer groups for one topic.
  */
 typedef struct flowmq_stream_topic_s {
-  tstr_t topic_name;            /* Topic name (owned) */
+  tstr topic_name;            /* Topic name (owned) */
   
   uint32_t partition_count;     /* Number of partitions */
   flowmq_stream_partition_t *partitions;  /* Array of partitions */
@@ -153,8 +154,8 @@ void flowmq_stream_topic_destroy(flowmq_stream_topic_t *topic);
  */
 int flowmq_stream_topic_publish(flowmq_stream_topic_t *topic,
                                 uint32_t partition_id,
-                                tstr_t *payload,
-                                tstr_t *topic_str,
+                                tstr *payload,
+                                tstr *topic_str,
                                 uint64_t timestamp_ns,
                                 uint64_t *out_offset);
 

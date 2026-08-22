@@ -4,6 +4,7 @@
  */
 
 #include "flowmq_priority_queue.h"
+#include "flowmq_stl_adapter.h"
 #include "tlog.h"
 
 #include <string.h>
@@ -18,6 +19,7 @@ int flowmq_priority_queue_init(flowmq_priority_queue_t *pq,
                                uint64_t max_capacity,
                                uint64_t max_bytes) {
   if (!pq) return TURBO_EINVAL;
+  if (max_capacity > SIZE_MAX) return TURBO_ERANGE;
   
   pq->max_priority = 0;
   pq->total_messages = 0;
@@ -27,13 +29,15 @@ int flowmq_priority_queue_init(flowmq_priority_queue_t *pq,
   
   /* Initialize all priority buckets */
   for (int i = 0; i < FLOWMQ_PRIORITY_LEVELS; i++) {
-    int rc = turbo_deque_init(&pq->buckets[i], sizeof(flowmq_priority_message_t), 16);
-    if (rc != TURBO_OK) {
+    const size_t bucket_limit = max_capacity == 0u ? SIZE_MAX : (size_t)max_capacity;
+    int rc = turbo_deque_init_bytes(&pq->buckets[i], sizeof(flowmq_priority_message_t),
+                                    _Alignof(flowmq_priority_message_t), bucket_limit);
+    if (rc != TURBO_STL_OK) {
       /* Cleanup already initialized buckets */
       for (int j = 0; j < i; j++) {
         turbo_deque_destroy(&pq->buckets[j]);
       }
-      return rc;
+      return flowmq_stl_status_to_error((turbo_stl_status)rc);
     }
   }
   
@@ -57,8 +61,8 @@ void flowmq_priority_queue_destroy(flowmq_priority_queue_t *pq) {
 
 int flowmq_priority_queue_enqueue(flowmq_priority_queue_t *pq,
                                  uint8_t priority,
-                                 tstr_t *payload,
-                                 tstr_t *topic,
+                                 tstr *payload,
+                                 tstr *topic,
                                  uint64_t timestamp_ns) {
   if (!pq || !payload || !topic) return TURBO_EINVAL;
   
@@ -81,11 +85,11 @@ int flowmq_priority_queue_enqueue(flowmq_priority_queue_t *pq,
   
   /* Enqueue to appropriate bucket */
   int rc = turbo_deque_push_back(&pq->buckets[priority], &msg);
-  if (rc != TURBO_OK) {
+  if (rc != TURBO_STL_OK) {
     /* Restore ownership on failure */
     *payload = msg.payload;
     *topic = msg.topic;
-    return rc;
+    return flowmq_stl_status_to_error((turbo_stl_status)rc);
   }
   
   /* Update statistics */

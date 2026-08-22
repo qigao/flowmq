@@ -11,30 +11,30 @@ spec("flowmq_subscription_set") {
     int changed = 0;
     memset(&subscriptions, 0, sizeof(subscriptions));
 
-    check_int_eq(flowmq_subscription_set_init(&subscriptions), TURBO_OK);
-    check_int_eq(
-        flowmq_subscription_set_update(&subscriptions, 1, tstr_v_from_cstr("orders."), &changed),
+    check_equal(flowmq_subscription_set_init(&subscriptions), TURBO_OK);
+    check_equal(
+        flowmq_subscription_set_update(&subscriptions, 1, vstr_from_cstr("orders."), &changed),
         TURBO_OK);
     check_true(changed);
-    check_int_eq(
-        flowmq_subscription_set_update(&subscriptions, 1, tstr_v_from_cstr("orders."), &changed),
+    check_equal(
+        flowmq_subscription_set_update(&subscriptions, 1, vstr_from_cstr("orders."), &changed),
         TURBO_OK);
-    check_size_eq(flowmq_subscription_set_count(&subscriptions), 1u);
+    check_equal(flowmq_subscription_set_count(&subscriptions), 1u);
     entry = flowmq_subscription_set_at(&subscriptions, 0u);
     check_not_null(entry);
-    check_size_eq(entry->refs, 2u);
-    check_true(flowmq_subscription_set_match(&subscriptions, tstr_v_from_cstr("orders.created")));
+    check_equal(entry->refs, 2u);
+    check_true(flowmq_subscription_set_match(&subscriptions, vstr_from_cstr("orders.created")));
     check_false(
-        flowmq_subscription_set_match(&subscriptions, tstr_v_from_cstr("payments.created")));
+        flowmq_subscription_set_match(&subscriptions, vstr_from_cstr("payments.created")));
 
-    check_int_eq(
-        flowmq_subscription_set_update(&subscriptions, 0, tstr_v_from_cstr("orders."), &changed),
+    check_equal(
+        flowmq_subscription_set_update(&subscriptions, 0, vstr_from_cstr("orders."), &changed),
         TURBO_OK);
-    check_size_eq(flowmq_subscription_set_at(&subscriptions, 0u)->refs, 1u);
-    check_int_eq(
-        flowmq_subscription_set_update(&subscriptions, 0, tstr_v_from_cstr("orders."), &changed),
+    check_equal(flowmq_subscription_set_at(&subscriptions, 0u)->refs, 1u);
+    check_equal(
+        flowmq_subscription_set_update(&subscriptions, 0, vstr_from_cstr("orders."), &changed),
         TURBO_OK);
-    check_size_eq(flowmq_subscription_set_count(&subscriptions), 0u);
+    check_equal(flowmq_subscription_set_count(&subscriptions), 0u);
 
     flowmq_subscription_set_destroy(&subscriptions);
   }
@@ -44,12 +44,12 @@ spec("flowmq_subscription_set") {
     int changed = 0;
     memset(&subscriptions, 0, sizeof(subscriptions));
 
-    check_int_eq(flowmq_subscription_set_init(&subscriptions), TURBO_OK);
-    check_int_eq(flowmq_subscription_set_update(&subscriptions, 1, (tstr_v){0}, &changed),
+    check_equal(flowmq_subscription_set_init(&subscriptions), TURBO_OK);
+    check_equal(flowmq_subscription_set_update(&subscriptions, 1, (vstr){0}, &changed),
                  TURBO_OK);
-    check_true(flowmq_subscription_set_match(&subscriptions, tstr_v_from_cstr("any.topic")));
+    check_true(flowmq_subscription_set_match(&subscriptions, vstr_from_cstr("any.topic")));
     flowmq_subscription_set_clear(&subscriptions);
-    check_false(flowmq_subscription_set_match(&subscriptions, tstr_v_from_cstr("any.topic")));
+    check_false(flowmq_subscription_set_match(&subscriptions, vstr_from_cstr("any.topic")));
 
     flowmq_subscription_set_destroy(&subscriptions);
   }

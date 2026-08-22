@@ -13,10 +13,10 @@
 
 typedef struct flow_fmq_tfcw_graph_s {
   turbo_flow_fmq_credit_worker_t *owner;
-  tstr_t service;
-  tstr_t resource_name;
-  tstr_t resource_uid;
-  tstr_t owner_name;
+  tstr service;
+  tstr resource_name;
+  tstr resource_uid;
+  tstr owner_name;
   turbo_mutex_t mutex;
   int mutex_initialized;
   int last_status;
@@ -58,7 +58,7 @@ static int flow_fmq_tfcw_credit_config_validate(
   return TURBO_OK;
 }
 
-static int flow_fmq_tfcw_view_copy(tstr_v value, char *out, size_t capacity) {
+static int flow_fmq_tfcw_view_copy(vstr value, char *out, size_t capacity) {
   if (!out || capacity == 0u || !value.data || value.len == 0u || value.len >= capacity)
     return TURBO_EINVAL;
   memcpy(out, value.data, value.len);
@@ -66,7 +66,7 @@ static int flow_fmq_tfcw_view_copy(tstr_v value, char *out, size_t capacity) {
   return TURBO_OK;
 }
 
-static int flow_fmq_tfcw_view_equals(tstr_v value, const char *text) {
+static int flow_fmq_tfcw_view_equals(vstr value, const char *text) {
   size_t length = text ? strlen(text) : 0u;
   return value.data && value.len == length && memcmp(value.data, text, length) == 0;
 }
@@ -254,7 +254,7 @@ static int flow_fmq_tfcw_resource_document(void *ctx,
   turbo_flow_resource_metadata_t metadata = TURBO_FLOW_RESOURCE_METADATA_INIT;
   turbo_flow_fmq_credit_worker_snapshot_t credit =
       TURBO_FLOW_FMQ_CREDIT_WORKER_SNAPSHOT_INIT;
-  tstr_t payload = NULL;
+  tstr payload = NULL;
   int rc;
   if (!graph || !out || out->size < sizeof(*out) || out->payload) return TURBO_EINVAL;
   if (document_kind != TURBO_FLOW_RESOURCE_DOCUMENT_STATUS) return TURBO_ENOTSUP;

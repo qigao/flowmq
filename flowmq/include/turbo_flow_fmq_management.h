@@ -1,6 +1,8 @@
 #ifndef TURBO_FLOW_FMQ_MANAGEMENT_H
 #define TURBO_FLOW_FMQ_MANAGEMENT_H
 
+#include "flowmq_export.h"
+
 #include "turbo_flow.h"
 #include "turbo_flow_config.h"
 #include "turbo_flow_fmq_management_protocol.h"
@@ -147,7 +149,7 @@ typedef struct turbo_flow_tfmp_reconcile_binding_s {
  * replay may subsequently restore the persisted journal incarnation. The new
  * owner starts in TURBO_FLOW_TFMP_OWNER_STARTING.
  */
-CXX_C_API int
+FLOWMQ_C_API int
 turbo_flow_tfmp_management_service_create(const turbo_flow_tfmp_management_config_t *config,
                                           turbo_flow_tfmp_management_service_t **out);
 
@@ -159,7 +161,7 @@ turbo_flow_tfmp_management_service_create(const turbo_flow_tfmp_management_confi
  * creation without a volatile fallback. This entry point does not persist the
  * event journal; use the resolved-channel entry point for durable event replay.
  */
-CXX_C_API int turbo_flow_tfmp_management_service_create_with_store(
+FLOWMQ_C_API int turbo_flow_tfmp_management_service_create_with_store(
     const turbo_flow_tfmp_management_config_t *config,
     const turbo_flow_tfmp_management_store_binding_t *binding,
     turbo_flow_tfmp_management_service_t **out);
@@ -174,7 +176,7 @@ CXX_C_API int turbo_flow_tfmp_management_service_create_with_store(
  * durable operation transition and derived event use one atomic blob commit.
  * The binding and its store must outlive the returned service.
  */
-CXX_C_API int turbo_flow_tfmp_management_service_create_configured(
+FLOWMQ_C_API int turbo_flow_tfmp_management_service_create_configured(
     const turbo_flow_tfmp_management_channel_config_t *config,
     const turbo_flow_tfmp_management_store_binding_t *binding,
     turbo_flow_tfmp_management_service_t **out);
@@ -187,16 +189,16 @@ CXX_C_API int turbo_flow_tfmp_management_service_create_configured(
  * their command descriptors advertise durable acceptance. Set once while the
  * service is STARTING and before binding the target.
  */
-CXX_C_API int turbo_flow_tfmp_management_service_set_reconciler(
+FLOWMQ_C_API int turbo_flow_tfmp_management_service_set_reconciler(
     turbo_flow_tfmp_management_service_t *service,
     const turbo_flow_tfmp_reconcile_binding_t *binding);
 
 /** Resolve and strictly validate one immutable YAML management channel. */
-CXX_C_API int turbo_flow_tfmp_management_channel_config_resolve(
+FLOWMQ_C_API int turbo_flow_tfmp_management_channel_config_resolve(
     const turbo_flow_resolved_config_t *resolved, const char *channel_name,
     turbo_flow_tfmp_management_channel_config_t *out, turbo_flow_config_error_t *error);
 
-CXX_C_API void
+FLOWMQ_C_API void
 turbo_flow_tfmp_management_service_destroy(turbo_flow_tfmp_management_service_t *service);
 
 /**
@@ -207,7 +209,7 @@ turbo_flow_tfmp_management_service_destroy(turbo_flow_tfmp_management_service_t 
  * must serialize execute calls with Flow lifecycle, registry reset, and
  * destruction.
  */
-CXX_C_API int
+FLOWMQ_C_API int
 turbo_flow_tfmp_management_service_bind_target(turbo_flow_tfmp_management_service_t *service,
                                                const char *target_uid, turbo_flow_t *flow);
 
@@ -218,12 +220,12 @@ turbo_flow_tfmp_management_service_bind_target(turbo_flow_tfmp_management_servic
  * DRAINING -> STOPPED|FAILED are accepted. Reapplying the current state is
  * idempotent; terminal states cannot transition.
  */
-CXX_C_API int
+FLOWMQ_C_API int
 turbo_flow_tfmp_management_service_set_state(turbo_flow_tfmp_management_service_t *service,
                                              turbo_flow_tfmp_owner_state_t state);
 
 /** Return the current owner state, or zero for an invalid service. */
-CXX_C_API turbo_flow_tfmp_owner_state_t
+FLOWMQ_C_API turbo_flow_tfmp_owner_state_t
 turbo_flow_tfmp_management_service_state(const turbo_flow_tfmp_management_service_t *service);
 
 /**
@@ -240,7 +242,7 @@ turbo_flow_tfmp_management_service_state(const turbo_flow_tfmp_management_servic
  * A TURBO_OK return only means a response was encoded; callers must
  * inspect its TFMP status and disposition.
  */
-CXX_C_API int
+FLOWMQ_C_API int
 turbo_flow_tfmp_management_service_execute(turbo_flow_tfmp_management_service_t *service,
                                            const uint8_t *request, size_t request_size,
                                            uint8_t *out, size_t capacity, size_t *out_len);
@@ -257,7 +259,7 @@ turbo_flow_tfmp_management_service_execute(turbo_flow_tfmp_management_service_t 
  * means no operation is ready. Calls must be serialized with execute and Flow
  * lifecycle operations.
  */
-CXX_C_API int
+FLOWMQ_C_API int
 turbo_flow_tfmp_management_service_run_one(turbo_flow_tfmp_management_service_t *service);
 
 /**
@@ -269,7 +271,7 @@ turbo_flow_tfmp_management_service_run_one(turbo_flow_tfmp_management_service_t 
  * leave the recovery record pending for an explicit retry. TURBO_ENOENT means
  * no recovery is pending.
  */
-CXX_C_API int
+FLOWMQ_C_API int
 turbo_flow_tfmp_management_service_reconcile_one(turbo_flow_tfmp_management_service_t *service);
 
 /**
@@ -280,7 +282,7 @@ turbo_flow_tfmp_management_service_reconcile_one(turbo_flow_tfmp_management_serv
  * used by the downstream ROUTER adapter. The service and stage must share one owner
  * lane; this function does not add a second lock or state owner.
  */
-CXX_C_API int turbo_flow_tfmp_management_stage(turbo_flow_msg_t *msg, void *ctx);
+FLOWMQ_C_API int turbo_flow_tfmp_management_stage(turbo_flow_msg_t *msg, void *ctx);
 
 /**
  * Encode the first journaled event whose sequence is greater than `after_sequence`.
@@ -289,7 +291,7 @@ CXX_C_API int turbo_flow_tfmp_management_stage(turbo_flow_msg_t *msg, void *ctx)
  * TURBO_ERANGE means the bounded journal no longer contains the requested
  * sequence. `topic_size` and `out_size` receive required sizes on ENOSPC.
  */
-CXX_C_API int turbo_flow_tfmp_management_event_next(
+FLOWMQ_C_API int turbo_flow_tfmp_management_event_next(
     const turbo_flow_tfmp_management_service_t *service, uint64_t after_sequence, char *topic,
     size_t topic_capacity, size_t *topic_size, uint8_t *out, size_t capacity, size_t *out_size);
 

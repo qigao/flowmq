@@ -1,6 +1,8 @@
 #ifndef FLOWMQ_TLS_IDENTITY_MAP_H
 #define FLOWMQ_TLS_IDENTITY_MAP_H
 
+#include "flowmq_export.h"
+
 #include "flowmq_protocol.h"
 
 #include <stddef.h>
@@ -49,7 +51,7 @@ typedef struct flowmq_tls_identity_map_config_s {
  *
  * @return TURBO_OK, TURBO_EINVAL, TURBO_ERANGE, or TURBO_ENOMEM.
  */
-CXX_C_API int flowmq_tls_identity_map_create(
+FLOWMQ_C_API int flowmq_tls_identity_map_create(
     const flowmq_tls_identity_map_config_t *config,
     flowmq_tls_identity_map_t **out);
 
@@ -61,15 +63,15 @@ CXX_C_API int flowmq_tls_identity_map_create(
  * @return TURBO_OK, TURBO_EINVAL for malformed input, or TURBO_EPERM when the
  * tuple is not authorized.
  */
-CXX_C_API int flowmq_tls_identity_map_verify(
-    void *map, const char *certificate_sha256, tstr_v claimed_identity);
+FLOWMQ_C_API int flowmq_tls_identity_map_verify(
+    void *map, const char *certificate_sha256, vstr claimed_identity);
 
 /** Return the immutable policy generation, or zero for NULL. */
-CXX_C_API uint64_t flowmq_tls_identity_map_generation(
+FLOWMQ_C_API uint64_t flowmq_tls_identity_map_generation(
     const flowmq_tls_identity_map_t *map);
 
 /** Destroy the map after every endpoint callback using it is quiescent. */
-CXX_C_API void flowmq_tls_identity_map_destroy(flowmq_tls_identity_map_t *map);
+FLOWMQ_C_API void flowmq_tls_identity_map_destroy(flowmq_tls_identity_map_t *map);
 
 #ifdef __cplusplus
 }

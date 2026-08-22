@@ -8,9 +8,9 @@
 #include <string.h>
 
 struct turbo_flow_fmq_security_owner_s {
-  tstr_t realm_channel;
-  tstr_t auth_method;
-  tstr_t secret_reference;
+  tstr realm_channel;
+  tstr auth_method;
+  tstr secret_reference;
   turbo_flow_security_key_provider_t key_provider;
   turbo_flow_security_auth_provider_owner_t auth_provider;
   turbo_flow_security_policy_provider_owner_t policy_provider;

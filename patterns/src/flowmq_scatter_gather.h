@@ -12,8 +12,8 @@
 
 #include "flowmq_protocol_esb.h"
 #include "turbo_error.h"
-#include "turbo_vec.h"
-#include "turbo_hash_map.h"
+#include <turbostl/vec.h>
+#include <turbostl/hash_map.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -41,7 +41,7 @@ typedef enum flowmq_scatter_session_state_e {
 typedef struct flowmq_scatter_partial_response_s {
   uint32_t index;           /* Response index (0-based) */
   uint64_t received_ns;     /* Monotonic timestamp when received */
-  tstr_t payload;           /* Owned response payload */
+  tstr payload;           /* Owned response payload */
   int status;               /* Response status (TURBO_OK or error) */
 } flowmq_scatter_partial_response_t;
 
@@ -164,7 +164,7 @@ int flowmq_scatter_gather_create_session_ms(flowmq_scatter_gather_manager_t *man
 int flowmq_scatter_gather_record_response(flowmq_scatter_gather_manager_t *manager,
                                           uint64_t correlation_id,
                                           uint32_t index,
-                                          tstr_t *payload,
+                                          tstr *payload,
                                           int status,
                                           uint64_t received_ns);
 

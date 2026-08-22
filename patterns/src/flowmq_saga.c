@@ -4,6 +4,7 @@
  */
 
 #include "flowmq_saga.h"
+#include "flowmq_stl_adapter.h"
 #include "tlog.h"
 
 #include <inttypes.h>
@@ -11,11 +12,11 @@
 #include <stdio.h>
 #include <string.h>
 
-/* Hash function for saga_id (tstr_t). */
+/* Hash function for saga_id (tstr). */
 static size_t saga_id_hash(const void *key, size_t key_size, void *ctx) {
   (void)key_size;
   (void)ctx;
-  const tstr_t id = *(const tstr_t *)key;
+  const tstr id = *(const tstr *)key;
   const size_t len = tstr_len(id);
   size_t hash = 5381;
   for (size_t i = 0; i < len; i++) {
@@ -24,12 +25,12 @@ static size_t saga_id_hash(const void *key, size_t key_size, void *ctx) {
   return hash;
 }
 
-/* Equality function for saga_id (tstr_t). */
+/* Equality function for saga_id (tstr). */
 static bool saga_id_eq(const void *left, const void *right, size_t key_size, void *ctx) {
   (void)key_size;
   (void)ctx;
-  const tstr_t left_id = *(const tstr_t *)left;
-  const tstr_t right_id = *(const tstr_t *)right;
+  const tstr left_id = *(const tstr *)left;
+  const tstr right_id = *(const tstr *)right;
   return tstr_cmp(left_id, right_id) == 0;
 }
 
@@ -43,7 +44,7 @@ static void saga_step_cleanup(flowmq_saga_step_t *step) {
 
 static flowmq_saga_transaction_t *flowmq_saga_find_transaction(
     flowmq_saga_coordinator_t *coordinator,
-    const tstr_t *saga_id,
+    const tstr *saga_id,
     int *out_rc) {
   if (!coordinator || !saga_id) {
     if (out_rc) *out_rc = TURBO_EINVAL;
@@ -80,17 +81,17 @@ int flowmq_saga_coordinator_init(flowmq_saga_coordinator_t *coordinator,
     return TURBO_EINVAL;
   }
 
+  memset(coordinator, 0, sizeof(*coordinator));
   coordinator->max_transactions = max_transactions;
   coordinator->next_saga_id = 1;
 
-  int rc = turbo_hash_map_init(&coordinator->transactions,
-                               sizeof(tstr_t),
-                               sizeof(flowmq_saga_transaction_t *),
-                               saga_id_hash,
-                               saga_id_eq,
-                               NULL);
-  if (rc != TURBO_OK) {
-    return rc;
+  int rc = turbo_hash_map_init_bytes(&coordinator->transactions,
+                                     sizeof(tstr), _Alignof(tstr),
+                                     sizeof(flowmq_saga_transaction_t *),
+                                     _Alignof(flowmq_saga_transaction_t *),
+                                     max_transactions, saga_id_hash, saga_id_eq, NULL);
+  if (rc != TURBO_STL_OK) {
+    return flowmq_stl_status_to_error((turbo_stl_status)rc);
   }
 
   return TURBO_OK;
@@ -117,7 +118,7 @@ int flowmq_saga_coordinator_create(flowmq_saga_coordinator_t *coordinator,
                                   uint32_t num_steps,
                                   uint64_t deadline_ns,
                                   void *user_context,
-                                  tstr_t *out_saga_id) {
+                                  tstr *out_saga_id) {
   if (!coordinator || !out_saga_id) return TURBO_EINVAL;
   if (num_steps == 0 || num_steps > FLOWMQ_SAGA_MAX_STEPS) return TURBO_EINVAL;
 
@@ -147,25 +148,26 @@ int flowmq_saga_coordinator_create(flowmq_saga_coordinator_t *coordinator,
   txn->user_context = user_context;
 
   /* Initialize steps vector. */
-  int rc = turbo_vec_init(&txn->steps, sizeof(flowmq_saga_step_t));
-  if (rc != TURBO_OK) {
+  int rc = turbo_vec_init_bytes(&txn->steps, sizeof(flowmq_saga_step_t),
+                                _Alignof(flowmq_saga_step_t), num_steps);
+  if (rc != TURBO_STL_OK) {
     tstr_free(txn->saga_id);
     free(txn);
-    return rc;
+    return flowmq_stl_status_to_error((turbo_stl_status)rc);
   }
   rc = turbo_vec_reserve(&txn->steps, num_steps);
-  if (rc != TURBO_OK) {
+  if (rc != TURBO_STL_OK) {
     flowmq_saga_transaction_cleanup(txn);
     free(txn);
-    return rc;
+    return flowmq_stl_status_to_error((turbo_stl_status)rc);
   }
 
   /* Insert into coordinator map. */
   rc = turbo_hash_map_put(&coordinator->transactions, &txn->saga_id, &txn);
-  if (rc != TURBO_OK) {
+  if (rc != TURBO_STL_OK) {
     flowmq_saga_transaction_cleanup(txn);
     free(txn);
-    return rc;
+    return flowmq_stl_status_to_error((turbo_stl_status)rc);
   }
 
   /* Return SAGA ID. */
@@ -175,17 +177,17 @@ int flowmq_saga_coordinator_create(flowmq_saga_coordinator_t *coordinator,
     return TURBO_ENOMEM;
   }
 
-  TLOG_DEBUG("Created SAGA transaction: %.*s, steps=%u, deadline=%" PRIu64,
-             (int)tstr_len(txn->saga_id), txn->saga_id, num_steps, deadline_ns);
+  TLOG_DEBUGF("Created SAGA transaction: {}, steps={}, deadline={}",
+              txn->saga_id, num_steps, deadline_ns);
 
   return TURBO_OK;
 }
 
 int flowmq_saga_coordinator_add_step(flowmq_saga_coordinator_t *coordinator,
-                                    const tstr_t *saga_id,
-                                    const tstr_t *service_name,
-                                    const tstr_t *transaction_payload,
-                                    const tstr_t *compensation_payload) {
+                                    const tstr *saga_id,
+                                    const tstr *service_name,
+                                    const tstr *transaction_payload,
+                                    const tstr *compensation_payload) {
   if (!coordinator || !saga_id || !service_name ||
       !transaction_payload || !compensation_payload) {
     return TURBO_EINVAL;
@@ -228,21 +230,19 @@ int flowmq_saga_coordinator_add_step(flowmq_saga_coordinator_t *coordinator,
 
   /* Add to vector. */
   rc = turbo_vec_push(&txn->steps, &step);
-  if (rc != TURBO_OK) {
+  if (rc != TURBO_STL_OK) {
     saga_step_cleanup(&step);
-    return rc;
+    return flowmq_stl_status_to_error((turbo_stl_status)rc);
   }
 
-  TLOG_DEBUG("Added step %u to SAGA %.*s: service=%.*s",
-             step.step_id,
-             (int)tstr_len(*saga_id), *saga_id,
-             (int)tstr_len(*service_name), *service_name);
+  TLOG_DEBUGF("Added step {} to SAGA {}: service={}",
+              step.step_id, *saga_id, *service_name);
 
   return TURBO_OK;
 }
 
 int flowmq_saga_coordinator_start(flowmq_saga_coordinator_t *coordinator,
-                                 const tstr_t *saga_id) {
+                                 const tstr *saga_id) {
   if (!coordinator || !saga_id) return TURBO_EINVAL;
 
   int rc = TURBO_OK;
@@ -263,14 +263,13 @@ int flowmq_saga_coordinator_start(flowmq_saga_coordinator_t *coordinator,
   txn->state = FLOWMQ_SAGA_RUNTIME_EXECUTING;
   txn->current_step = 0;
 
-  TLOG_INFO("Started SAGA transaction: %.*s",
-            (int)tstr_len(*saga_id), *saga_id);
+  TLOG_INFOF("Started SAGA transaction: {}", *saga_id);
 
   return TURBO_OK;
 }
 
 int flowmq_saga_coordinator_record_step_result(flowmq_saga_coordinator_t *coordinator,
-                                              const tstr_t *saga_id,
+                                              const tstr *saga_id,
                                               uint32_t step_id,
                                               int success,
                                               int error_code,
@@ -304,7 +303,7 @@ int flowmq_saga_coordinator_record_step_result(flowmq_saga_coordinator_t *coordi
     /* Check if all steps completed. */
     if (txn->current_step >= txn->total_steps) {
       txn->state = FLOWMQ_SAGA_RUNTIME_COMMITTED;
-      TLOG_INFO("SAGA committed: %.*s", (int)tstr_len(*saga_id), *saga_id);
+      TLOG_INFOF("SAGA committed: {}", *saga_id);
     }
   } else {
     /* Failure - move to COMPENSATING. */
@@ -315,15 +314,15 @@ int flowmq_saga_coordinator_record_step_result(flowmq_saga_coordinator_t *coordi
     } else {
       txn->current_step = 0u;
     }
-    TLOG_WARN("SAGA step %u failed (error=%d), starting compensation: %.*s",
-              step_id, error_code, (int)tstr_len(*saga_id), *saga_id);
+    TLOG_WARNF("SAGA step {} failed (error={}), starting compensation: {}",
+               step_id, error_code, *saga_id);
   }
 
   return TURBO_OK;
 }
 
 int flowmq_saga_coordinator_compensate(flowmq_saga_coordinator_t *coordinator,
-                                      const tstr_t *saga_id) {
+                                      const tstr *saga_id) {
   if (!coordinator || !saga_id) return TURBO_EINVAL;
 
   int rc = TURBO_OK;
@@ -348,16 +347,14 @@ int flowmq_saga_coordinator_compensate(flowmq_saga_coordinator_t *coordinator,
     }
 
     if (step->result == FLOWMQ_SAGA_STEP_SUCCESS) {
-      TLOG_INFO("SAGA compensation in progress: %.*s current_step=%u (service=%.*s)",
-                (int)tstr_len(*saga_id), *saga_id, txn->current_step,
-                (int)tstr_len(step->service_name), step->service_name);
+      TLOG_INFOF("SAGA compensation in progress: {} current_step={} (service={})",
+                 *saga_id, txn->current_step, step->service_name);
       return TURBO_OK;
     }
     if (step->result == FLOWMQ_SAGA_STEP_COMPENSATED) {
       if (txn->current_step == 0u) {
         txn->state = FLOWMQ_SAGA_RUNTIME_ABORTED;
-        TLOG_INFO("SAGA compensation completed: %.*s",
-                  (int)tstr_len(*saga_id), *saga_id);
+        TLOG_INFOF("SAGA compensation completed: {}", *saga_id);
         return TURBO_OK;
       }
       txn->current_step--;
@@ -368,7 +365,7 @@ int flowmq_saga_coordinator_compensate(flowmq_saga_coordinator_t *coordinator,
 }
 
 int flowmq_saga_coordinator_record_compensation(flowmq_saga_coordinator_t *coordinator,
-                                               const tstr_t *saga_id,
+                                               const tstr *saga_id,
                                                uint32_t step_id,
                                                uint64_t timestamp_ns) {
   if (!coordinator || !saga_id) return TURBO_EINVAL;
@@ -413,8 +410,7 @@ int flowmq_saga_coordinator_record_compensation(flowmq_saga_coordinator_t *coord
   }
 
   if (txn->state == FLOWMQ_SAGA_RUNTIME_ABORTED) {
-    TLOG_INFO("SAGA aborted (all compensations done): %.*s",
-              (int)tstr_len(*saga_id), *saga_id);
+    TLOG_INFOF("SAGA aborted (all compensations done): {}", *saga_id);
     return TURBO_OK;
   }
 
@@ -429,16 +425,16 @@ int flowmq_saga_coordinator_record_compensation(flowmq_saga_coordinator_t *coord
     }
   }
 
-  TLOG_INFO("SAGA compensation progressed: %.*s, next_step=%u",
-            (int)tstr_len(*saga_id), *saga_id, txn->current_step);
+  TLOG_INFOF("SAGA compensation progressed: {}, next_step={}",
+             *saga_id, txn->current_step);
   return TURBO_OK;
 }
 
 int flowmq_saga_coordinator_peek_compensation(flowmq_saga_coordinator_t *coordinator,
-                                             const tstr_t *saga_id,
+                                             const tstr *saga_id,
                                              uint32_t *out_step_id,
-                                             tstr_t *out_service_name,
-                                             tstr_t *out_compensation_payload) {
+                                             tstr *out_service_name,
+                                             tstr *out_compensation_payload) {
   if (!coordinator || !saga_id || !out_step_id ||
       !out_service_name || !out_compensation_payload) {
     return TURBO_EINVAL;
@@ -495,7 +491,7 @@ int flowmq_saga_coordinator_peek_compensation(flowmq_saga_coordinator_t *coordin
 }
 
 int flowmq_saga_coordinator_get_state(flowmq_saga_coordinator_t *coordinator,
-                                     const tstr_t *saga_id,
+                                     const tstr *saga_id,
                                      flowmq_saga_state_t *out_state) {
   if (!coordinator || !saga_id || !out_state) return TURBO_EINVAL;
 
@@ -508,7 +504,7 @@ int flowmq_saga_coordinator_get_state(flowmq_saga_coordinator_t *coordinator,
 }
 
 int flowmq_saga_coordinator_get_current_step(flowmq_saga_coordinator_t *coordinator,
-                                            const tstr_t *saga_id,
+                                            const tstr *saga_id,
                                             uint32_t *out_step_id) {
   if (!coordinator || !saga_id || !out_step_id) return TURBO_EINVAL;
 
@@ -521,7 +517,7 @@ int flowmq_saga_coordinator_get_current_step(flowmq_saga_coordinator_t *coordina
 }
 
 int flowmq_saga_coordinator_abort(flowmq_saga_coordinator_t *coordinator,
-                                 const tstr_t *saga_id) {
+                                 const tstr *saga_id) {
   if (!coordinator || !saga_id) return TURBO_EINVAL;
 
   int rc = TURBO_OK;
@@ -537,7 +533,7 @@ int flowmq_saga_coordinator_abort(flowmq_saga_coordinator_t *coordinator,
   flowmq_saga_transaction_cleanup(txn);
   free(txn);
 
-  TLOG_INFO("Aborted SAGA transaction: %.*s", (int)tstr_len(*saga_id), *saga_id);
+  TLOG_INFOF("Aborted SAGA transaction: {}", *saga_id);
 
   return TURBO_OK;
 }
@@ -570,12 +566,10 @@ uint32_t flowmq_saga_coordinator_process_timeouts(flowmq_saga_coordinator_t *coo
       txn->state = FLOWMQ_SAGA_RUNTIME_ABORTED;
       timed_out++;
 
-      TLOG_WARN("SAGA timeout: %.*s (deadline=%" PRIu64 ", now=%" PRIu64 ")",
-                (int)tstr_len(txn->saga_id), txn->saga_id,
-                txn->deadline_ns, now_ns);
+      TLOG_WARNF("SAGA timeout: {} (deadline={}, now={})",
+                 txn->saga_id, txn->deadline_ns, now_ns);
     }
   }
 
   return timed_out;
 }
-

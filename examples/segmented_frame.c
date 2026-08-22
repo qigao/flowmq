@@ -19,8 +19,8 @@ int main(void) {
   frame.kind = FLOWMQ_PROTOCOL_FRAME_DATA;
   frame.pattern = FLOWMQ_PROTOCOL_PUSH;
   frame.message_id = 7u;
-  frame.topic = tstr_v_from_cstr("examples.segmented");
-  frame.payload = tstr_v_from_buf(payload, sizeof(payload) - 1u);
+  frame.topic = vstr_from_cstr("examples.segmented");
+  frame.payload = vstr_from_buf(payload, sizeof(payload) - 1u);
 
   rc = flowmq_protocol_encode_frame_segmented(&frame, EXAMPLE_MAX_FRAME_SIZE,
                                                &encoded);

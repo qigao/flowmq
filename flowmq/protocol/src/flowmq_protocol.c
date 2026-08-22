@@ -149,7 +149,7 @@ static int flow_fmq_security_view_validate(const flowmq_protocol_security_t *sec
   }
 }
 
-int flowmq_protocol_security_encode(const flowmq_protocol_security_t *security, tstr_t *payload) {
+int flowmq_protocol_security_encode(const flowmq_protocol_security_t *security, tstr *payload) {
   size_t total;
   unsigned char *header;
   size_t offset;
@@ -187,7 +187,7 @@ int flowmq_protocol_security_encode(const flowmq_protocol_security_t *security, 
   return TURBO_OK;
 }
 
-int flowmq_protocol_security_decode(tstr_v payload, flowmq_protocol_security_t *security) {
+int flowmq_protocol_security_decode(vstr payload, flowmq_protocol_security_t *security) {
   const unsigned char *header = (const unsigned char *)payload.data;
   size_t identity_len;
   size_t method_len;
@@ -218,13 +218,13 @@ int flowmq_protocol_security_decode(tstr_v payload, flowmq_protocol_security_t *
   total = FLOW_FMQ_SECURITY_HEADER_SIZE + identity_len + method_len + binding_len + secret_len;
   if (total != payload.len) return TURBO_EPROTO;
   offset = FLOW_FMQ_SECURITY_HEADER_SIZE;
-  security->identity = tstr_v_from_buf(payload.data + offset, identity_len);
+  security->identity = vstr_from_buf(payload.data + offset, identity_len);
   offset += identity_len;
-  security->method = tstr_v_from_buf(payload.data + offset, method_len);
+  security->method = vstr_from_buf(payload.data + offset, method_len);
   offset += method_len;
-  security->channel_binding = tstr_v_from_buf(payload.data + offset, binding_len);
+  security->channel_binding = vstr_from_buf(payload.data + offset, binding_len);
   offset += binding_len;
-  security->secret = tstr_v_from_buf(payload.data + offset, secret_len);
+  security->secret = vstr_from_buf(payload.data + offset, secret_len);
   rc = flow_fmq_security_view_validate(security);
   if (rc != TURBO_OK) memset(security, 0, sizeof(*security));
   return rc;
@@ -413,7 +413,7 @@ static void flow_fmq_encode_frame_bytes(const flow_fmq_frame_t *frame, unsigned 
   } while (payload_offset < frame->payload.len);
 }
 
-int flow_fmq_encode_frame(const flow_fmq_frame_t *frame, size_t max_frame_size, tstr_t *out) {
+int flow_fmq_encode_frame(const flow_fmq_frame_t *frame, size_t max_frame_size, tstr *out) {
   size_t total;
   int rc;
   if (!out || *out) return TURBO_EINVAL;
@@ -577,11 +577,11 @@ static int flow_fmq_decode_packet(const char *data, size_t data_len, flow_fmq_pa
 }
 
 int flow_fmq_encoded_topic(const char *data, size_t data_len, size_t max_frame_size,
-                           tstr_v *topic) {
+                           vstr *topic) {
   flow_fmq_packet_t packet;
   int rc;
   if (!topic) return TURBO_EINVAL;
-  *topic = (tstr_v){0};
+  *topic = (vstr){0};
   rc = flow_fmq_decode_packet(data, data_len, &packet);
   if (rc != TURBO_OK) return rc;
   if ((packet.flags & FLOW_FMQ_PACKET_FIRST) == 0u || packet.payload_offset != 0u ||
@@ -593,7 +593,7 @@ int flow_fmq_encoded_topic(const char *data, size_t data_len, size_t max_frame_s
   } else if (packet.message_id != 0u) {
     return TURBO_EPROTO;
   }
-  *topic = tstr_v_from_buf(data + FLOW_FMQ_HEADER_SIZE + packet.identity_len, packet.topic_len);
+  *topic = vstr_from_buf(data + FLOW_FMQ_HEADER_SIZE + packet.identity_len, packet.topic_len);
   return TURBO_OK;
 }
 
@@ -657,10 +657,10 @@ int flow_fmq_decode_frame(const char *data, size_t data_len, size_t max_frame_si
   out->kind = first.kind;
   out->pattern = first.pattern;
   out->message_id = first.message_id;
-  out->identity = tstr_v_from_buf(data + FLOW_FMQ_HEADER_SIZE, first.identity_len);
-  out->topic = tstr_v_from_buf(data + FLOW_FMQ_HEADER_SIZE + first.identity_len, first.topic_len);
+  out->identity = vstr_from_buf(data + FLOW_FMQ_HEADER_SIZE, first.identity_len);
+  out->topic = vstr_from_buf(data + FLOW_FMQ_HEADER_SIZE + first.identity_len, first.topic_len);
   if (packet_count == 1u && extension_len == 0u) {
-    out->payload = tstr_v_from_buf(
+    out->payload = vstr_from_buf(
         data + FLOW_FMQ_HEADER_SIZE + first.identity_len + first.topic_len, base_payload_len);
   } else {
     size_t read_cursor = 0u;
@@ -685,7 +685,7 @@ int flow_fmq_decode_frame(const char *data, size_t data_len, size_t max_frame_si
     if (extension_len > 0u) {
       memcpy(out->owned_payload + write_offset, data + payload_cursor, extension_len);
     }
-    out->payload = tstr_v_from_buf((const char *)out->owned_payload, base_payload_len);
+    out->payload = vstr_from_buf((const char *)out->owned_payload, base_payload_len);
   }
   if ((out->kind == FLOW_FMQ_FRAME_PING || out->kind == FLOW_FMQ_FRAME_PONG) &&
       (out->identity.len != 0 || out->topic.len != 0 || out->payload.len != 0)) {

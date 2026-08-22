@@ -2,7 +2,7 @@
 
 #include "turbo_error.h"
 #include "turbo_parser.h"
-#include "turbo_str_view.h"
+#include "turbo_str.h"
 
 #include <limits.h>
 #include <string.h>
@@ -232,11 +232,11 @@ int turbo_flow_tfmp_body_builder_append_bool(turbo_flow_tfmp_body_builder_t *bui
 int turbo_flow_tfmp_body_builder_append_utf8(turbo_flow_tfmp_body_builder_t *builder,
                                              uint8_t field_id, int critical, const char *value,
                                              size_t value_size) {
-  tstr_v view;
+  vstr view;
   if ((!value && value_size > 0u) || (value_size > 0u && memchr(value, '\0', value_size) != NULL))
     return TURBO_EINVAL;
-  view = tstr_v_from_buf(value, value_size);
-  if (!tstr_v_utf8_valid(view)) return TURBO_EINVAL;
+  view = vstr_from_buf(value, value_size);
+  if (!vstr_utf8_valid(view)) return TURBO_EINVAL;
   return turbo_flow_tfmp_body_builder_append(builder, field_id, critical, (const uint8_t *)value,
                                              value_size);
 }
@@ -301,13 +301,13 @@ int turbo_flow_tfmp_field_read_bool(const turbo_flow_tfmp_field_t *field, int *o
 }
 
 int turbo_flow_tfmp_field_validate_utf8(const turbo_flow_tfmp_field_t *field) {
-  tstr_v view;
+  vstr view;
   if (!field || field->size < sizeof(*field) || (!field->value && field->value_size > 0u))
     return TURBO_EINVAL;
   if (field->value_size > 0u && memchr(field->value, '\0', field->value_size) != NULL)
     return TURBO_EPROTO;
-  view = tstr_v_from_buf((const char *)field->value, field->value_size);
-  return tstr_v_utf8_valid(view) ? TURBO_OK : TURBO_EPROTO;
+  view = vstr_from_buf((const char *)field->value, field->value_size);
+  return vstr_utf8_valid(view) ? TURBO_OK : TURBO_EPROTO;
 }
 
 int turbo_flow_tfmp_envelope_encode(const turbo_flow_tfmp_envelope_t *envelope, uint8_t *out,

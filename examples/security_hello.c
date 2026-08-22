@@ -10,17 +10,17 @@ int main(void) {
   static const char channel_binding[FLOWMQ_PROTOCOL_CHANNEL_BINDING_SIZE] = {1};
   flowmq_protocol_security_t input;
   flowmq_protocol_security_t output;
-  tstr_t encoded = NULL;
+  tstr encoded = NULL;
   int rc;
 
   memset(&input, 0, sizeof(input));
   memset(&output, 0, sizeof(output));
   input.mode = FLOWMQ_PROTOCOL_SECURITY_AUTH;
-  input.identity = tstr_v_from_cstr("client-a");
-  input.method = tstr_v_from_cstr("token");
-  input.secret = tstr_v_from_cstr("example-credential");
+  input.identity = vstr_from_cstr("client-a");
+  input.method = vstr_from_cstr("token");
+  input.secret = vstr_from_cstr("example-credential");
   input.channel_binding =
-      tstr_v_from_buf(channel_binding, sizeof(channel_binding));
+      vstr_from_buf(channel_binding, sizeof(channel_binding));
 
   rc = flowmq_protocol_security_encode(&input, &encoded);
   if (rc == TURBO_OK)

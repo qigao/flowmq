@@ -1,6 +1,8 @@
 #ifndef FLOWMQ_CORONET_H
 #define FLOWMQ_CORONET_H
 
+#include "flowmq_export.h"
+
 #include "platform.h"
 
 #include <stddef.h>
@@ -116,16 +118,16 @@ typedef struct flowmq_coronet_tls_server_config_s {
  * @param transport Transport to validate.
  * @return TURBO_OK or TURBO_EINVAL.
  */
-CXX_C_API int flowmq_coronet_transport_validate(flowmq_coronet_transport_t transport);
+FLOWMQ_C_API int flowmq_coronet_transport_validate(flowmq_coronet_transport_t transport);
 
 /**
  * Establish the process-wide CoroNet TLS 1.3-only policy. Call during process
  * startup before any TLS endpoint is created; do not toggle it at runtime.
  */
-CXX_C_API int flowmq_coronet_tls_require_tls13(void);
+FLOWMQ_C_API int flowmq_coronet_tls_require_tls13(void);
 
 /** Return non-zero only while the process-wide CoroNet policy is TLS 1.3-only. */
-CXX_C_API int flowmq_coronet_tls_is_tls13_only(void);
+FLOWMQ_C_API int flowmq_coronet_tls_is_tls13_only(void);
 
 /**
  * Resolve unset operation timeouts from one default value.
@@ -133,7 +135,7 @@ CXX_C_API int flowmq_coronet_tls_is_tls13_only(void);
  * @param timeouts Mutable timeout value; NULL is ignored.
  * @param fallback_timeout_ms Used only when no default timeout was supplied.
  */
-CXX_C_API void flowmq_coronet_timeouts_resolve(flowmq_coronet_timeout_config_t *timeouts,
+FLOWMQ_C_API void flowmq_coronet_timeouts_resolve(flowmq_coronet_timeout_config_t *timeouts,
                                                uint64_t fallback_timeout_ms);
 
 #ifdef __cplusplus

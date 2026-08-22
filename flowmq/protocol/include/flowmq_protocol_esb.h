@@ -1,6 +1,8 @@
 #ifndef FLOWMQ_PROTOCOL_ESB_H
 #define FLOWMQ_PROTOCOL_ESB_H
 
+#include "flowmq_export.h"
+
 /**
  * @file flowmq_protocol_esb.h
  * FlowMQ ESB (Enterprise Service Bus) pattern extensions.
@@ -159,7 +161,7 @@ typedef struct flowmq_protocol_esb_frame_s {
   /* STREAM fields */
   uint32_t partition_id;              /* Target partition (0-based) */
   uint64_t offset;                    /* Message offset in partition */
-  tstr_v consumer_group;              /* Borrowed view: lifetime tied to base frame payload. */
+  vstr consumer_group;              /* Borrowed view: lifetime tied to base frame payload. */
   
   /* PRIORITY_QUEUE fields */
   uint8_t priority;                   /* Priority level (0=lowest, 255=highest) */
@@ -185,7 +187,7 @@ typedef struct flowmq_protocol_esb_frame_s {
  * @param pattern Pattern value to validate.
  * @return TURBO_OK if valid ESB pattern, TURBO_EINVAL otherwise.
  */
-CXX_C_API int flowmq_protocol_esb_pattern_validate(flowmq_protocol_pattern_t pattern);
+FLOWMQ_C_API int flowmq_protocol_esb_pattern_validate(flowmq_protocol_pattern_t pattern);
 
 /**
  * Check if two ESB patterns are compatible for peer connection.
@@ -193,7 +195,7 @@ CXX_C_API int flowmq_protocol_esb_pattern_validate(flowmq_protocol_pattern_t pat
  * @param remote Remote endpoint pattern.
  * @return Non-zero if compatible, zero otherwise.
  */
-CXX_C_API int flowmq_protocol_esb_patterns_compatible(
+FLOWMQ_C_API int flowmq_protocol_esb_patterns_compatible(
     flowmq_protocol_pattern_t local,
     flowmq_protocol_pattern_t remote);
 
@@ -206,10 +208,10 @@ CXX_C_API int flowmq_protocol_esb_patterns_compatible(
  * @param out Output buffer (caller owns, release with tstr_free()).
  * @return TURBO_OK on success, error code otherwise.
  */
-CXX_C_API int flowmq_protocol_esb_encode_frame(
+FLOWMQ_C_API int flowmq_protocol_esb_encode_frame(
     const flowmq_protocol_esb_frame_t *frame,
     size_t max_frame_size,
-    tstr_t *out);
+    tstr *out);
 
 /**
  * Decode ESB frame from wire format.
@@ -223,7 +225,7 @@ CXX_C_API int flowmq_protocol_esb_encode_frame(
  * @param consumed Bytes consumed from input.
  * @return TURBO_OK on success, FLOWMQ_PROTOCOL_INCOMPLETE if more data needed, error otherwise.
  */
-CXX_C_API int flowmq_protocol_esb_decode_frame(
+FLOWMQ_C_API int flowmq_protocol_esb_decode_frame(
     const char *data,
     size_t data_len,
     size_t max_frame_size,
@@ -240,7 +242,7 @@ CXX_C_API int flowmq_protocol_esb_decode_frame(
  * @param out Decoded ESB frame (borrowing policy_group and tstr views from base.payload).
  * @return TURBO_OK on success, error otherwise.
  */
-CXX_C_API int flowmq_protocol_esb_decode_frame_from_base(
+FLOWMQ_C_API int flowmq_protocol_esb_decode_frame_from_base(
     const flowmq_protocol_frame_t *base,
     flowmq_protocol_esb_frame_t *out);
 
@@ -252,7 +254,7 @@ CXX_C_API int flowmq_protocol_esb_decode_frame_from_base(
  * @param out Decoded ESB frame (borrowing policy_group and tstr views from base.payload).
  * @return TURBO_OK on success, error otherwise.
  */
-CXX_C_API int flowmq_protocol_esb_decode_frame_from_base_ex(
+FLOWMQ_C_API int flowmq_protocol_esb_decode_frame_from_base_ex(
     const flowmq_protocol_frame_t *base,
     flowmq_protocol_esb_decode_mode_t mode,
     flowmq_protocol_esb_frame_t *out);
@@ -268,7 +270,7 @@ CXX_C_API int flowmq_protocol_esb_decode_frame_from_base_ex(
  * @param consumed Bytes consumed from input.
  * @return TURBO_OK on success, FLOWMQ_PROTOCOL_INCOMPLETE if more data needed, error otherwise.
  */
-CXX_C_API int flowmq_protocol_esb_decode_frame_ex(
+FLOWMQ_C_API int flowmq_protocol_esb_decode_frame_ex(
     const char *data,
     size_t data_len,
     size_t max_frame_size,
@@ -286,9 +288,9 @@ CXX_C_API int flowmq_protocol_esb_decode_frame_ex(
  * @param out Output owned copy.
  * @return TURBO_OK on success, TURBO_ENOMEM on allocation failure, TURBO_EINVAL on invalid args.
  */
-CXX_C_API int flowmq_protocol_esb_frame_consumer_group_copy(
+FLOWMQ_C_API int flowmq_protocol_esb_frame_consumer_group_copy(
     const flowmq_protocol_esb_frame_t *frame,
-    tstr_t *out);
+    tstr *out);
 
 /**
  * Clean up ESB frame resources.
@@ -296,7 +298,7 @@ CXX_C_API int flowmq_protocol_esb_frame_consumer_group_copy(
  * 
  * @param frame ESB frame to clean up (accepts NULL).
  */
-CXX_C_API void flowmq_protocol_esb_frame_cleanup(flowmq_protocol_esb_frame_t *frame);
+FLOWMQ_C_API void flowmq_protocol_esb_frame_cleanup(flowmq_protocol_esb_frame_t *frame);
 
 /**
  * Calculate encoded size of ESB frame.
@@ -305,7 +307,7 @@ CXX_C_API void flowmq_protocol_esb_frame_cleanup(flowmq_protocol_esb_frame_t *fr
  * @param size Output: calculated size.
  * @return TURBO_OK on success, error code otherwise.
  */
-CXX_C_API int flowmq_protocol_esb_encoded_size(
+FLOWMQ_C_API int flowmq_protocol_esb_encoded_size(
     const flowmq_protocol_esb_frame_t *frame,
     size_t max_frame_size,
     size_t *size);

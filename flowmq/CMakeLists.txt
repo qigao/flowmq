@@ -39,7 +39,9 @@ target_include_directories(
   PUBLIC $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/flowmq/include>
          $<INSTALL_INTERFACE:include>
   PRIVATE ${PROJECT_SOURCE_DIR}/patterns/src)
-target_link_libraries(flowmq_core PUBLIC FlowMQ::Protocol TurboUtils::Core)
+target_link_libraries(flowmq_core
+                      PUBLIC FlowMQ::Protocol TurboUtils::Core
+                      PRIVATE TurboUtils::STL)
 
 if(BUILD_BENCHMARKS)
   add_subdirectory(benchmarks)

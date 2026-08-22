@@ -129,7 +129,7 @@ failed:
 
 int flowmq_tls_identity_map_verify(void *map_pointer,
                                    const char *certificate_sha256,
-                                   tstr_v claimed_identity) {
+                                   vstr claimed_identity) {
   const flowmq_tls_identity_map_t *map =
       (const flowmq_tls_identity_map_t *)map_pointer;
   if (!map || !claimed_identity.data || claimed_identity.len == 0u ||

@@ -1,9 +1,11 @@
 #ifndef TURBO_FLOW_FMQ_PUBSUB_H
 #define TURBO_FLOW_FMQ_PUBSUB_H
 
+#include "flowmq_export.h"
+
 #include "turbo_flow.h"
 #include "turbo_flow_config.h"
-#include "turbo_str_view.h"
+#include "turbo_str.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -60,8 +62,8 @@ typedef struct turbo_flow_fmq_pubsub_record_s {
   size_t size;
   turbo_flow_fmq_pubsub_operation_t operation;
   uint64_t sequence;
-  tstr_v topic;
-  tstr_v payload;
+  vstr topic;
+  vstr payload;
 } turbo_flow_fmq_pubsub_record_t;
 
 #define TURBO_FLOW_FMQ_PUBSUB_RECORD_INIT                                                          \
@@ -127,8 +129,8 @@ typedef struct turbo_flow_fmq_pubsub_recovery_message_s {
   uint64_t sequence;
   uint64_t upper_bound;
   uint16_t record_count;
-  tstr_v prefix;
-  tstr_v records;
+  vstr prefix;
+  vstr records;
 } turbo_flow_fmq_pubsub_recovery_message_t;
 
 #define TURBO_FLOW_FMQ_PUBSUB_RECOVERY_MESSAGE_INIT                                                \
@@ -149,7 +151,7 @@ typedef struct turbo_flow_fmq_pubsub_recovery_message_s {
 
 typedef struct turbo_flow_fmq_pubsub_recovery_record_iterator_s {
   size_t size;
-  tstr_v records;
+  vstr records;
   size_t offset;
   uint16_t remaining;
 } turbo_flow_fmq_pubsub_recovery_record_iterator_t;
@@ -178,7 +180,7 @@ typedef struct turbo_flow_fmq_pubsub_recovery_config_s {
  * @param config Versioned limits; all four capacity fields must be positive.
  * @return New owner, or NULL for invalid config or allocation failure.
  */
-CXX_C_API turbo_flow_fmq_pubsub_state_t *
+FLOWMQ_C_API turbo_flow_fmq_pubsub_state_t *
 turbo_flow_fmq_pubsub_state_create(const turbo_flow_fmq_pubsub_config_t *config);
 
 /**
@@ -190,11 +192,11 @@ turbo_flow_fmq_pubsub_state_create(const turbo_flow_fmq_pubsub_config_t *config)
  *
  * @return TURBO_OK, TURBO_EINVAL, TURBO_ENOTSUP, TURBO_ERANGE, or TURBO_ENOMEM.
  */
-CXX_C_API int turbo_flow_fmq_pubsub_state_create_resolved(
+FLOWMQ_C_API int turbo_flow_fmq_pubsub_state_create_resolved(
     const turbo_flow_resolved_config_t *resolved, const char *channel_name,
     turbo_flow_fmq_pubsub_state_t **out, turbo_flow_config_error_t *error);
 
-CXX_C_API void turbo_flow_fmq_pubsub_state_destroy(turbo_flow_fmq_pubsub_state_t *state);
+FLOWMQ_C_API void turbo_flow_fmq_pubsub_state_destroy(turbo_flow_fmq_pubsub_state_t *state);
 
 /**
  * Store or replace one exact topic and append the same transition to the ordered journal.
@@ -203,15 +205,15 @@ CXX_C_API void turbo_flow_fmq_pubsub_state_destroy(turbo_flow_fmq_pubsub_state_t
  * TURBO_ENAMETOOLONG. TURBO_ENOSPC means a state or journal byte/count limit rejected the
  * operation; no sequence is consumed.
  */
-CXX_C_API int turbo_flow_fmq_pubsub_put(turbo_flow_fmq_pubsub_state_t *state, tstr_v topic,
-                                        tstr_v payload, uint64_t *sequence);
+FLOWMQ_C_API int turbo_flow_fmq_pubsub_put(turbo_flow_fmq_pubsub_state_t *state, vstr topic,
+                                        vstr payload, uint64_t *sequence);
 
 /**
  * Delete one topic and append a tombstone even when the topic is not currently present.
  * This lets recovering subscribers remove stale local state deterministically.
  * Topics longer than TURBO_FLOW_FMQ_PUBSUB_MAX_TOPIC_SIZE return TURBO_ENAMETOOLONG.
  */
-CXX_C_API int turbo_flow_fmq_pubsub_delete(turbo_flow_fmq_pubsub_state_t *state, tstr_v topic,
+FLOWMQ_C_API int turbo_flow_fmq_pubsub_delete(turbo_flow_fmq_pubsub_state_t *state, vstr topic,
                                            uint64_t *sequence);
 
 /**
@@ -220,18 +222,18 @@ CXX_C_API int turbo_flow_fmq_pubsub_delete(turbo_flow_fmq_pubsub_state_t *state,
  * Records are state values and are not promised to be sequence-sorted.
  * Prefixes longer than TURBO_FLOW_FMQ_PUBSUB_MAX_TOPIC_SIZE return TURBO_ENAMETOOLONG.
  */
-CXX_C_API int turbo_flow_fmq_pubsub_snapshot_open(const turbo_flow_fmq_pubsub_state_t *state,
-                                                  tstr_v prefix,
+FLOWMQ_C_API int turbo_flow_fmq_pubsub_snapshot_open(const turbo_flow_fmq_pubsub_state_t *state,
+                                                  vstr prefix,
                                                   turbo_flow_fmq_pubsub_snapshot_cursor_t **out);
 
-CXX_C_API uint64_t
+FLOWMQ_C_API uint64_t
 turbo_flow_fmq_pubsub_snapshot_barrier(const turbo_flow_fmq_pubsub_snapshot_cursor_t *cursor);
 
 /** Return TURBO_OK for one record or TURBO_ENOENT at the end. */
-CXX_C_API int turbo_flow_fmq_pubsub_snapshot_next(turbo_flow_fmq_pubsub_snapshot_cursor_t *cursor,
+FLOWMQ_C_API int turbo_flow_fmq_pubsub_snapshot_next(turbo_flow_fmq_pubsub_snapshot_cursor_t *cursor,
                                                   turbo_flow_fmq_pubsub_record_t *record);
 
-CXX_C_API void
+FLOWMQ_C_API void
 turbo_flow_fmq_pubsub_snapshot_destroy(turbo_flow_fmq_pubsub_snapshot_cursor_t *cursor);
 
 /**
@@ -241,20 +243,20 @@ turbo_flow_fmq_pubsub_snapshot_destroy(turbo_flow_fmq_pubsub_snapshot_cursor_t *
  * TURBO_ERANGE means `after_sequence` is ahead of the owner or is older than the retained journal;
  * the caller must acquire a new snapshot instead of accepting a gap.
  */
-CXX_C_API int turbo_flow_fmq_pubsub_updates_open(const turbo_flow_fmq_pubsub_state_t *state,
-                                                 tstr_v prefix, uint64_t after_sequence,
+FLOWMQ_C_API int turbo_flow_fmq_pubsub_updates_open(const turbo_flow_fmq_pubsub_state_t *state,
+                                                 vstr prefix, uint64_t after_sequence,
                                                  turbo_flow_fmq_pubsub_update_cursor_t **out);
 
-CXX_C_API uint64_t
+FLOWMQ_C_API uint64_t
 turbo_flow_fmq_pubsub_updates_upper_bound(const turbo_flow_fmq_pubsub_update_cursor_t *cursor);
 
 /** Return TURBO_OK for one record or TURBO_ENOENT at the end. */
-CXX_C_API int turbo_flow_fmq_pubsub_updates_next(turbo_flow_fmq_pubsub_update_cursor_t *cursor,
+FLOWMQ_C_API int turbo_flow_fmq_pubsub_updates_next(turbo_flow_fmq_pubsub_update_cursor_t *cursor,
                                                  turbo_flow_fmq_pubsub_record_t *record);
 
-CXX_C_API void turbo_flow_fmq_pubsub_updates_destroy(turbo_flow_fmq_pubsub_update_cursor_t *cursor);
+FLOWMQ_C_API void turbo_flow_fmq_pubsub_updates_destroy(turbo_flow_fmq_pubsub_update_cursor_t *cursor);
 
-CXX_C_API int turbo_flow_fmq_pubsub_status(const turbo_flow_fmq_pubsub_state_t *state,
+FLOWMQ_C_API int turbo_flow_fmq_pubsub_status(const turbo_flow_fmq_pubsub_state_t *state,
                                            turbo_flow_fmq_pubsub_status_t *status);
 
 /**
@@ -265,22 +267,22 @@ CXX_C_API int turbo_flow_fmq_pubsub_status(const turbo_flow_fmq_pubsub_state_t *
  * zero for "freeze at the current owner sequence" or a previously returned fixed upper bound.
  * `out` is unchanged on TURBO_ENOSPC and `out_size` receives the required size.
  */
-CXX_C_API int turbo_flow_fmq_pubsub_recovery_request_encode(
-    turbo_flow_fmq_pubsub_recovery_kind_t kind, uint64_t request_id, tstr_v prefix,
+FLOWMQ_C_API int turbo_flow_fmq_pubsub_recovery_request_encode(
+    turbo_flow_fmq_pubsub_recovery_kind_t kind, uint64_t request_id, vstr prefix,
     uint64_t after_sequence, uint64_t upper_bound, uint16_t page_limit, uint8_t *out,
     size_t capacity, size_t *out_size);
 
 /** Decode and strictly validate one complete TFPS/1 message without copying its body. */
-CXX_C_API int turbo_flow_fmq_pubsub_recovery_message_decode(
+FLOWMQ_C_API int turbo_flow_fmq_pubsub_recovery_message_decode(
     const uint8_t *data, size_t data_size, turbo_flow_fmq_pubsub_recovery_message_t *message);
 
 /** Initialize a zero-copy iterator after a successful message decode. */
-CXX_C_API int turbo_flow_fmq_pubsub_recovery_record_iterator_init(
+FLOWMQ_C_API int turbo_flow_fmq_pubsub_recovery_record_iterator_init(
     const turbo_flow_fmq_pubsub_recovery_message_t *message,
     turbo_flow_fmq_pubsub_recovery_record_iterator_t *iterator);
 
 /** Return TURBO_OK for one record or TURBO_ENOENT after exactly record_count records. */
-CXX_C_API int turbo_flow_fmq_pubsub_recovery_record_next(
+FLOWMQ_C_API int turbo_flow_fmq_pubsub_recovery_record_next(
     turbo_flow_fmq_pubsub_recovery_record_iterator_t *iterator,
     turbo_flow_fmq_pubsub_record_t *record);
 
@@ -291,27 +293,27 @@ CXX_C_API int turbo_flow_fmq_pubsub_recovery_record_next(
  * the same serialized owner lane. max_reply_bytes is a hard allocation/wire bound; an oversized
  * snapshot becomes a terminal RESOURCE_EXHAUSTED response rather than a partial snapshot.
  */
-CXX_C_API int turbo_flow_fmq_pubsub_recovery_service_create(
+FLOWMQ_C_API int turbo_flow_fmq_pubsub_recovery_service_create(
     turbo_flow_fmq_pubsub_state_t *state, const turbo_flow_fmq_pubsub_recovery_config_t *config,
     turbo_flow_fmq_pubsub_recovery_service_t **out);
 
-CXX_C_API void turbo_flow_fmq_pubsub_recovery_service_destroy(
+FLOWMQ_C_API void turbo_flow_fmq_pubsub_recovery_service_destroy(
     turbo_flow_fmq_pubsub_recovery_service_t *service);
 
 /**
  * Store a raw publication as PUT, then replace its payload with one sequenced TFPS LIVE_UPDATE.
  * Topic comes from FMQ input metadata, or from a valid content descriptor when called locally.
  */
-CXX_C_API int turbo_flow_fmq_pubsub_put_stage(turbo_flow_msg_t *msg, void *ctx);
+FLOWMQ_C_API int turbo_flow_fmq_pubsub_put_stage(turbo_flow_msg_t *msg, void *ctx);
 
 /**
  * Store a tombstone, then replace its payload with one sequenced TFPS LIVE_UPDATE.
  * Topic resolution is identical to turbo_flow_fmq_pubsub_put_stage().
  */
-CXX_C_API int turbo_flow_fmq_pubsub_delete_stage(turbo_flow_msg_t *msg, void *ctx);
+FLOWMQ_C_API int turbo_flow_fmq_pubsub_delete_stage(turbo_flow_msg_t *msg, void *ctx);
 
 /** Replace one TFPS request with exactly one terminal response for an ordinary FMQ REP graph. */
-CXX_C_API int turbo_flow_fmq_pubsub_recovery_stage(turbo_flow_msg_t *msg, void *ctx);
+FLOWMQ_C_API int turbo_flow_fmq_pubsub_recovery_stage(turbo_flow_msg_t *msg, void *ctx);
 
 #ifdef __cplusplus
 }

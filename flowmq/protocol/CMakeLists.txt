@@ -1,6 +1,7 @@
 set(TARGET_NAME flowmq_protocol)
 
 set(FLOWMQ_PROTOCOL_HEADERS
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/flowmq_export.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/flowmq_protocol.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/flowmq_protocol_esb.h)
 set(FLOWMQ_PROTOCOL_SOURCES

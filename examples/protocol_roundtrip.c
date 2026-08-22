@@ -13,7 +13,7 @@ int main(void) {
   static const char payload[] = "hello from standalone FlowMQ";
   flowmq_protocol_frame_t input;
   flowmq_protocol_frame_t output;
-  tstr_t encoded = NULL;
+  tstr encoded = NULL;
   size_t consumed = 0u;
   int rc;
 
@@ -22,9 +22,9 @@ int main(void) {
   input.kind = FLOWMQ_PROTOCOL_FRAME_DATA;
   input.pattern = FLOWMQ_PROTOCOL_PUB;
   input.message_id = UINT64_C(42);
-  input.identity = tstr_v_from_cstr("publisher-a");
-  input.topic = tstr_v_from_cstr("examples.standalone");
-  input.payload = tstr_v_from_buf(payload, sizeof(payload) - 1u);
+  input.identity = vstr_from_cstr("publisher-a");
+  input.topic = vstr_from_cstr("examples.standalone");
+  input.payload = vstr_from_buf(payload, sizeof(payload) - 1u);
 
   rc = flowmq_protocol_encode_frame(&input, EXAMPLE_MAX_FRAME_SIZE, &encoded);
   if (rc == TURBO_OK)

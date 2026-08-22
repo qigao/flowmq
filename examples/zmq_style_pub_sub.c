@@ -10,7 +10,7 @@ typedef struct subscriber_state_s {
 
 static int on_publication(turbo_flow_fmq_app_t *app, turbo_flow_msg_t *message, void *ctx) {
   subscriber_state_t *state = (subscriber_state_t *)ctx;
-  tstr_v topic = {0};
+  vstr topic = {0};
   int rc;
   (void)app;
   if (!message || !state) return TURBO_EINVAL;

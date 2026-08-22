@@ -11,29 +11,29 @@ spec("flowmq_peer_session") {
     uint64_t snapshot_generation = 0u;
     uint64_t correlation_id = 0u;
 
-    check_int_eq(flowmq_peer_session_init(&session, 1u), TURBO_OK);
-    check_int_eq(flowmq_peer_session_handshake_complete(&session, &first_generation), TURBO_OK);
-    check_uint_eq(first_generation, 2u);
-    check_int_eq(flowmq_peer_session_begin(&session, FLOWMQ_PEER_EXCHANGE_WAIT_REPLY, 41u,
+    check_equal(flowmq_peer_session_init(&session, 1u), TURBO_OK);
+    check_equal(flowmq_peer_session_handshake_complete(&session, &first_generation), TURBO_OK);
+    check_equal(first_generation, 2u);
+    check_equal(flowmq_peer_session_begin(&session, FLOWMQ_PEER_EXCHANGE_WAIT_REPLY, 41u,
                                            &snapshot_generation),
                  TURBO_OK);
-    check_uint_eq(snapshot_generation, first_generation);
-    check_int_eq(flowmq_peer_session_finish(&session, first_generation,
+    check_equal(snapshot_generation, first_generation);
+    check_equal(flowmq_peer_session_finish(&session, first_generation,
                                             FLOWMQ_PEER_EXCHANGE_WAIT_REPLY, 41u,
                                             FLOWMQ_PEER_EXCHANGE_RESETTING),
                  TURBO_OK);
 
-    check_int_eq(flowmq_peer_session_handshake_complete(&session, &second_generation), TURBO_OK);
-    check_uint_eq(second_generation, 3u);
-    check_int_eq(
+    check_equal(flowmq_peer_session_handshake_complete(&session, &second_generation), TURBO_OK);
+    check_equal(second_generation, 3u);
+    check_equal(
         flowmq_peer_session_match(&session, first_generation, FLOWMQ_PEER_EXCHANGE_WAIT_REPLY, 41u),
         TURBO_ENOTCONN);
-    check_int_eq(
+    check_equal(
         flowmq_peer_session_snapshot(&session, &state, &snapshot_generation, &correlation_id),
         TURBO_OK);
-    check_int_eq(state, FLOWMQ_PEER_EXCHANGE_READY);
-    check_uint_eq(snapshot_generation, second_generation);
-    check_uint_eq(correlation_id, 0u);
+    check_equal(state, FLOWMQ_PEER_EXCHANGE_READY);
+    check_equal(snapshot_generation, second_generation);
+    check_equal(correlation_id, 0u);
   }
 
   it("enforces one synchronous request correlation") {
@@ -41,17 +41,17 @@ spec("flowmq_peer_session") {
     uint64_t generation = 0u;
     uint64_t ignored_generation = 0u;
 
-    check_int_eq(flowmq_peer_session_init(&session, 7u), TURBO_OK);
-    check_int_eq(
+    check_equal(flowmq_peer_session_init(&session, 7u), TURBO_OK);
+    check_equal(
         flowmq_peer_session_begin(&session, FLOWMQ_PEER_EXCHANGE_WAIT_REPLY, 51u, &generation),
         TURBO_OK);
-    check_int_eq(flowmq_peer_session_begin(&session, FLOWMQ_PEER_EXCHANGE_WAIT_REPLY, 52u,
+    check_equal(flowmq_peer_session_begin(&session, FLOWMQ_PEER_EXCHANGE_WAIT_REPLY, 52u,
                                            &ignored_generation),
                  TURBO_EBUSY);
-    check_int_eq(
+    check_equal(
         flowmq_peer_session_match(&session, generation, FLOWMQ_PEER_EXCHANGE_WAIT_REPLY, 52u),
         TURBO_EPROTO);
-    check_int_eq(flowmq_peer_session_finish(&session, generation, FLOWMQ_PEER_EXCHANGE_WAIT_REPLY,
+    check_equal(flowmq_peer_session_finish(&session, generation, FLOWMQ_PEER_EXCHANGE_WAIT_REPLY,
                                             51u, FLOWMQ_PEER_EXCHANGE_READY),
                  TURBO_OK);
   }
@@ -60,12 +60,12 @@ spec("flowmq_peer_session") {
     flowmq_peer_session_t session;
     uint64_t generation = 0u;
 
-    check_int_eq(flowmq_peer_session_init(&session, 11u), TURBO_OK);
-    check_int_eq(flowmq_peer_session_begin(&session, FLOWMQ_PEER_EXCHANGE_PROCESSING_REQUEST, 61u,
+    check_equal(flowmq_peer_session_init(&session, 11u), TURBO_OK);
+    check_equal(flowmq_peer_session_begin(&session, FLOWMQ_PEER_EXCHANGE_PROCESSING_REQUEST, 61u,
                                            &generation),
                  TURBO_OK);
-    check_int_eq(flowmq_peer_session_mark_resetting(&session), TURBO_OK);
-    check_int_eq(flowmq_peer_session_finish(&session, generation,
+    check_equal(flowmq_peer_session_mark_resetting(&session), TURBO_OK);
+    check_equal(flowmq_peer_session_finish(&session, generation,
                                             FLOWMQ_PEER_EXCHANGE_PROCESSING_REQUEST, 61u,
                                             FLOWMQ_PEER_EXCHANGE_READY),
                  TURBO_EBUSY);

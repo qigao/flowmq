@@ -1,6 +1,8 @@
 #ifndef TURBO_FLOW_FMQ_H
 #define TURBO_FLOW_FMQ_H
 
+#include "flowmq_export.h"
+
 #include "CoroNet/turbo_coro_context.h"
 #include "turbo_flow.h"
 #include "turbo_flow_config.h"
@@ -111,8 +113,8 @@ typedef struct turbo_flow_fmq_event_s {
   turbo_flow_fmq_pattern_t pattern;
   turbo_flow_fmq_endpoint_mode_t mode;
   turbo_flow_fmq_transport_t transport;
-  tstr_v peer_identity;
-  tstr_v peer_topic;
+  vstr peer_identity;
+  vstr peer_topic;
   uint64_t reconnect_delay_ms;
   uint64_t frame_bytes;
 } turbo_flow_fmq_event_t;
@@ -345,26 +347,26 @@ typedef struct turbo_flow_fmq_fanout_config_s {
  * shutdown completes. Returns TURBO_OK or a concrete config, lane-resolution,
  * allocation, or adapter-registration error.
  */
-CXX_C_API int
+FLOWMQ_C_API int
 turbo_flow_fmq_register_adapter_ex(turbo_flow_t *flow, const char *name,
                                    const turbo_flow_fmq_config_t *config,
                                    const turbo_flow_coronet_execution_binding_t *execution);
 
 /** Register a v3-only adapter with mandatory authentication and default-deny ACL. */
-CXX_C_API int turbo_flow_fmq_register_secure_adapter_ex(
+FLOWMQ_C_API int turbo_flow_fmq_register_secure_adapter_ex(
     turbo_flow_t *flow, const char *name, const turbo_flow_fmq_config_t *config,
     const turbo_flow_coronet_execution_binding_t *execution,
     const turbo_flow_fmq_security_binding_t *security);
 
 /** Register bounded per-peer fan-out with an explicit CoroNet execution binding. */
-CXX_C_API int
+FLOWMQ_C_API int
 turbo_flow_fmq_register_fanout_adapter_ex(turbo_flow_t *flow, const char *name,
                                           const turbo_flow_fmq_config_t *config,
                                           const turbo_flow_fmq_fanout_config_t *fanout,
                                           const turbo_flow_coronet_execution_binding_t *execution);
 
 /** Register secure bounded PUB/XPUB fan-out with per-peer ACL enforcement. */
-CXX_C_API int turbo_flow_fmq_register_secure_fanout_adapter_ex(
+FLOWMQ_C_API int turbo_flow_fmq_register_secure_fanout_adapter_ex(
     turbo_flow_t *flow, const char *name, const turbo_flow_fmq_config_t *config,
     const turbo_flow_fmq_fanout_config_t *fanout,
     const turbo_flow_coronet_execution_binding_t *execution,
@@ -377,32 +379,32 @@ CXX_C_API int turbo_flow_fmq_register_secure_fanout_adapter_ex(
  * name. Only serializable FMQ fields are accepted; host callbacks, schema
  * pointers, and CoroNet execution ownership remain explicit host API inputs.
  */
-CXX_C_API int turbo_flow_fmq_register_resolved_adapter(turbo_flow_t *flow, const char *name,
+FLOWMQ_C_API int turbo_flow_fmq_register_resolved_adapter(turbo_flow_t *flow, const char *name,
                                                        const turbo_flow_resolved_config_t *resolved,
                                                        turbo_flow_config_error_t *error);
 
-CXX_C_API int turbo_flow_fmq_register_resolved_adapter_ex(
+FLOWMQ_C_API int turbo_flow_fmq_register_resolved_adapter_ex(
     turbo_flow_t *flow, const char *name, const turbo_flow_resolved_config_t *resolved,
     const turbo_flow_coronet_execution_binding_t *execution, turbo_flow_config_error_t *error);
 
 /** Resolve serializable endpoint fields and inject host-owned security capabilities explicitly. */
-CXX_C_API int turbo_flow_fmq_register_resolved_secure_adapter_ex(
+FLOWMQ_C_API int turbo_flow_fmq_register_resolved_secure_adapter_ex(
     turbo_flow_t *flow, const char *name, const turbo_flow_resolved_config_t *resolved,
     const turbo_flow_coronet_execution_binding_t *execution,
     const turbo_flow_fmq_security_binding_t *security, turbo_flow_config_error_t *error);
 
-CXX_C_API int turbo_flow_fmq_register_resolved_secure_adapter(
+FLOWMQ_C_API int turbo_flow_fmq_register_resolved_secure_adapter(
     turbo_flow_t *flow, const char *name, const turbo_flow_resolved_config_t *resolved,
     const turbo_flow_fmq_security_binding_t *security, turbo_flow_config_error_t *error);
 
 /** Message-backed topic view, valid until the message is mutated or cleaned up. */
-CXX_C_API int turbo_flow_fmq_message_topic(const turbo_flow_msg_t *msg, tstr_v *topic);
+FLOWMQ_C_API int turbo_flow_fmq_message_topic(const turbo_flow_msg_t *msg, vstr *topic);
 
 /** Message-backed peer identity view, valid until the message is mutated or cleaned up. */
-CXX_C_API int turbo_flow_fmq_message_identity(const turbo_flow_msg_t *msg, tstr_v *identity);
+FLOWMQ_C_API int turbo_flow_fmq_message_identity(const turbo_flow_msg_t *msg, vstr *identity);
 
 /** Read the message-owned wire correlation ID. */
-CXX_C_API int turbo_flow_fmq_message_correlation_id(const turbo_flow_msg_t *msg,
+FLOWMQ_C_API int turbo_flow_fmq_message_correlation_id(const turbo_flow_msg_t *msg,
                                                     uint64_t *correlation_id);
 
 /**
@@ -415,14 +417,14 @@ CXX_C_API int turbo_flow_fmq_message_correlation_id(const turbo_flow_msg_t *msg,
  * the same ROUTER sink. A disconnected, reconnected, or restarted session fails
  * with TURBO_ENOTCONN. REP remains deliberately synchronous.
  */
-CXX_C_API int turbo_flow_fmq_message_detach_router_route(turbo_flow_msg_t *msg);
+FLOWMQ_C_API int turbo_flow_fmq_message_detach_router_route(turbo_flow_msg_t *msg);
 
 /**
  * Read a message-backed XPUB subscription event.
  * Returns TURBO_ENOENT for ordinary DATA messages.
  */
-CXX_C_API int turbo_flow_fmq_message_subscription(const turbo_flow_msg_t *msg, int *subscribe,
-                                                  tstr_v *topic);
+FLOWMQ_C_API int turbo_flow_fmq_message_subscription(const turbo_flow_msg_t *msg, int *subscribe,
+                                                  vstr *topic);
 
 typedef struct turbo_flow_fmq_app_s turbo_flow_fmq_app_t;
 
@@ -455,7 +457,7 @@ typedef struct turbo_flow_fmq_app_options_s {
  * require on_message. Bidirectional patterns may omit it to discard ingress.
  * Send-only patterns reject a callback.
  */
-CXX_C_API int turbo_flow_fmq_app_create(const turbo_flow_fmq_config_t *endpoint,
+FLOWMQ_C_API int turbo_flow_fmq_app_create(const turbo_flow_fmq_config_t *endpoint,
                                         const turbo_flow_fmq_app_options_t *options,
                                         turbo_flow_fmq_app_t **out);
 
@@ -476,12 +478,12 @@ CXX_C_API int turbo_flow_fmq_app_create(const turbo_flow_fmq_config_t *endpoint,
  * callback contract; TURBO_ERANGE for an invalid pool lane; TURBO_ENOMEM for
  * allocation failure; or a concrete endpoint/security initialization error.
  */
-CXX_C_API int turbo_flow_fmq_app_create_ex(
+FLOWMQ_C_API int turbo_flow_fmq_app_create_ex(
     const turbo_flow_fmq_config_t *endpoint, const turbo_flow_fmq_app_options_t *options,
     const turbo_flow_coronet_execution_binding_t *execution, turbo_flow_fmq_app_t **out);
 
 /** Create an application facade backed by one mandatory-secure v3 endpoint. */
-CXX_C_API int turbo_flow_fmq_app_create_secure(
+FLOWMQ_C_API int turbo_flow_fmq_app_create_secure(
     const turbo_flow_fmq_config_t *endpoint, const turbo_flow_fmq_app_options_t *options,
     const turbo_flow_fmq_security_binding_t *security, turbo_flow_fmq_app_t **out);
 
@@ -496,26 +498,26 @@ CXX_C_API int turbo_flow_fmq_app_create_secure(
  * @return The same errors as turbo_flow_fmq_app_create_ex, plus concrete
  * security binding validation or registration errors.
  */
-CXX_C_API int turbo_flow_fmq_app_create_secure_ex(
+FLOWMQ_C_API int turbo_flow_fmq_app_create_secure_ex(
     const turbo_flow_fmq_config_t *endpoint, const turbo_flow_fmq_app_options_t *options,
     const turbo_flow_coronet_execution_binding_t *execution,
     const turbo_flow_fmq_security_binding_t *security, turbo_flow_fmq_app_t **out);
 
 /** Create the same facade from one resolved YAML adapter entry. */
-CXX_C_API int turbo_flow_fmq_app_create_resolved(
+FLOWMQ_C_API int turbo_flow_fmq_app_create_resolved(
     const turbo_flow_resolved_config_t *resolved, const char *adapter_name,
     const turbo_flow_fmq_app_options_t *options, turbo_flow_fmq_app_t **out,
     turbo_flow_config_error_t *error);
 
 /** Create a secure facade from YAML endpoint fields plus an explicit host security binding. */
-CXX_C_API int turbo_flow_fmq_app_create_resolved_secure(
+FLOWMQ_C_API int turbo_flow_fmq_app_create_resolved_secure(
     const turbo_flow_resolved_config_t *resolved, const char *adapter_name,
     const turbo_flow_fmq_app_options_t *options,
     const turbo_flow_fmq_security_binding_t *security, turbo_flow_fmq_app_t **out,
     turbo_flow_config_error_t *error);
 
-CXX_C_API int turbo_flow_fmq_app_start(turbo_flow_fmq_app_t *app);
-CXX_C_API int turbo_flow_fmq_app_stop(turbo_flow_fmq_app_t *app);
+FLOWMQ_C_API int turbo_flow_fmq_app_start(turbo_flow_fmq_app_t *app);
+FLOWMQ_C_API int turbo_flow_fmq_app_stop(turbo_flow_fmq_app_t *app);
 
 /**
  * Send one copied message and wait for the facade's local delivery boundary.
@@ -545,7 +547,7 @@ CXX_C_API int turbo_flow_fmq_app_stop(turbo_flow_fmq_app_t *app);
  * TURBO_ENOTSUP for a receive-only pattern, or another explicit
  * validation/allocation/delivery error.
  */
-CXX_C_API int turbo_flow_fmq_app_send(turbo_flow_fmq_app_t *app, const void *data,
+FLOWMQ_C_API int turbo_flow_fmq_app_send(turbo_flow_fmq_app_t *app, const void *data,
                                       size_t data_size);
 
 typedef struct turbo_flow_fmq_app_send_item_s {
@@ -600,7 +602,7 @@ typedef struct turbo_flow_fmq_app_async_send_config_s {
  * TURBO_FLOW_FMQ_APP_SEND_BATCH_MAX_ITEMS and
  * TURBO_FLOW_FMQ_APP_SEND_BATCH_MAX_PAYLOAD_BYTES.
  */
-CXX_C_API int turbo_flow_fmq_app_send_batch(turbo_flow_fmq_app_t *app,
+FLOWMQ_C_API int turbo_flow_fmq_app_send_batch(turbo_flow_fmq_app_t *app,
                                             const turbo_flow_fmq_app_send_item_t *items,
                                             size_t item_count, size_t *submitted);
 
@@ -631,7 +633,7 @@ CXX_C_API int turbo_flow_fmq_app_send_batch(turbo_flow_fmq_app_t *app,
  * unsupported pattern, TURBO_EBUSY after the first start, or TURBO_EALREADY
  * when already configured.
  */
-CXX_C_API int turbo_flow_fmq_app_configure_async_send(
+FLOWMQ_C_API int turbo_flow_fmq_app_configure_async_send(
     turbo_flow_fmq_app_t *app, const turbo_flow_fmq_app_async_send_config_t *config);
 
 /**
@@ -658,7 +660,7 @@ CXX_C_API int turbo_flow_fmq_app_configure_async_send(
  * is full, TURBO_EBUSY outside the started admission window, TURBO_EMSGSIZE
  * above the per-message limit, or another explicit validation/allocation error.
  */
-CXX_C_API int turbo_flow_fmq_app_send_async(
+FLOWMQ_C_API int turbo_flow_fmq_app_send_async(
     turbo_flow_fmq_app_t *app, const void *data, size_t data_size,
     turbo_flow_fmq_app_send_completion_fn completion, void *ctx);
 
@@ -669,15 +671,15 @@ CXX_C_API int turbo_flow_fmq_app_send_async(
  * past the call. This form preserves a detached ROUTER route and is therefore
  * the delayed-reply entry.
  */
-CXX_C_API int turbo_flow_fmq_app_send_message(turbo_flow_fmq_app_t *app,
+FLOWMQ_C_API int turbo_flow_fmq_app_send_message(turbo_flow_fmq_app_t *app,
                                               const turbo_flow_msg_t *message);
 
 /** Replace application payload while retaining FMQ route/session context. */
-CXX_C_API int turbo_flow_fmq_app_message_set_payload_copy(turbo_flow_msg_t *message,
+FLOWMQ_C_API int turbo_flow_fmq_app_message_set_payload_copy(turbo_flow_msg_t *message,
                                                           const void *data, size_t data_size);
 
 /** Stop when needed and release the facade-owned Flow generation. */
-CXX_C_API void turbo_flow_fmq_app_destroy(turbo_flow_fmq_app_t *app);
+FLOWMQ_C_API void turbo_flow_fmq_app_destroy(turbo_flow_fmq_app_t *app);
 
 #ifdef __cplusplus
 }

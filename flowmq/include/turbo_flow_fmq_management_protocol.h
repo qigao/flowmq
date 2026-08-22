@@ -1,6 +1,8 @@
 #ifndef TURBO_FLOW_FMQ_MANAGEMENT_PROTOCOL_H
 #define TURBO_FLOW_FMQ_MANAGEMENT_PROTOCOL_H
 
+#include "flowmq_export.h"
+
 #include "platform.h"
 
 #include <stddef.h>
@@ -258,7 +260,7 @@ typedef struct turbo_flow_tfmp_body_builder_s {
  *         TURBO_EPROTO for invalid canonical LTV, or TURBO_ENOSPC when `out`
  *         is NULL or too small. `out` is unchanged on failure.
  */
-CXX_C_API int turbo_flow_tfmp_envelope_encode(const turbo_flow_tfmp_envelope_t *envelope,
+FLOWMQ_C_API int turbo_flow_tfmp_envelope_encode(const turbo_flow_tfmp_envelope_t *envelope,
                                               uint8_t *out, size_t capacity, size_t *out_len);
 
 /**
@@ -270,7 +272,7 @@ CXX_C_API int turbo_flow_tfmp_envelope_encode(const turbo_flow_tfmp_envelope_t *
  *         TURBO_ENOTSUP for another major version, TURBO_EMSGSIZE for an
  *         oversized envelope, or TURBO_EPROTO for malformed bytes.
  */
-CXX_C_API int turbo_flow_tfmp_envelope_decode(const uint8_t *data, size_t data_len,
+FLOWMQ_C_API int turbo_flow_tfmp_envelope_decode(const uint8_t *data, size_t data_len,
                                               turbo_flow_tfmp_envelope_t *out);
 
 /**
@@ -281,12 +283,12 @@ CXX_C_API int turbo_flow_tfmp_envelope_decode(const uint8_t *data, size_t data_l
  * TURBO_FLOW_TFMP_PROTOCOL_ERROR. When the correlation ID cannot be trusted,
  * it is set to zero. This helper performs no full envelope validation.
  */
-CXX_C_API void turbo_flow_tfmp_envelope_peek_request_identity(const uint8_t *data, size_t data_len,
+FLOWMQ_C_API void turbo_flow_tfmp_envelope_peek_request_identity(const uint8_t *data, size_t data_len,
                                                               uint16_t *kind,
                                                               uint64_t *correlation_id);
 
 /** Map one process-local Turbo error to the stable TFMP protocol status. */
-CXX_C_API turbo_flow_tfmp_status_t turbo_flow_tfmp_status_from_error(int error);
+FLOWMQ_C_API turbo_flow_tfmp_status_t turbo_flow_tfmp_status_from_error(int error);
 
 /**
  * Validate a complete canonical LTV body and optionally return its field count.
@@ -295,11 +297,11 @@ CXX_C_API turbo_flow_tfmp_status_t turbo_flow_tfmp_status_from_error(int error);
  * @return TURBO_OK, TURBO_EINVAL for an invalid view, TURBO_EMSGSIZE for body
  *         or field-count limits, or TURBO_EPROTO for noncanonical LTV/order.
  */
-CXX_C_API int turbo_flow_tfmp_body_validate(const uint8_t *body, size_t body_size,
+FLOWMQ_C_API int turbo_flow_tfmp_body_validate(const uint8_t *body, size_t body_size,
                                             size_t *field_count);
 
 /** Initialize an iterator over caller-owned immutable body bytes. */
-CXX_C_API int turbo_flow_tfmp_field_iterator_init(turbo_flow_tfmp_field_iterator_t *iterator,
+FLOWMQ_C_API int turbo_flow_tfmp_field_iterator_init(turbo_flow_tfmp_field_iterator_t *iterator,
                                                   const uint8_t *body, size_t body_size);
 
 /**
@@ -311,11 +313,11 @@ CXX_C_API int turbo_flow_tfmp_field_iterator_init(turbo_flow_tfmp_field_iterator
  *         invalid ABI/argument, TURBO_EMSGSIZE at a limit, or TURBO_EPROTO for
  *         malformed/noncanonical input. `out` is unchanged on failure.
  */
-CXX_C_API int turbo_flow_tfmp_field_iterator_next(turbo_flow_tfmp_field_iterator_t *iterator,
+FLOWMQ_C_API int turbo_flow_tfmp_field_iterator_next(turbo_flow_tfmp_field_iterator_t *iterator,
                                                   turbo_flow_tfmp_field_t *out);
 
 /** Initialize a builder over a caller-owned output buffer; no ownership transfers. */
-CXX_C_API int turbo_flow_tfmp_body_builder_init(turbo_flow_tfmp_body_builder_t *builder,
+FLOWMQ_C_API int turbo_flow_tfmp_body_builder_init(turbo_flow_tfmp_body_builder_t *builder,
                                                 uint8_t *data, size_t capacity);
 
 /**
@@ -335,38 +337,38 @@ CXX_C_API int turbo_flow_tfmp_body_builder_init(turbo_flow_tfmp_body_builder_t *
  *                                     (const uint8_t *)"node-a", 6);
  * @endcode
  */
-CXX_C_API int turbo_flow_tfmp_body_builder_append(turbo_flow_tfmp_body_builder_t *builder,
+FLOWMQ_C_API int turbo_flow_tfmp_body_builder_append(turbo_flow_tfmp_body_builder_t *builder,
                                                   uint8_t field_id, int critical,
                                                   const uint8_t *value, size_t value_size);
 
 /** Typed network-order field builders. They preserve builder state on failure. */
-CXX_C_API int turbo_flow_tfmp_body_builder_append_u16(turbo_flow_tfmp_body_builder_t *builder,
+FLOWMQ_C_API int turbo_flow_tfmp_body_builder_append_u16(turbo_flow_tfmp_body_builder_t *builder,
                                                       uint8_t field_id, int critical,
                                                       uint16_t value);
-CXX_C_API int turbo_flow_tfmp_body_builder_append_u32(turbo_flow_tfmp_body_builder_t *builder,
+FLOWMQ_C_API int turbo_flow_tfmp_body_builder_append_u32(turbo_flow_tfmp_body_builder_t *builder,
                                                       uint8_t field_id, int critical,
                                                       uint32_t value);
-CXX_C_API int turbo_flow_tfmp_body_builder_append_u64(turbo_flow_tfmp_body_builder_t *builder,
+FLOWMQ_C_API int turbo_flow_tfmp_body_builder_append_u64(turbo_flow_tfmp_body_builder_t *builder,
                                                       uint8_t field_id, int critical,
                                                       uint64_t value);
-CXX_C_API int turbo_flow_tfmp_body_builder_append_i32(turbo_flow_tfmp_body_builder_t *builder,
+FLOWMQ_C_API int turbo_flow_tfmp_body_builder_append_i32(turbo_flow_tfmp_body_builder_t *builder,
                                                       uint8_t field_id, int critical,
                                                       int32_t value);
-CXX_C_API int turbo_flow_tfmp_body_builder_append_bool(turbo_flow_tfmp_body_builder_t *builder,
+FLOWMQ_C_API int turbo_flow_tfmp_body_builder_append_bool(turbo_flow_tfmp_body_builder_t *builder,
                                                        uint8_t field_id, int critical, int value);
-CXX_C_API int turbo_flow_tfmp_body_builder_append_utf8(turbo_flow_tfmp_body_builder_t *builder,
+FLOWMQ_C_API int turbo_flow_tfmp_body_builder_append_utf8(turbo_flow_tfmp_body_builder_t *builder,
                                                        uint8_t field_id, int critical,
                                                        const char *value, size_t value_size);
 
 /** Typed readers reject incorrect widths; BOOL accepts only wire values 0 and 1. */
-CXX_C_API int turbo_flow_tfmp_field_read_u16(const turbo_flow_tfmp_field_t *field, uint16_t *out);
-CXX_C_API int turbo_flow_tfmp_field_read_u32(const turbo_flow_tfmp_field_t *field, uint32_t *out);
-CXX_C_API int turbo_flow_tfmp_field_read_u64(const turbo_flow_tfmp_field_t *field, uint64_t *out);
-CXX_C_API int turbo_flow_tfmp_field_read_i32(const turbo_flow_tfmp_field_t *field, int32_t *out);
-CXX_C_API int turbo_flow_tfmp_field_read_bool(const turbo_flow_tfmp_field_t *field, int *out);
+FLOWMQ_C_API int turbo_flow_tfmp_field_read_u16(const turbo_flow_tfmp_field_t *field, uint16_t *out);
+FLOWMQ_C_API int turbo_flow_tfmp_field_read_u32(const turbo_flow_tfmp_field_t *field, uint32_t *out);
+FLOWMQ_C_API int turbo_flow_tfmp_field_read_u64(const turbo_flow_tfmp_field_t *field, uint64_t *out);
+FLOWMQ_C_API int turbo_flow_tfmp_field_read_i32(const turbo_flow_tfmp_field_t *field, int32_t *out);
+FLOWMQ_C_API int turbo_flow_tfmp_field_read_bool(const turbo_flow_tfmp_field_t *field, int *out);
 
 /** Validate that a field is strict UTF-8 and contains no embedded NUL. */
-CXX_C_API int turbo_flow_tfmp_field_validate_utf8(const turbo_flow_tfmp_field_t *field);
+FLOWMQ_C_API int turbo_flow_tfmp_field_validate_utf8(const turbo_flow_tfmp_field_t *field);
 
 /**
  * Validate a decoded envelope against the built-in TFMP/1 field registry.
@@ -387,7 +389,7 @@ CXX_C_API int turbo_flow_tfmp_field_validate_utf8(const turbo_flow_tfmp_field_t 
  *         unsupported kind/critical field/command, TURBO_EMSGSIZE at a nesting
  *         or body limit, or TURBO_EPROTO for a schema violation.
  */
-CXX_C_API int turbo_flow_tfmp_envelope_validate_schema(const turbo_flow_tfmp_envelope_t *envelope);
+FLOWMQ_C_API int turbo_flow_tfmp_envelope_validate_schema(const turbo_flow_tfmp_envelope_t *envelope);
 
 #ifdef __cplusplus
 }

@@ -1,6 +1,8 @@
 #ifndef FLOWMQ_ROUTER_ENDPOINT_H
 #define FLOWMQ_ROUTER_ENDPOINT_H
 
+#include "flowmq_export.h"
+
 #include "flowmq_coronet.h"
 #include "flowmq_protocol.h"
 #include "flowmq_send_admission.h"
@@ -44,8 +46,8 @@ typedef struct flowmq_router_endpoint_event_s {
   flowmq_router_endpoint_event_kind_t kind;
   int status;
   flowmq_router_route_t route;
-  tstr_v peer_identity;
-  tstr_v peer_topic;
+  vstr peer_identity;
+  vstr peer_topic;
   size_t connections_current;
 } flowmq_router_endpoint_event_t;
 
@@ -57,7 +59,7 @@ typedef struct flowmq_router_endpoint_event_s {
  */
 typedef int (*flowmq_router_endpoint_frame_fn)(void *ctx,
                                                const flowmq_router_route_t *route,
-                                               tstr_v peer_identity, tstr_v peer_topic,
+                                               vstr peer_identity, vstr peer_topic,
                                                const flowmq_protocol_frame_t *frame);
 typedef void (*flowmq_router_endpoint_state_fn)(void *ctx,
                                                 flowmq_router_endpoint_state_t state,
@@ -71,7 +73,7 @@ typedef void (*flowmq_router_endpoint_event_fn)(void *ctx,
  * before it enters the route registry. Views are callback-borrowed.
  */
 typedef int (*flowmq_router_endpoint_peer_identity_fn)(
-    void *ctx, const char *certificate_sha256, tstr_v claimed_identity);
+    void *ctx, const char *certificate_sha256, vstr claimed_identity);
 
 /**
  * Configuration is copied by create, including all referenced strings.
@@ -122,14 +124,14 @@ typedef struct flowmq_router_endpoint_config_s {
   offsetof(flowmq_router_endpoint_config_t, verify_peer_identity_ctx)
 
 /** Initialize bounded defaults. NULL is ignored. */
-CXX_C_API void flowmq_router_endpoint_config_init(flowmq_router_endpoint_config_t *config);
+FLOWMQ_C_API void flowmq_router_endpoint_config_init(flowmq_router_endpoint_config_t *config);
 /**
  * Create a stopped ROUTER/BIND owner and copy its configuration.
  * @param config Complete configuration initialized by config_init().
  * @param out Receives the owned endpoint on success and is set to NULL on validated failures.
  * @return TURBO_OK, TURBO_EINVAL, TURBO_ERANGE, or TURBO_ENOMEM.
  */
-CXX_C_API int flowmq_router_endpoint_create(const flowmq_router_endpoint_config_t *config,
+FLOWMQ_C_API int flowmq_router_endpoint_create(const flowmq_router_endpoint_config_t *config,
                                              flowmq_router_endpoint_t **out);
 /**
  * Start listening and wait for the listener result.
@@ -137,17 +139,17 @@ CXX_C_API int flowmq_router_endpoint_create(const flowmq_router_endpoint_config_
  * @param timeout_ns Non-zero caller wait budget in nanoseconds.
  * @return TURBO_OK or a concrete bind, configuration, timeout, or shutdown error.
  */
-CXX_C_API int flowmq_router_endpoint_start(flowmq_router_endpoint_t *endpoint,
+FLOWMQ_C_API int flowmq_router_endpoint_start(flowmq_router_endpoint_t *endpoint,
                                             uint64_t timeout_ns);
 /**
  * Stop admission, cancel peers, and wait for full CoroNet quiescence.
  * NULL and an already stopped endpoint are accepted.
  */
-CXX_C_API void flowmq_router_endpoint_stop(flowmq_router_endpoint_t *endpoint);
+FLOWMQ_C_API void flowmq_router_endpoint_stop(flowmq_router_endpoint_t *endpoint);
 /** Stop and release the listener, route registry, copied strings, and any owned context. */
-CXX_C_API void flowmq_router_endpoint_destroy(flowmq_router_endpoint_t *endpoint);
+FLOWMQ_C_API void flowmq_router_endpoint_destroy(flowmq_router_endpoint_t *endpoint);
 /** Borrow the endpoint context; an owned context expires when the endpoint is destroyed. */
-CXX_C_API coro_context_t *flowmq_router_endpoint_context(flowmq_router_endpoint_t *endpoint);
+FLOWMQ_C_API coro_context_t *flowmq_router_endpoint_context(flowmq_router_endpoint_t *endpoint);
 
 /**
  * Send an already encoded FMQ v3 frame to one live route. Must run on the
@@ -155,21 +157,21 @@ CXX_C_API coro_context_t *flowmq_router_endpoint_context(flowmq_router_endpoint_
  * Returns TURBO_ENOTCONN for a stale or foreign route.
  * @return TURBO_OK, TURBO_EINVAL, TURBO_ESHUTDOWN, TURBO_ENOTCONN, or a transport error.
  */
-CXX_C_API int flowmq_router_endpoint_send(flowmq_router_endpoint_t *endpoint,
+FLOWMQ_C_API int flowmq_router_endpoint_send(flowmq_router_endpoint_t *endpoint,
                                           flowmq_router_route_t route,
                                           const char *encoded, size_t encoded_size);
 /**
  * Copy and admit one route-fenced encoded frame from any thread. A stale route
  * is reported asynchronously through send_admission.on_complete.
  */
-CXX_C_API int flowmq_router_endpoint_send_copy(
+FLOWMQ_C_API int flowmq_router_endpoint_send_copy(
     flowmq_router_endpoint_t *endpoint, flowmq_router_route_t route,
     uint64_t completion_id, const char *encoded, size_t encoded_size);
 /** Snapshot the bounded copied-send queue and cumulative completion counters. */
-CXX_C_API void flowmq_router_endpoint_send_stats(
+FLOWMQ_C_API void flowmq_router_endpoint_send_stats(
     flowmq_router_endpoint_t *endpoint, flowmq_send_admission_stats_t *stats);
 /** Lock-free snapshot of admitted DEALER peers; NULL returns zero. */
-CXX_C_API size_t flowmq_router_endpoint_connections(
+FLOWMQ_C_API size_t flowmq_router_endpoint_connections(
     const flowmq_router_endpoint_t *endpoint);
 
 #ifdef __cplusplus

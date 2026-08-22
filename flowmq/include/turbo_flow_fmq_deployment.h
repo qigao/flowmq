@@ -1,6 +1,8 @@
 #ifndef TURBO_FLOW_FMQ_DEPLOYMENT_H
 #define TURBO_FLOW_FMQ_DEPLOYMENT_H
 
+#include "flowmq_export.h"
+
 #include "platform.h"
 #include "turbo_uuid.h"
 
@@ -159,30 +161,30 @@ typedef struct turbo_flow_fmq_deployment_controller_s turbo_flow_fmq_deployment_
  * must externally fence authority_epoch before exposing this owner; commands
  * from another epoch/incarnation fail without changing state.
  */
-CXX_C_API int
+FLOWMQ_C_API int
 turbo_flow_fmq_deployment_controller_create(const turbo_flow_fmq_deployment_config_t *config,
                                             turbo_flow_fmq_deployment_controller_t **out);
 
-CXX_C_API void
+FLOWMQ_C_API void
 turbo_flow_fmq_deployment_controller_destroy(turbo_flow_fmq_deployment_controller_t *controller);
 
 /** Apply one join/heartbeat/drain/leave command on the serialized owner lane. */
-CXX_C_API int turbo_flow_fmq_deployment_apply(turbo_flow_fmq_deployment_controller_t *controller,
+FLOWMQ_C_API int turbo_flow_fmq_deployment_apply(turbo_flow_fmq_deployment_controller_t *controller,
                                               const turbo_flow_fmq_membership_command_t *command,
                                               turbo_flow_fmq_membership_result_t *result);
 
 /** Expire leases and elect replacement primaries. Returns expired member count. */
-CXX_C_API int turbo_flow_fmq_deployment_tick(turbo_flow_fmq_deployment_controller_t *controller,
+FLOWMQ_C_API int turbo_flow_fmq_deployment_tick(turbo_flow_fmq_deployment_controller_t *controller,
                                              size_t *expired_count);
 
 /** Resolve one route and return its current fencing token. */
-CXX_C_API int
+FLOWMQ_C_API int
 turbo_flow_fmq_deployment_resolve(const turbo_flow_fmq_deployment_controller_t *controller,
                                   const char *logical_route,
                                   turbo_flow_fmq_route_snapshot_t *route);
 
 /** Copy a normalized, bounded snapshot into caller-owned storage. */
-CXX_C_API int
+FLOWMQ_C_API int
 turbo_flow_fmq_deployment_snapshot(const turbo_flow_fmq_deployment_controller_t *controller,
                                    turbo_flow_fmq_deployment_snapshot_t *snapshot);
 
@@ -192,7 +194,7 @@ turbo_flow_fmq_deployment_snapshot(const turbo_flow_fmq_deployment_controller_t 
  * The same authority epoch with different incarnations, or the same registry
  * version with different content, is reported as SPLIT_BRAIN.
  */
-CXX_C_API int
+FLOWMQ_C_API int
 turbo_flow_fmq_deployment_snapshot_compare(const turbo_flow_fmq_deployment_snapshot_t *current,
                                            const turbo_flow_fmq_deployment_snapshot_t *candidate,
                                            turbo_flow_fmq_snapshot_relation_t *relation);

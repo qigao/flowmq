@@ -1,6 +1,8 @@
 #ifndef TURBO_FLOW_FMQ_BROKER_PROTOCOL_H
 #define TURBO_FLOW_FMQ_BROKER_PROTOCOL_H
 
+#include "flowmq_export.h"
+
 #include "platform.h"
 
 #include <stddef.h>
@@ -44,7 +46,7 @@ typedef struct turbo_flow_fmq_broker_logical_address_s {
  * @param address Address initialized with TURBO_FLOW_FMQ_BROKER_LOGICAL_ADDRESS_INIT.
  * @return TURBO_OK, or TURBO_EINVAL for an invalid version, size, ID, or request ID.
  */
-CXX_C_API int turbo_flow_fmq_broker_logical_address_validate(
+FLOWMQ_C_API int turbo_flow_fmq_broker_logical_address_validate(
     const turbo_flow_fmq_broker_logical_address_t *address);
 
 /**
@@ -71,7 +73,7 @@ CXX_C_API int turbo_flow_fmq_broker_logical_address_validate(
  *     &address, bytes, sizeof(bytes), &bytes_len);
  * @endcode
  */
-CXX_C_API int
+FLOWMQ_C_API int
 turbo_flow_fmq_broker_logical_address_encode(const turbo_flow_fmq_broker_logical_address_t *address,
                                              uint8_t *out, size_t capacity, size_t *out_len);
 
@@ -85,7 +87,7 @@ turbo_flow_fmq_broker_logical_address_encode(const turbo_flow_fmq_broker_logical
  * @return TURBO_OK, TURBO_EINVAL for invalid arguments/output ABI size, or TURBO_EPROTO
  *         for a malformed or unsupported envelope.
  */
-CXX_C_API int
+FLOWMQ_C_API int
 turbo_flow_fmq_broker_logical_address_decode(const uint8_t *data, size_t data_len,
                                              turbo_flow_fmq_broker_logical_address_t *out);
 

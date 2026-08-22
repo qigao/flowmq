@@ -304,7 +304,7 @@ static int flowmq_esb_encode_tlv_bytes(unsigned char **cursor, unsigned char *en
 }
 
 int flowmq_protocol_esb_encode_frame(const flowmq_protocol_esb_frame_t *frame,
-                                     size_t max_frame_size, tstr_t *out) {
+                                     size_t max_frame_size, tstr *out) {
   if (!frame || !out) {
     return TURBO_EINVAL;
   }
@@ -332,7 +332,7 @@ int flowmq_protocol_esb_encode_frame(const flowmq_protocol_esb_frame_t *frame,
     return TURBO_EMSGSIZE;
   }
 
-  tstr_t base_encoded = NULL;
+  tstr base_encoded = NULL;
   rc = flowmq_protocol_encode_frame(&frame->base, max_frame_size, &base_encoded);
   if (rc != TURBO_OK) {
     return rc;
@@ -454,7 +454,7 @@ static int flowmq_esb_decode_tlv_field(const unsigned char **cursor, const unsig
   return TURBO_OK;
 }
 
-static int flowmq_esb_apply_tlv_payload(const tstr_v *payload,
+static int flowmq_esb_apply_tlv_payload(const vstr *payload,
                                         flowmq_protocol_esb_decode_mode_t mode,
                                         flowmq_protocol_esb_frame_t *out) {
   if (!payload || !out) {
@@ -612,14 +612,14 @@ static int flowmq_protocol_esb_decode_frame_internal(const char *data,
     return rc;
   }
 
-  tstr_v extension_payload = {0};
+  vstr extension_payload = {0};
   if (out->base.owned_payload) {
     size_t owned_payload_len = tstr_len(out->base.owned_payload);
     if (owned_payload_len < out->base.payload.len) {
       flowmq_protocol_esb_frame_cleanup(out);
       return TURBO_EPROTO;
     }
-    extension_payload = tstr_v_from_buf(
+    extension_payload = vstr_from_buf(
         (const char *)out->base.owned_payload + out->base.payload.len,
         owned_payload_len - out->base.payload.len);
   }
@@ -663,7 +663,7 @@ int flowmq_protocol_esb_decode_frame_from_base_ex(
   memset(out, 0, sizeof(*out));
 
   /* Borrow from base view, do not take base owned payload ownership. */
-  const tstr_t borrowed_owned_payload = base->owned_payload;
+  const tstr borrowed_owned_payload = base->owned_payload;
   out->base = *base;
   out->base.owned_payload = NULL;
 
@@ -673,14 +673,14 @@ int flowmq_protocol_esb_decode_frame_from_base_ex(
     return rc;
   }
 
-  tstr_v extension_payload = {0};
+  vstr extension_payload = {0};
   if (borrowed_owned_payload) {
     size_t owned_payload_len = tstr_len(borrowed_owned_payload);
     if (owned_payload_len < out->base.payload.len) {
       flowmq_protocol_esb_frame_cleanup(out);
       return TURBO_EPROTO;
     }
-    extension_payload = tstr_v_from_buf((const char *)borrowed_owned_payload +
+    extension_payload = vstr_from_buf((const char *)borrowed_owned_payload +
                                             out->base.payload.len,
                                         owned_payload_len - out->base.payload.len);
   }
@@ -716,7 +716,7 @@ void flowmq_protocol_esb_frame_cleanup(flowmq_protocol_esb_frame_t *frame) {
 
 int flowmq_protocol_esb_frame_consumer_group_copy(
     const flowmq_protocol_esb_frame_t *frame,
-    tstr_t *out) {
+    tstr *out) {
   if (!frame || !out) {
     return TURBO_EINVAL;
   }

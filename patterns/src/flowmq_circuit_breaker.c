@@ -122,8 +122,8 @@ int flowmq_circuit_breaker_record_success(flowmq_circuit_breaker_t *cb,
         cb->failure_count = 0;
         cb->success_count = 0;
         cb->window_start_ns = now_ns;
-        TLOG_INFO("Circuit breaker → CLOSED (success threshold met: %u/%u)",
-                  cb->success_count, cb->success_threshold);
+        TLOG_INFOF("Circuit breaker → CLOSED (success threshold met: {}/{})",
+                   cb->success_count, cb->success_threshold);
       }
       break;
   }
@@ -147,8 +147,8 @@ int flowmq_circuit_breaker_record_failure(flowmq_circuit_breaker_t *cb,
         cb->state = FLOWMQ_CB_OPEN;
         cb->opened_at_ns = now_ns;
         cb->total_opened++;
-        TLOG_WARN("Circuit breaker → OPEN (failure threshold: %u/%u)",
-                  cb->failure_count, cb->failure_threshold);
+        TLOG_WARNF("Circuit breaker → OPEN (failure threshold: {}/{})",
+                   cb->failure_count, cb->failure_threshold);
       }
       break;
     

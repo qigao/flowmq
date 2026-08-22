@@ -1,6 +1,8 @@
 #ifndef FLOW_FMQ_PROFILE_INTERNAL_H
 #define FLOW_FMQ_PROFILE_INTERNAL_H
 
+#include "flowmq_export.h"
+
 #include "turbo_flow_fmq.h"
 
 #include <stddef.h>
@@ -72,13 +74,13 @@ typedef struct flow_fmq_send_profile_snapshot_s {
 /**
  * Reset process-wide benchmark counters. The benchmark must ensure no profiled send is in flight.
  */
-CXX_C_API void flow_fmq_send_profile_reset(void);
+FLOWMQ_C_API void flow_fmq_send_profile_reset(void);
 
 /** Enable or disable timestamp capture for subsequently submitted send requests. */
-CXX_C_API void flow_fmq_send_profile_set_enabled(int enabled);
+FLOWMQ_C_API void flow_fmq_send_profile_set_enabled(int enabled);
 
 /** Copy the current process-wide aggregate into caller-owned storage. */
-CXX_C_API int flow_fmq_send_profile_snapshot(flow_fmq_send_profile_snapshot_t *out);
+FLOWMQ_C_API int flow_fmq_send_profile_snapshot(flow_fmq_send_profile_snapshot_t *out);
 
 #ifdef __cplusplus
 }

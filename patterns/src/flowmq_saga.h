@@ -22,8 +22,8 @@
 
 #include "flowmq_protocol_esb.h"
 #include "turbo_error.h"
-#include "turbo_hash_map.h"
-#include "turbo_vec.h"
+#include <turbostl/hash_map.h>
+#include <turbostl/vec.h>
 
 #include <stdint.h>
 
@@ -57,9 +57,9 @@ typedef enum flowmq_saga_step_result_e {
 /* SAGA step definition */
 typedef struct flowmq_saga_step_s {
   uint32_t step_id;                   /* Step identifier (0-based) */
-  tstr_t service_name;                /* Target service name (owned) */
-  tstr_t transaction_payload;         /* Transaction request (owned) */
-  tstr_t compensation_payload;        /* Compensation request (owned) */
+  tstr service_name;                /* Target service name (owned) */
+  tstr transaction_payload;         /* Transaction request (owned) */
+  tstr compensation_payload;        /* Compensation request (owned) */
   
   flowmq_saga_step_result_t result;   /* Execution result */
   int error_code;                     /* Error code if failed */
@@ -72,7 +72,7 @@ typedef struct flowmq_saga_step_s {
  * Manages forward execution and compensation of distributed transaction.
  */
 typedef struct flowmq_saga_transaction_s {
-  tstr_t saga_id;                     /* Unique SAGA identifier (owned) */
+  tstr saga_id;                     /* Unique SAGA identifier (owned) */
   uint64_t created_ns;                /* Creation timestamp */
   uint64_t deadline_ns;               /* Absolute deadline */
   
@@ -111,22 +111,22 @@ int flowmq_saga_coordinator_create(flowmq_saga_coordinator_t *coordinator,
                                   uint32_t num_steps,
                                   uint64_t deadline_ns,
                                   void *user_context,
-                                  tstr_t *out_saga_id);
+                                  tstr *out_saga_id);
 
 /* Add step to SAGA transaction (must be in PENDING state) */
 int flowmq_saga_coordinator_add_step(flowmq_saga_coordinator_t *coordinator,
-                                    const tstr_t *saga_id,
-                                    const tstr_t *service_name,
-                                    const tstr_t *transaction_payload,
-                                    const tstr_t *compensation_payload);
+                                    const tstr *saga_id,
+                                    const tstr *service_name,
+                                    const tstr *transaction_payload,
+                                    const tstr *compensation_payload);
 
 /* Start SAGA execution (move from PENDING → EXECUTING) */
 int flowmq_saga_coordinator_start(flowmq_saga_coordinator_t *coordinator,
-                                 const tstr_t *saga_id);
+                                 const tstr *saga_id);
 
 /* Record step execution result */
 int flowmq_saga_coordinator_record_step_result(flowmq_saga_coordinator_t *coordinator,
-                                              const tstr_t *saga_id,
+                                              const tstr *saga_id,
                                               uint32_t step_id,
                                               int success,
                                               int error_code,
@@ -134,11 +134,11 @@ int flowmq_saga_coordinator_record_step_result(flowmq_saga_coordinator_t *coordi
 
 /* Trigger compensation for failed SAGA */
 int flowmq_saga_coordinator_compensate(flowmq_saga_coordinator_t *coordinator,
-                                      const tstr_t *saga_id);
+                                      const tstr *saga_id);
 
 /* Record compensation result */
 int flowmq_saga_coordinator_record_compensation(flowmq_saga_coordinator_t *coordinator,
-                                               const tstr_t *saga_id,
+                                               const tstr *saga_id,
                                                uint32_t step_id,
                                                uint64_t timestamp_ns);
 
@@ -155,24 +155,24 @@ int flowmq_saga_coordinator_record_compensation(flowmq_saga_coordinator_t *coord
  * The saga state and cursor are not changed by this call.
  */
 int flowmq_saga_coordinator_peek_compensation(flowmq_saga_coordinator_t *coordinator,
-                                              const tstr_t *saga_id,
+                                              const tstr *saga_id,
                                               uint32_t *out_step_id,
-                                              tstr_t *out_service_name,
-                                              tstr_t *out_compensation_payload);
+                                              tstr *out_service_name,
+                                              tstr *out_compensation_payload);
 
 /* Get SAGA transaction state */
 int flowmq_saga_coordinator_get_state(flowmq_saga_coordinator_t *coordinator,
-                                     const tstr_t *saga_id,
+                                     const tstr *saga_id,
                                      flowmq_saga_state_t *out_state);
 
 /* Get current step being executed */
 int flowmq_saga_coordinator_get_current_step(flowmq_saga_coordinator_t *coordinator,
-                                            const tstr_t *saga_id,
+                                            const tstr *saga_id,
                                             uint32_t *out_step_id);
 
 /* Abort SAGA transaction (cancel or cleanup) */
 int flowmq_saga_coordinator_abort(flowmq_saga_coordinator_t *coordinator,
-                                 const tstr_t *saga_id);
+                                 const tstr *saga_id);
 
 /* Get statistics */
 void flowmq_saga_coordinator_stats(flowmq_saga_coordinator_t *coordinator,

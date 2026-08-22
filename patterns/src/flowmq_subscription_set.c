@@ -1,5 +1,6 @@
 #include "flowmq_subscription_set.h"
 
+#include "flowmq_stl_adapter.h"
 #include "turbo_error.h"
 
 #include <stdint.h>
@@ -8,8 +9,9 @@
 int flowmq_subscription_set_init(flowmq_subscription_set_t *subscriptions) {
   int rc;
   if (!subscriptions || subscriptions->initialized) return TURBO_EINVAL;
-  rc = turbo_vec_init(&subscriptions->entries, sizeof(flowmq_subscription_t));
-  if (rc != TURBO_OK) return rc;
+  rc = turbo_vec_init_bytes(&subscriptions->entries, sizeof(flowmq_subscription_t),
+                            _Alignof(flowmq_subscription_t), SIZE_MAX);
+  if (rc != TURBO_STL_OK) return flowmq_stl_status_to_error((turbo_stl_status)rc);
   subscriptions->initialized = 1;
   return TURBO_OK;
 }
@@ -34,7 +36,7 @@ void flowmq_subscription_set_destroy(flowmq_subscription_set_t *subscriptions) {
 }
 
 int flowmq_subscription_set_update(flowmq_subscription_set_t *subscriptions, int subscribe,
-                                   tstr_v topic, int *changed) {
+                                   vstr topic, int *changed) {
   if (!subscriptions || !subscriptions->initialized || !changed || (topic.len > 0u && !topic.data))
     return TURBO_EINVAL;
   *changed = 0;
@@ -53,7 +55,7 @@ int flowmq_subscription_set_update(flowmq_subscription_set_t *subscriptions, int
     } else {
       flowmq_subscription_t removed;
       int rc = turbo_vec_swap_remove(&subscriptions->entries, i, &removed);
-      if (rc != TURBO_OK) return rc;
+      if (rc != TURBO_STL_OK) return flowmq_stl_status_to_error((turbo_stl_status)rc);
       tstr_freep(&removed.topic);
     }
     *changed = 1;
@@ -67,8 +69,8 @@ int flowmq_subscription_set_update(flowmq_subscription_set_t *subscriptions, int
     value.refs = 1u;
     if (!value.topic) return TURBO_ENOMEM;
     rc = turbo_vec_push(&subscriptions->entries, &value);
-    if (rc != TURBO_OK) tstr_free(value.topic);
-    if (rc != TURBO_OK) return rc;
+    if (rc != TURBO_STL_OK) tstr_free(value.topic);
+    if (rc != TURBO_STL_OK) return flowmq_stl_status_to_error((turbo_stl_status)rc);
   }
   *changed = 1;
   return TURBO_OK;
@@ -84,7 +86,7 @@ flowmq_subscription_set_at(const flowmq_subscription_set_t *subscriptions, size_
   return (const flowmq_subscription_t *)turbo_vec_at_const(&subscriptions->entries, index);
 }
 
-int flowmq_subscription_set_match(const flowmq_subscription_set_t *subscriptions, tstr_v topic) {
+int flowmq_subscription_set_match(const flowmq_subscription_set_t *subscriptions, vstr topic) {
   if (!subscriptions || !subscriptions->initialized || (topic.len > 0u && !topic.data)) return 0;
   for (size_t i = 0u; i < turbo_vec_size(&subscriptions->entries); ++i) {
     const flowmq_subscription_t *subscription = flowmq_subscription_set_at(subscriptions, i);

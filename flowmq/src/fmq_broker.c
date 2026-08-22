@@ -1,11 +1,13 @@
 #include "turbo_flow_fmq_broker.h"
 
+#include "flowmq_stl_adapter.h"
 #include "turbo_error.h"
-#include "turbo_hash.h"
+#include <turbostl/hash_map.h>
+#include <turbostl/typed.h>
 #include "turbo_parser.h"
 #include "turbo_str.h"
-#include "turbo_str_view.h"
-#include "turbo_vec.h"
+#include "turbo_str.h"
+#include <turbostl/vec.h>
 
 #include <errno.h>
 #include <limits.h>
@@ -18,8 +20,8 @@ typedef enum flow_fmq_broker_worker_state_e {
 } flow_fmq_broker_worker_state_t;
 
 typedef struct flow_fmq_broker_worker_s {
-  tstr_t worker_id;
-  tstr_t service;
+  tstr worker_id;
+  tstr service;
   turbo_flow_protocol_route_t route;
   flow_fmq_broker_worker_state_t state;
   uint64_t available_order;
@@ -291,12 +293,28 @@ turbo_flow_fmq_broker_create(const turbo_flow_fmq_broker_config_t *config) {
   if (!flow_fmq_broker_config_valid(config)) return NULL;
   broker = (turbo_flow_fmq_broker_t *)calloc(1, sizeof(*broker));
   if (!broker) return NULL;
-  if (flow_fmq_broker_workers_init(&broker->workers) != TURBO_OK ||
-      flow_fmq_broker_inflight_init(&broker->inflight) != TURBO_OK ||
-      flow_fmq_broker_accepted_init(&broker->accepted) != TURBO_OK ||
-      flow_fmq_broker_worker_index_init(&broker->worker_index) != TURBO_OK ||
-      flow_fmq_broker_request_index_init(&broker->request_index) != TURBO_OK ||
-      flow_fmq_broker_accepted_index_init(&broker->accepted_index) != TURBO_OK ||
+  if (turbo_vec_init_bytes(&broker->workers.raw, sizeof(flow_fmq_broker_worker_t),
+                           _Alignof(flow_fmq_broker_worker_t), config->max_workers) !=
+          TURBO_STL_OK ||
+      turbo_vec_init_bytes(&broker->inflight.raw, sizeof(flow_fmq_broker_inflight_t),
+                           _Alignof(flow_fmq_broker_inflight_t), config->max_inflight) !=
+          TURBO_STL_OK ||
+      turbo_vec_init_bytes(&broker->accepted.raw, sizeof(flow_fmq_broker_accepted_t),
+                           _Alignof(flow_fmq_broker_accepted_t), config->max_inflight) !=
+          TURBO_STL_OK ||
+      turbo_hash_map_init_bytes(&broker->worker_index.raw,
+                                sizeof(flow_fmq_broker_worker_key_t),
+                                _Alignof(flow_fmq_broker_worker_key_t), sizeof(size_t),
+                                _Alignof(size_t), config->max_workers,
+                                turbo_hash_bytes, turbo_hash_key_equal, NULL) != TURBO_STL_OK ||
+      turbo_hash_map_init_bytes(&broker->request_index.raw,
+                                sizeof(uint64_t), _Alignof(uint64_t), sizeof(size_t),
+                                _Alignof(size_t), config->max_inflight,
+                                turbo_hash_bytes, turbo_hash_key_equal, NULL) != TURBO_STL_OK ||
+      turbo_hash_map_init_bytes(&broker->accepted_index.raw,
+                                sizeof(uint64_t), _Alignof(uint64_t), sizeof(size_t),
+                                _Alignof(size_t), config->max_inflight,
+                                turbo_hash_bytes, turbo_hash_key_equal, NULL) != TURBO_STL_OK ||
       flow_fmq_broker_workers_reserve(&broker->workers, config->max_workers) != TURBO_OK ||
       flow_fmq_broker_inflight_reserve(&broker->inflight, config->max_inflight) != TURBO_OK ||
       flow_fmq_broker_accepted_reserve(&broker->accepted, config->max_inflight) != TURBO_OK ||
@@ -825,11 +843,11 @@ static int flow_tfcw_field_value_valid(uint8_t field_id, const uint8_t *value, s
   case TURBO_FLOW_TFCW_FIELD_WORKER_ID:
     return value_size > 0u && value_size <= TURBO_FLOW_FMQ_BROKER_WORKER_ID_MAX &&
            memchr(value, '\0', value_size) == NULL &&
-           tstr_v_utf8_valid(tstr_v_from_buf((const char *)value, value_size));
+           vstr_utf8_valid(vstr_from_buf((const char *)value, value_size));
   case TURBO_FLOW_TFCW_FIELD_SERVICE:
     return value_size > 0u && value_size <= TURBO_FLOW_FMQ_BROKER_SERVICE_MAX &&
            memchr(value, '\0', value_size) == NULL &&
-           tstr_v_utf8_valid(tstr_v_from_buf((const char *)value, value_size));
+           vstr_utf8_valid(vstr_from_buf((const char *)value, value_size));
   case TURBO_FLOW_TFCW_FIELD_GRANT_MESSAGES:
   case TURBO_FLOW_TFCW_FIELD_GRANT_BYTES:
     return value_size == 8u && flow_tfcw_read_u64(value) > 0u;
@@ -888,10 +906,10 @@ static int flow_tfcw_body_validate(turbo_flow_tfcw_kind_t kind, const uint8_t *b
       fields.present |= TURBO_FLOW_TFCW_FIELD_PRESENT(field_id);
     switch (field_id) {
     case TURBO_FLOW_TFCW_FIELD_WORKER_ID:
-      fields.worker_id = tstr_v_from_buf((const char *)value, value_size);
+      fields.worker_id = vstr_from_buf((const char *)value, value_size);
       break;
     case TURBO_FLOW_TFCW_FIELD_SERVICE:
-      fields.service = tstr_v_from_buf((const char *)value, value_size);
+      fields.service = vstr_from_buf((const char *)value, value_size);
       break;
     case TURBO_FLOW_TFCW_FIELD_GRANT_MESSAGES:
       fields.grant_messages = flow_tfcw_read_u64(value);
@@ -900,13 +918,13 @@ static int flow_tfcw_body_validate(turbo_flow_tfcw_kind_t kind, const uint8_t *b
       fields.grant_bytes = flow_tfcw_read_u64(value);
       break;
     case TURBO_FLOW_TFCW_FIELD_LOGICAL_ADDRESS:
-      fields.logical_address = tstr_v_from_buf((const char *)value, value_size);
+      fields.logical_address = vstr_from_buf((const char *)value, value_size);
       break;
     case TURBO_FLOW_TFCW_FIELD_METADATA:
-      fields.metadata = tstr_v_from_buf((const char *)value, value_size);
+      fields.metadata = vstr_from_buf((const char *)value, value_size);
       break;
     case TURBO_FLOW_TFCW_FIELD_PAYLOAD:
-      fields.payload = tstr_v_from_buf((const char *)value, value_size);
+      fields.payload = vstr_from_buf((const char *)value, value_size);
       break;
     case TURBO_FLOW_TFCW_FIELD_FAILURE_CODE:
       fields.failure_code = flow_tfcw_read_u32(value);
@@ -1051,8 +1069,8 @@ int turbo_flow_tfcw_fields_decode(const turbo_flow_tfcw_envelope_t *envelope,
 }
 
 typedef struct flow_fmq_credit_worker_record_s {
-  tstr_t worker_id;
-  tstr_t service;
+  tstr worker_id;
+  tstr service;
   turbo_flow_protocol_route_t route;
   uint64_t last_sequence;
   size_t last_grant_messages;
@@ -1207,10 +1225,21 @@ turbo_flow_fmq_credit_worker_create(const turbo_flow_fmq_credit_worker_config_t 
   if (!flow_fmq_credit_config_valid(config)) return NULL;
   owner = (turbo_flow_fmq_credit_worker_t *)calloc(1, sizeof(*owner));
   if (!owner) return NULL;
-  if (flow_fmq_credit_workers_init(&owner->workers) != TURBO_OK ||
-      flow_fmq_credit_inflight_init(&owner->inflight) != TURBO_OK ||
-      flow_fmq_credit_worker_index_init(&owner->worker_index) != TURBO_OK ||
-      flow_fmq_credit_request_index_init(&owner->request_index) != TURBO_OK ||
+  if (turbo_vec_init_bytes(&owner->workers.raw, sizeof(flow_fmq_credit_worker_record_t),
+                           _Alignof(flow_fmq_credit_worker_record_t), config->max_workers) !=
+          TURBO_STL_OK ||
+      turbo_vec_init_bytes(&owner->inflight.raw, sizeof(flow_fmq_credit_inflight_t),
+                           _Alignof(flow_fmq_credit_inflight_t), config->max_inflight) !=
+          TURBO_STL_OK ||
+      turbo_hash_map_init_bytes(&owner->worker_index.raw,
+                                sizeof(flow_fmq_broker_worker_key_t),
+                                _Alignof(flow_fmq_broker_worker_key_t), sizeof(size_t),
+                                _Alignof(size_t), config->max_workers,
+                                turbo_hash_bytes, turbo_hash_key_equal, NULL) != TURBO_STL_OK ||
+      turbo_hash_map_init_bytes(&owner->request_index.raw,
+                                sizeof(uint64_t), _Alignof(uint64_t), sizeof(size_t),
+                                _Alignof(size_t), config->max_inflight,
+                                turbo_hash_bytes, turbo_hash_key_equal, NULL) != TURBO_STL_OK ||
       flow_fmq_credit_workers_reserve(&owner->workers, config->max_workers) != TURBO_OK ||
       flow_fmq_credit_inflight_reserve(&owner->inflight, config->max_inflight) != TURBO_OK ||
       turbo_hash_map_reserve(&owner->worker_index.raw, config->max_workers) != TURBO_OK ||
@@ -1696,9 +1725,18 @@ turbo_flow_fmq_credit_settlement_create(turbo_flow_fmq_credit_worker_t *credit_o
   }
   owner = (turbo_flow_fmq_credit_settlement_t *)calloc(1, sizeof(*owner));
   if (!owner) return NULL;
-  if (flow_fmq_credit_settlement_records_init(&owner->records) != TURBO_OK ||
-      flow_fmq_credit_settlement_index_init(&owner->request_index) != TURBO_OK ||
-      flow_fmq_credit_settlement_index_init(&owner->claim_index) != TURBO_OK ||
+  if (turbo_vec_init_bytes(&owner->records.raw,
+                           sizeof(flow_fmq_credit_settlement_record_t),
+                           _Alignof(flow_fmq_credit_settlement_record_t), config->capacity) !=
+          TURBO_STL_OK ||
+      turbo_hash_map_init_bytes(&owner->request_index.raw,
+                                sizeof(uint64_t), _Alignof(uint64_t), sizeof(size_t),
+                                _Alignof(size_t), config->capacity,
+                                turbo_hash_bytes, turbo_hash_key_equal, NULL) != TURBO_STL_OK ||
+      turbo_hash_map_init_bytes(&owner->claim_index.raw,
+                                sizeof(uint64_t), _Alignof(uint64_t), sizeof(size_t),
+                                _Alignof(size_t), config->capacity,
+                                turbo_hash_bytes, turbo_hash_key_equal, NULL) != TURBO_STL_OK ||
       flow_fmq_credit_settlement_records_reserve(&owner->records, config->capacity) != TURBO_OK ||
       turbo_hash_map_reserve(&owner->request_index.raw, config->capacity) != TURBO_OK ||
       turbo_hash_map_reserve(&owner->claim_index.raw, config->capacity) != TURBO_OK) {
@@ -2305,14 +2343,28 @@ int turbo_flow_fmq_credit_durable_create(turbo_flow_fmq_credit_worker_t *credit_
   owner->shutdown_max_steps = config->shutdown_max_steps;
   owner->state_capacity = settler->max_state_size;
   memcpy(owner->state_key, config->state_key, key_size + 1u);
-  rc = flow_fmq_credit_durable_records_init(&owner->records);
-  if (rc == TURBO_OK) rc = flow_fmq_credit_durable_address_index_init(&owner->address_index);
-  if (rc == TURBO_OK) rc = flow_fmq_credit_durable_runtime_index_init(&owner->runtime_index);
-  if (rc == TURBO_OK)
+  rc = turbo_vec_init_bytes(&owner->records.raw, sizeof(flow_fmq_credit_durable_record_t),
+                            _Alignof(flow_fmq_credit_durable_record_t), config->capacity);
+  if (rc == TURBO_STL_OK)
+    rc = turbo_hash_map_init_bytes(&owner->address_index.raw,
+                                   sizeof(flow_fmq_credit_durable_key_t),
+                                   _Alignof(flow_fmq_credit_durable_key_t), sizeof(size_t),
+                                   _Alignof(size_t), config->capacity,
+                                   turbo_hash_bytes, turbo_hash_key_equal, NULL);
+  if (rc == TURBO_STL_OK)
+    rc = turbo_hash_map_init_bytes(&owner->runtime_index.raw,
+                                   sizeof(uint64_t), _Alignof(uint64_t), sizeof(size_t),
+                                   _Alignof(size_t), config->capacity,
+                                   turbo_hash_bytes, turbo_hash_key_equal, NULL);
+  if (rc == TURBO_STL_OK)
     rc = flow_fmq_credit_durable_records_reserve(&owner->records, config->capacity);
-  if (rc == TURBO_OK) rc = turbo_hash_map_reserve(&owner->address_index.raw, config->capacity);
-  if (rc == TURBO_OK) rc = turbo_hash_map_reserve(&owner->runtime_index.raw, config->capacity);
-  if (rc == TURBO_OK) rc = flow_fmq_credit_durable_load(owner);
+  if (rc == TURBO_STL_OK) rc = turbo_hash_map_reserve(&owner->address_index.raw, config->capacity);
+  if (rc == TURBO_STL_OK) rc = turbo_hash_map_reserve(&owner->runtime_index.raw, config->capacity);
+  if (rc != TURBO_STL_OK) {
+    turbo_flow_fmq_credit_durable_destroy(owner);
+    return flowmq_stl_status_to_error((turbo_stl_status)rc);
+  }
+  rc = flow_fmq_credit_durable_load(owner);
   if (rc != TURBO_OK) {
     turbo_flow_fmq_credit_durable_destroy(owner);
     return rc;

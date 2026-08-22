@@ -1,6 +1,8 @@
 #ifndef TURBO_FLOW_FMQ_SECURITY_H
 #define TURBO_FLOW_FMQ_SECURITY_H
 
+#include "flowmq_export.h"
+
 #include "turbo_flow_fmq.h"
 
 #ifdef __cplusplus
@@ -44,19 +46,19 @@ typedef struct turbo_flow_fmq_security_owner_config_s {
  * secret_reference. Partial or mixed configurations fail closed. YAML contains references only;
  * ACL rules, credentials, and provider pointers are never accepted there.
  */
-CXX_C_API int turbo_flow_fmq_security_owner_create_resolved(
+FLOWMQ_C_API int turbo_flow_fmq_security_owner_create_resolved(
     const turbo_flow_resolved_config_t *resolved, const char *adapter_name,
     const turbo_flow_fmq_security_owner_config_t *config, turbo_flow_fmq_security_owner_t **out,
     turbo_flow_config_error_t *error);
 
 /** Borrowed binding valid until owner destruction. */
-CXX_C_API const turbo_flow_fmq_security_binding_t *
+FLOWMQ_C_API const turbo_flow_fmq_security_binding_t *
 turbo_flow_fmq_security_owner_binding(const turbo_flow_fmq_security_owner_t *owner);
 
 /**
  * Destroy after the FMQ adapter/application has stopped and released its borrowed realm/provider.
  */
-CXX_C_API void turbo_flow_fmq_security_owner_destroy(turbo_flow_fmq_security_owner_t *owner);
+FLOWMQ_C_API void turbo_flow_fmq_security_owner_destroy(turbo_flow_fmq_security_owner_t *owner);
 
 #ifdef __cplusplus
 }

@@ -25,7 +25,7 @@ static int flowmq_media_provider_text(const char *value, size_t maximum,
                                       int required) {
   size_t size;
   if (!value) return TURBO_EINVAL;
-  size = tstr_len((tstr_t)value);
+  size = tstr_len((tstr)value);
   if (required && size == 0u) return TURBO_EPROTO;
   return size <= maximum ? TURBO_OK : TURBO_EMSGSIZE;
 }

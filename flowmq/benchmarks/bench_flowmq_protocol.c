@@ -21,7 +21,7 @@ static void bench_protocol_roundtrip(size_t payload_size, size_t samples,
   static char payload[BENCH_LARGE_PAYLOAD_BYTES];
   flowmq_protocol_frame_t input;
   flowmq_protocol_frame_t output;
-  tstr_t encoded = NULL;
+  tstr encoded = NULL;
   size_t consumed = 0u;
   int rc = TURBO_OK;
 
@@ -30,26 +30,26 @@ static void bench_protocol_roundtrip(size_t payload_size, size_t samples,
   input.kind = FLOWMQ_PROTOCOL_FRAME_DATA;
   input.pattern = FLOWMQ_PROTOCOL_PUB;
   input.message_id = UINT64_C(1);
-  input.identity = tstr_v_from_cstr("bench-publisher");
-  input.topic = tstr_v_from_cstr("bench.protocol");
-  input.payload = tstr_v_from_buf(payload, payload_size);
+  input.identity = vstr_from_cstr("bench-publisher");
+  input.topic = vstr_from_cstr("bench.protocol");
+  input.payload = vstr_from_buf(payload, payload_size);
 
-  check_int_eq(flowmq_protocol_encode_frame(&input, BENCH_MAX_FRAME_BYTES, &encoded),
+  check_equal(flowmq_protocol_encode_frame(&input, BENCH_MAX_FRAME_BYTES, &encoded),
                TURBO_OK);
   memset(&output, 0, sizeof(output));
-  check_int_eq(flowmq_protocol_decode_frame(encoded, tstr_len(encoded),
+  check_equal(flowmq_protocol_decode_frame(encoded, tstr_len(encoded),
                                             BENCH_MAX_FRAME_BYTES, &output, &consumed),
                TURBO_OK);
-  check_size_eq(output.payload.len, payload_size);
-  check_mem_eq(output.payload.data, payload, payload_size);
+  check_equal(output.payload.len, payload_size);
+  check_equal(output.payload.data, payload, payload_size);
   flowmq_protocol_frame_cleanup(&output);
 
   benchmark_bytes(encode_title, samples, payload_size) {
-    tstr_t sample = NULL;
+    tstr sample = NULL;
     rc = flowmq_protocol_encode_frame(&input, BENCH_MAX_FRAME_BYTES, &sample);
     tstr_free(sample);
   }
-  check_int_eq(rc, TURBO_OK);
+  check_equal(rc, TURBO_OK);
 
   benchmark_bytes(decode_title, samples, payload_size) {
     memset(&output, 0, sizeof(output));
@@ -57,8 +57,8 @@ static void bench_protocol_roundtrip(size_t payload_size, size_t samples,
                                       &output, &consumed);
     flowmq_protocol_frame_cleanup(&output);
   }
-  check_int_eq(rc, TURBO_OK);
-  check_size_eq(consumed, tstr_len(encoded));
+  check_equal(rc, TURBO_OK);
+  check_equal(consumed, tstr_len(encoded));
   tstr_free(encoded);
 }
 

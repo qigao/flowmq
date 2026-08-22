@@ -243,7 +243,7 @@ typedef struct flowmq_content_router_s {
 } flowmq_content_router_t;
 
 typedef struct subscription_rule_s {
-  tstr_t expression;  /* 如 "price > 100 AND region == 'US'" */
+  tstr expression;  /* 如 "price > 100 AND region == 'US'" */
   void *subscriber;
 } subscription_rule_t;
 ```

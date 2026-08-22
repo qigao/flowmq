@@ -2,7 +2,7 @@
 
 #include "turbo_error.h"
 #include "turbo_parser.h"
-#include "turbo_str_view.h"
+#include "turbo_str.h"
 #include "turbo_uuid.h"
 
 #include <limits.h>
@@ -2356,7 +2356,7 @@ static int flow_tfmp_store_copy_text(char *out, size_t capacity, const uint8_t *
                                      size_t value_size) {
   if (!out || capacity == 0u || !value || value_size == 0u || value_size >= capacity ||
       memchr(value, '\0', value_size) ||
-      !tstr_v_utf8_valid(tstr_v_from_buf((const char *)value, value_size)))
+      !vstr_utf8_valid(vstr_from_buf((const char *)value, value_size)))
     return TURBO_EPROTO;
   memcpy(out, value, value_size);
   out[value_size] = '\0';
@@ -2720,8 +2720,8 @@ static int flow_tfmp_management_service_create_internal(
     return TURBO_EINVAL;
   authority_end = (const char *)memchr(config->authority_id, '\0', sizeof(config->authority_id));
   if (!authority_end || authority_end == config->authority_id ||
-      !tstr_v_utf8_valid(
-          tstr_v_from_buf(config->authority_id, (size_t)(authority_end - config->authority_id))) ||
+      !vstr_utf8_valid(
+          vstr_from_buf(config->authority_id, (size_t)(authority_end - config->authority_id))) ||
       config->max_request_bytes < TURBO_FLOW_TFMP_HEADER_SIZE ||
       config->max_request_bytes > TURBO_FLOW_TFMP_MAX_MESSAGE_SIZE ||
       config->max_reply_bytes < TURBO_FLOW_TFMP_HEADER_SIZE ||
@@ -2887,7 +2887,7 @@ int turbo_flow_tfmp_management_service_bind_target(turbo_flow_tfmp_management_se
   if (service->target) return TURBO_EALREADY;
   uid_size = strlen(target_uid);
   if (uid_size == 0u || uid_size > TURBO_FLOW_RESOURCE_UID_MAX ||
-      !tstr_v_utf8_valid(tstr_v_from_buf(target_uid, uid_size))) {
+      !vstr_utf8_valid(vstr_from_buf(target_uid, uid_size))) {
     return TURBO_EINVAL;
   }
   rc = turbo_flow_runtime_snapshot(flow, &snapshot);
@@ -3336,7 +3336,7 @@ int turbo_flow_tfmp_management_service_run_one(turbo_flow_tfmp_management_servic
 
 int turbo_flow_tfmp_management_stage(turbo_flow_msg_t *msg, void *ctx) {
   turbo_flow_tfmp_management_service_t *service = (turbo_flow_tfmp_management_service_t *)ctx;
-  tstr_t payload;
+  tstr payload;
   size_t reply_size = 0u;
   int rc;
   if (!msg || !service || (!msg->payload.data && msg->payload.len > 0u)) return TURBO_EINVAL;

@@ -24,7 +24,7 @@ target_include_directories(
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(flowmq_transport
                       PUBLIC FlowMQ::Core TurboUtils::Core
-                      PRIVATE TurboNet::CoroNet OpenSSL::SSL)
+                      PRIVATE TurboUtils::STL TurboNet::CoroNet OpenSSL::SSL)
 
 set(FLOWMQ_TRANSPORT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/flowmq_coronet_transport.c

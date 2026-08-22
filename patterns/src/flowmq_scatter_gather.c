@@ -4,8 +4,10 @@
  */
 
 #include "flowmq_scatter_gather.h"
-#include "turbo_hash_map.h"
-#include "turbo_vec.h"
+#include "flowmq_stl_adapter.h"
+
+#include <turbostl/hash_map.h>
+#include <turbostl/vec.h>
 
 #include <string.h>
 
@@ -34,8 +36,10 @@ static int flowmq_scatter_session_init(flowmq_scatter_session_t *session,
   session->client_context = client_context;
 
   /* Pre-allocate partial results vector */
-  if (turbo_vec_init(&session->partial_results, sizeof(flowmq_scatter_partial_response_t)) !=
-      TURBO_OK) {
+  if (turbo_vec_init_bytes(&session->partial_results,
+                           sizeof(flowmq_scatter_partial_response_t),
+                           _Alignof(flowmq_scatter_partial_response_t),
+                           expected_responses) != TURBO_STL_OK) {
     return TURBO_ENOMEM;
   }
   if (turbo_vec_reserve(&session->partial_results, expected_responses) != 0) {
@@ -182,12 +186,11 @@ int flowmq_scatter_gather_manager_init(flowmq_scatter_gather_manager_t *manager,
   manager->next_correlation_id = 1;  /* Start from 1, 0 reserved for invalid */
 
   /* Initialize session map */
-  if (turbo_hash_map_init(&manager->sessions,
-                          sizeof(uint64_t),
-                          sizeof(flowmq_scatter_session_t *),
-                          NULL,
-                          NULL,
-                          NULL) != TURBO_OK) {
+  if (turbo_hash_map_init_bytes(&manager->sessions,
+                                sizeof(uint64_t), _Alignof(uint64_t),
+                                sizeof(flowmq_scatter_session_t *),
+                                _Alignof(flowmq_scatter_session_t *), max_sessions,
+                                turbo_hash_bytes, turbo_hash_key_equal, NULL) != TURBO_STL_OK) {
     return TURBO_ENOMEM;
   }
   if (turbo_hash_map_reserve(&manager->sessions, max_sessions) != 0) {
@@ -269,7 +272,7 @@ int flowmq_scatter_gather_create_session_ms(flowmq_scatter_gather_manager_t *man
 int flowmq_scatter_gather_record_response(flowmq_scatter_gather_manager_t *manager,
                                           uint64_t correlation_id,
                                           uint32_t index,
-                                          tstr_t *payload,
+                                          tstr *payload,
                                           int status,
                                           uint64_t received_ns) {
   if (!manager || !payload) {

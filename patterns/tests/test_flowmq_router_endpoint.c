@@ -31,7 +31,7 @@ enum {
 static const uint64_t ROUTER_TEST_START_TIMEOUT_NS = UINT64_C(5000000000);
 
 static int router_verify_peer_identity(void *ctx, const char *certificate_sha256,
-                                       tstr_v claimed_identity) {
+                                       vstr claimed_identity) {
   (void)ctx;
   (void)certificate_sha256;
   (void)claimed_identity;
@@ -54,7 +54,7 @@ typedef struct router_roundtrip_s {
   flowmq_router_route_t route;
   char reply[16];
   size_t reply_size;
-  tstr_t request;
+  tstr request;
 } router_roundtrip_t;
 
 static unsigned short router_test_port(void) {
@@ -92,15 +92,15 @@ static unsigned short router_test_port(void) {
 }
 
 static int router_on_frame(void *ctx, const flowmq_router_route_t *route,
-                           tstr_v peer_identity, tstr_v peer_topic,
+                           vstr peer_identity, vstr peer_topic,
                            const flowmq_protocol_frame_t *frame) {
   router_roundtrip_t *roundtrip = (router_roundtrip_t *)ctx;
   flowmq_protocol_frame_t reply;
-  tstr_t encoded = NULL;
+  tstr encoded = NULL;
   int rc;
   (void)peer_topic;
-  if (!tstr_v_eq(peer_identity, tstr_v_from_cstr("dealer-a")) ||
-      frame->message_id != 41u || !tstr_v_eq(frame->payload, tstr_v_from_cstr("ping"))) {
+  if (!vstr_eq(peer_identity, vstr_from_cstr("dealer-a")) ||
+      frame->message_id != 41u || !vstr_eq(frame->payload, vstr_from_cstr("ping"))) {
     atomic_store_explicit(&roundtrip->router_status, TURBO_EPROTO, memory_order_release);
     return TURBO_EPROTO;
   }
@@ -109,7 +109,7 @@ static int router_on_frame(void *ctx, const flowmq_router_route_t *route,
   reply.kind = FLOWMQ_PROTOCOL_FRAME_DATA;
   reply.pattern = FLOWMQ_PROTOCOL_ROUTER;
   reply.message_id = frame->message_id;
-  reply.payload = tstr_v_from_cstr("pong");
+  reply.payload = vstr_from_cstr("pong");
   rc = flowmq_protocol_encode_frame(&reply, FLOWMQ_ROUTER_ENDPOINT_DEFAULT_MAX_FRAME_SIZE,
                                     &encoded);
   if (rc == TURBO_OK)
@@ -182,7 +182,7 @@ static void router_run_roundtrip(flowmq_coronet_transport_t transport, const cha
   atomic_init(&roundtrip.send_status, TURBO_EALREADY);
   atomic_init(&roundtrip.stale_status, TURBO_EALREADY);
   atomic_init(&roundtrip.router_status, TURBO_EALREADY);
-  check_uint_ne(port, 0u);
+  check_not_equal(port, 0u);
 
   flowmq_router_endpoint_config_init(&router_config);
   router_config.transport = transport;
@@ -197,8 +197,8 @@ static void router_run_roundtrip(flowmq_coronet_transport_t transport, const cha
   router_config.own_context = 1;
   router_config.on_frame = router_on_frame;
   router_config.callback_ctx = &roundtrip;
-  check_int_eq(flowmq_router_endpoint_create(&router_config, &roundtrip.router), TURBO_OK);
-  check_int_eq(flowmq_router_endpoint_start(roundtrip.router, ROUTER_TEST_START_TIMEOUT_NS),
+  check_equal(flowmq_router_endpoint_create(&router_config, &roundtrip.router), TURBO_OK);
+  check_equal(flowmq_router_endpoint_start(roundtrip.router, ROUTER_TEST_START_TIMEOUT_NS),
                TURBO_OK);
 
   flowmq_connect_endpoint_config_init(&dealer_config);
@@ -220,62 +220,62 @@ static void router_run_roundtrip(flowmq_coronet_transport_t transport, const cha
   dealer_config.send_admission.on_complete = dealer_send_complete;
   dealer_config.send_admission.completion_ctx = &roundtrip;
   dealer_config.callback_ctx = &roundtrip;
-  check_int_eq(flowmq_connect_endpoint_create(&dealer_config, &roundtrip.dealer), TURBO_OK);
-  check_int_eq(flowmq_connect_endpoint_start(roundtrip.dealer, ROUTER_TEST_START_TIMEOUT_NS),
+  check_equal(flowmq_connect_endpoint_create(&dealer_config, &roundtrip.dealer), TURBO_OK);
+  check_equal(flowmq_connect_endpoint_start(roundtrip.dealer, ROUTER_TEST_START_TIMEOUT_NS),
                TURBO_OK);
-  check_size_eq(flowmq_router_endpoint_connections(roundtrip.router), 1u);
+  check_equal(flowmq_router_endpoint_connections(roundtrip.router), 1u);
 
   memset(&request_frame, 0, sizeof(request_frame));
   request_frame.kind = FLOWMQ_PROTOCOL_FRAME_DATA;
   request_frame.pattern = FLOWMQ_PROTOCOL_DEALER;
   request_frame.message_id = 41u;
-  request_frame.payload = tstr_v_from_cstr("ping");
-  check_int_eq(flowmq_protocol_encode_frame(&request_frame,
+  request_frame.payload = vstr_from_cstr("ping");
+  check_equal(flowmq_protocol_encode_frame(&request_frame,
                                             FLOWMQ_ROUTER_ENDPOINT_DEFAULT_MAX_FRAME_SIZE,
                                             &roundtrip.request),
                TURBO_OK);
-  check_int_eq(flowmq_connect_endpoint_send_copy(
+  check_equal(flowmq_connect_endpoint_send_copy(
                    roundtrip.dealer, 73u, roundtrip.request,
                    tstr_len(roundtrip.request)),
                TURBO_OK);
-  check_int_eq(router_wait_for(&roundtrip.send_completion_entered, 1), TURBO_OK);
-  check_int_eq(flowmq_connect_endpoint_send_copy(
+  check_equal(router_wait_for(&roundtrip.send_completion_entered, 1), TURBO_OK);
+  check_equal(flowmq_connect_endpoint_send_copy(
                    roundtrip.dealer, 74u, roundtrip.request,
                    tstr_len(roundtrip.request)),
                TURBO_ENOSPC);
   atomic_store_explicit(&roundtrip.send_completion_release, 1,
                         memory_order_release);
-  check_int_eq(router_wait_for(&roundtrip.send_completion_done, 1), TURBO_OK);
-  check_int_eq(atomic_load_explicit(&roundtrip.send_status, memory_order_acquire), TURBO_OK);
-  check_uint_eq(atomic_load_explicit(&roundtrip.send_completion_id,
+  check_equal(router_wait_for(&roundtrip.send_completion_done, 1), TURBO_OK);
+  check_equal(atomic_load_explicit(&roundtrip.send_status, memory_order_acquire), TURBO_OK);
+  check_equal(atomic_load_explicit(&roundtrip.send_completion_id,
                                      memory_order_acquire),
                 73u);
-  check_int_eq(router_wait_for(&roundtrip.dealer_frames, 1), TURBO_OK);
-  check_int_eq(atomic_load_explicit(&roundtrip.router_status, memory_order_acquire), TURBO_OK);
-  check_int_eq(atomic_load_explicit(&roundtrip.router_frames, memory_order_acquire), 1);
-  check_size_eq(roundtrip.reply_size, 4u);
-  check_mem_eq(roundtrip.reply, "pong", 4u);
+  check_equal(router_wait_for(&roundtrip.dealer_frames, 1), TURBO_OK);
+  check_equal(atomic_load_explicit(&roundtrip.router_status, memory_order_acquire), TURBO_OK);
+  check_equal(atomic_load_explicit(&roundtrip.router_frames, memory_order_acquire), 1);
+  check_equal(roundtrip.reply_size, 4u);
+  check_equal(roundtrip.reply, "pong", 4u);
   {
     flowmq_send_admission_stats_t stats;
     flowmq_connect_endpoint_send_stats(roundtrip.dealer, &stats);
-    check_size_eq(stats.pending, 0u);
-    check_size_eq(stats.high_water, 1u);
-    check_uint_eq(stats.rejected_full, 1u);
-    check_uint_eq(stats.completed, 1u);
+    check_equal(stats.pending, 0u);
+    check_equal(stats.high_water, 1u);
+    check_equal(stats.rejected_full, 1u);
+    check_equal(stats.completed, 1u);
   }
 
   flowmq_connect_endpoint_stop(roundtrip.dealer);
-  check_int_eq(flowmq_connect_endpoint_send_copy(
+  check_equal(flowmq_connect_endpoint_send_copy(
                    roundtrip.dealer, 75u, roundtrip.request,
                    tstr_len(roundtrip.request)),
                TURBO_ESHUTDOWN);
   flowmq_connect_endpoint_destroy(roundtrip.dealer);
-  check_int_eq(router_wait_for_connections(roundtrip.router, 0u), TURBO_OK);
-  check_int_eq(coro_post(flowmq_router_endpoint_context(roundtrip.router),
+  check_equal(router_wait_for_connections(roundtrip.router, 0u), TURBO_OK);
+  check_equal(coro_post(flowmq_router_endpoint_context(roundtrip.router),
                          router_stale_send_post, &roundtrip, NULL),
                TURBO_OK);
-  check_int_eq(router_wait_for(&roundtrip.stale_done, 1), TURBO_OK);
-  check_int_eq(atomic_load_explicit(&roundtrip.stale_status, memory_order_acquire),
+  check_equal(router_wait_for(&roundtrip.stale_done, 1), TURBO_OK);
+  check_equal(atomic_load_explicit(&roundtrip.stale_status, memory_order_acquire),
                TURBO_ENOTCONN);
   tstr_freep(&roundtrip.request);
   flowmq_router_endpoint_destroy(roundtrip.router);
@@ -286,7 +286,7 @@ spec("flowmq_router_endpoint owner") {
     flowmq_router_endpoint_config_t config;
     flowmq_router_endpoint_t *router = NULL;
     memset(&config, 0, sizeof(config));
-    check_int_eq(flowmq_router_endpoint_create(&config, &router), TURBO_EINVAL);
+    check_equal(flowmq_router_endpoint_create(&config, &router), TURBO_EINVAL);
     check_null(router);
 
     flowmq_router_endpoint_config_init(&config);
@@ -297,7 +297,7 @@ spec("flowmq_router_endpoint owner") {
     config.port = 70000;
     config.context = coro_context_create(NULL);
     config.max_connections = FLOWMQ_ROUTER_ENDPOINT_MAX_CONNECTIONS + 1u;
-    check_int_eq(flowmq_router_endpoint_create(&config, &router), TURBO_EINVAL);
+    check_equal(flowmq_router_endpoint_create(&config, &router), TURBO_EINVAL);
     check_null(router);
     coro_context_destroy(config.context);
   }
@@ -314,7 +314,7 @@ spec("flowmq_router_endpoint owner") {
     config.identity = "router";
     config.port = 9443;
     config.context = context;
-    check_int_eq(flowmq_router_endpoint_create(&config, &router), TURBO_EINVAL);
+    check_equal(flowmq_router_endpoint_create(&config, &router), TURBO_EINVAL);
     check_null(router);
     coro_context_destroy(context);
   }
@@ -333,7 +333,7 @@ spec("flowmq_router_endpoint owner") {
     config.port = 9443;
     config.context = context;
     config.verify_peer_identity = router_verify_peer_identity;
-    check_int_eq(flowmq_router_endpoint_create(&config, &router), TURBO_EINVAL);
+    check_equal(flowmq_router_endpoint_create(&config, &router), TURBO_EINVAL);
     check_null(router);
 
     tls.cert_file = "server.crt";
@@ -341,7 +341,7 @@ spec("flowmq_router_endpoint owner") {
     tls.ca_file = "providers-ca.crt";
     tls.require_client_certificate = 0;
     config.tls = &tls;
-    check_int_eq(flowmq_router_endpoint_create(&config, &router), TURBO_EINVAL);
+    check_equal(flowmq_router_endpoint_create(&config, &router), TURBO_EINVAL);
     check_null(router);
     coro_context_destroy(context);
   }
@@ -364,7 +364,7 @@ spec("flowmq_router_endpoint owner") {
     config.verify_peer_identity = router_verify_peer_identity;
     config.callback_ctx = &config;
     config.size = FLOWMQ_ROUTER_ENDPOINT_CONFIG_V3_SIZE;
-    check_int_eq(flowmq_router_endpoint_create(&config, &router), TURBO_OK);
+    check_equal(flowmq_router_endpoint_create(&config, &router), TURBO_OK);
     check_not_null(router);
     flowmq_router_endpoint_destroy(router);
     coro_context_destroy(context);

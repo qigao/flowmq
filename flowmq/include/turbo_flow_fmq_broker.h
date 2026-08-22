@@ -1,10 +1,12 @@
 #ifndef TURBO_FLOW_FMQ_BROKER_H
 #define TURBO_FLOW_FMQ_BROKER_H
 
+#include "flowmq_export.h"
+
 #include "turbo_flow_config.h"
 #include "turbo_flow_fmq_broker_protocol.h"
 #include "turbo_flow_protocol.h"
-#include "turbo_str_view.h"
+#include "turbo_str.h"
 
 #include <errno.h>
 #include <stddef.h>
@@ -155,7 +157,7 @@ typedef struct turbo_flow_fmq_broker_snapshot_s {
  * host. Routes are invalid after their FMQ session reconnects and must never be
  * persisted.
  */
-CXX_C_API turbo_flow_fmq_broker_t *
+FLOWMQ_C_API turbo_flow_fmq_broker_t *
 turbo_flow_fmq_broker_create(const turbo_flow_fmq_broker_config_t *config);
 
 /**
@@ -165,45 +167,45 @@ turbo_flow_fmq_broker_create(const turbo_flow_fmq_broker_config_t *config);
  * `load_balancer` or `reliable_request`. Unknown fields and unsupported values
  * fail fast.
  */
-CXX_C_API int turbo_flow_fmq_broker_create_resolved(const turbo_flow_resolved_config_t *resolved,
+FLOWMQ_C_API int turbo_flow_fmq_broker_create_resolved(const turbo_flow_resolved_config_t *resolved,
                                                     const char *channel_name,
                                                     turbo_flow_fmq_broker_t **out,
                                                     turbo_flow_config_error_t *error);
 
-CXX_C_API void turbo_flow_fmq_broker_destroy(turbo_flow_fmq_broker_t *broker);
+FLOWMQ_C_API void turbo_flow_fmq_broker_destroy(turbo_flow_fmq_broker_t *broker);
 
 /** Register or idempotently refresh one idle worker after its READY message. */
-CXX_C_API int turbo_flow_fmq_broker_worker_ready(turbo_flow_fmq_broker_t *broker,
+FLOWMQ_C_API int turbo_flow_fmq_broker_worker_ready(turbo_flow_fmq_broker_t *broker,
                                                  const char *worker_id, const char *service,
                                                  const turbo_flow_protocol_route_t *worker_route);
 
 /** Register or refresh a leased worker at an explicit monotonic timestamp. */
-CXX_C_API int turbo_flow_fmq_broker_worker_ready_at(turbo_flow_fmq_broker_t *broker,
+FLOWMQ_C_API int turbo_flow_fmq_broker_worker_ready_at(turbo_flow_fmq_broker_t *broker,
                                                     const char *worker_id, const char *service,
                                                     const turbo_flow_protocol_route_t *worker_route,
                                                     uint64_t now_ms);
 
 /** Refresh a leased worker without changing its service. Busy workers cannot change route. */
-CXX_C_API int
+FLOWMQ_C_API int
 turbo_flow_fmq_broker_worker_heartbeat(turbo_flow_fmq_broker_t *broker, const char *worker_id,
                                        const turbo_flow_protocol_route_t *worker_route,
                                        uint64_t now_ms);
 
 /** Remove an idle worker. A busy worker returns TURBO_EBUSY until its dispatch is canceled. */
-CXX_C_API int turbo_flow_fmq_broker_worker_remove(turbo_flow_fmq_broker_t *broker,
+FLOWMQ_C_API int turbo_flow_fmq_broker_worker_remove(turbo_flow_fmq_broker_t *broker,
                                                   const char *worker_id);
 
 /**
  * Select the least-recently-used idle worker and atomically create one in-flight request.
  * The client route is retained locally for the eventual reply.
  */
-CXX_C_API int turbo_flow_fmq_broker_dispatch(turbo_flow_fmq_broker_t *broker, const char *service,
+FLOWMQ_C_API int turbo_flow_fmq_broker_dispatch(turbo_flow_fmq_broker_t *broker, const char *service,
                                              uint64_t request_id,
                                              const turbo_flow_protocol_route_t *client_route,
                                              turbo_flow_fmq_broker_dispatch_result_t *result);
 
 /** Dispatch only to a live leased worker using the caller's monotonic timestamp. */
-CXX_C_API int turbo_flow_fmq_broker_dispatch_at(turbo_flow_fmq_broker_t *broker,
+FLOWMQ_C_API int turbo_flow_fmq_broker_dispatch_at(turbo_flow_fmq_broker_t *broker,
                                                 const char *service, uint64_t request_id,
                                                 const turbo_flow_protocol_route_t *client_route,
                                                 uint64_t now_ms,
@@ -214,12 +216,12 @@ CXX_C_API int turbo_flow_fmq_broker_dispatch_at(turbo_flow_fmq_broker_t *broker,
  * Call only after that owner returns success. This stores correlation metadata,
  * not payload bytes, and returns the broker accept ACK route.
  */
-CXX_C_API int turbo_flow_fmq_broker_record_accept_commit(
+FLOWMQ_C_API int turbo_flow_fmq_broker_record_accept_commit(
     turbo_flow_fmq_broker_t *broker, const char *service, uint64_t request_id,
     const turbo_flow_protocol_route_t *client_route, turbo_flow_fmq_broker_ack_result_t *ack);
 
 /** Dispatch a previously committed request to one live worker. */
-CXX_C_API int
+FLOWMQ_C_API int
 turbo_flow_fmq_broker_dispatch_accepted(turbo_flow_fmq_broker_t *broker, uint64_t request_id,
                                         uint64_t now_ms,
                                         turbo_flow_fmq_broker_dispatch_result_t *result);
@@ -228,30 +230,30 @@ turbo_flow_fmq_broker_dispatch_accepted(turbo_flow_fmq_broker_t *broker, uint64_
  * Remove one expired worker. Busy requests are explicitly returned as DROP or REQUEUE.
  * Repeat until TURBO_ENOENT. This function never queues or retransmits a payload itself.
  */
-CXX_C_API int turbo_flow_fmq_broker_expire(turbo_flow_fmq_broker_t *broker, uint64_t now_ms,
+FLOWMQ_C_API int turbo_flow_fmq_broker_expire(turbo_flow_fmq_broker_t *broker, uint64_t now_ms,
                                            turbo_flow_fmq_broker_expire_result_t *result);
 
 /**
  * Cancel one in-flight dispatch after a local send failure.
  * The worker becomes idle and the retained client route is returned to the caller.
  */
-CXX_C_API int turbo_flow_fmq_broker_cancel(turbo_flow_fmq_broker_t *broker, uint64_t request_id,
+FLOWMQ_C_API int turbo_flow_fmq_broker_cancel(turbo_flow_fmq_broker_t *broker, uint64_t request_id,
                                            turbo_flow_fmq_broker_completion_result_t *result);
 
 /**
  * Complete one worker reply, return its client route, and make the worker idle.
  * This is routing completion, not a transport or business delivery ACK.
  */
-CXX_C_API int turbo_flow_fmq_broker_complete(turbo_flow_fmq_broker_t *broker, const char *worker_id,
+FLOWMQ_C_API int turbo_flow_fmq_broker_complete(turbo_flow_fmq_broker_t *broker, const char *worker_id,
                                              uint64_t request_id,
                                              turbo_flow_fmq_broker_completion_result_t *result);
 
 /** Convert a successful completion into the second, distinct ACK kind. */
-CXX_C_API int
+FLOWMQ_C_API int
 turbo_flow_fmq_broker_completion_ack(const turbo_flow_fmq_broker_completion_result_t *completion,
                                      turbo_flow_fmq_broker_ack_result_t *ack);
 
-CXX_C_API int turbo_flow_fmq_broker_snapshot(const turbo_flow_fmq_broker_t *broker,
+FLOWMQ_C_API int turbo_flow_fmq_broker_snapshot(const turbo_flow_fmq_broker_t *broker,
                                              turbo_flow_fmq_broker_snapshot_t *out);
 
 typedef enum turbo_flow_tfcw_kind_e {
@@ -294,13 +296,13 @@ typedef struct turbo_flow_tfcw_envelope_s {
 typedef struct turbo_flow_tfcw_fields_s {
   size_t size;
   uint32_t present;
-  tstr_v worker_id;
-  tstr_v service;
+  vstr worker_id;
+  vstr service;
   uint64_t grant_messages;
   uint64_t grant_bytes;
-  tstr_v logical_address;
-  tstr_v metadata;
-  tstr_v payload;
+  vstr logical_address;
+  vstr metadata;
+  vstr payload;
   uint32_t failure_code;
   int retryable;
 } turbo_flow_tfcw_fields_t;
@@ -320,12 +322,12 @@ typedef struct turbo_flow_tfcw_fields_s {
 
 #define TURBO_FLOW_TFCW_FIELD_PRESENT(field_id) (UINT32_C(1) << (field_id))
 
-CXX_C_API int turbo_flow_tfcw_encode(const turbo_flow_tfcw_envelope_t *envelope, uint8_t *out,
+FLOWMQ_C_API int turbo_flow_tfcw_encode(const turbo_flow_tfcw_envelope_t *envelope, uint8_t *out,
                                      size_t out_capacity, size_t *out_size);
-CXX_C_API int turbo_flow_tfcw_decode(const uint8_t *data, size_t data_size,
+FLOWMQ_C_API int turbo_flow_tfcw_decode(const uint8_t *data, size_t data_size,
                                      turbo_flow_tfcw_envelope_t *out);
 /** Parse validated kind-specific fields as zero-copy views into envelope body. */
-CXX_C_API int turbo_flow_tfcw_fields_decode(const turbo_flow_tfcw_envelope_t *envelope,
+FLOWMQ_C_API int turbo_flow_tfcw_fields_decode(const turbo_flow_tfcw_envelope_t *envelope,
                                             turbo_flow_tfcw_fields_t *out);
 
 typedef struct turbo_flow_fmq_credit_worker_s turbo_flow_fmq_credit_worker_t;
@@ -394,41 +396,41 @@ typedef struct turbo_flow_fmq_credit_worker_snapshot_s {
 
 /** Create a host-serialized volatile credit owner. It stores correlation metadata, never payload.
  */
-CXX_C_API turbo_flow_fmq_credit_worker_t *
+FLOWMQ_C_API turbo_flow_fmq_credit_worker_t *
 turbo_flow_fmq_credit_worker_create(const turbo_flow_fmq_credit_worker_config_t *config);
 /** Resolve a strict `credit_worker` FMQ pattern from an immutable YAML snapshot. */
-CXX_C_API int turbo_flow_fmq_credit_worker_create_resolved(
+FLOWMQ_C_API int turbo_flow_fmq_credit_worker_create_resolved(
     const turbo_flow_resolved_config_t *resolved, const char *channel_name,
     turbo_flow_fmq_credit_worker_t **out, turbo_flow_config_error_t *error);
-CXX_C_API void turbo_flow_fmq_credit_worker_destroy(turbo_flow_fmq_credit_worker_t *owner);
+FLOWMQ_C_API void turbo_flow_fmq_credit_worker_destroy(turbo_flow_fmq_credit_worker_t *owner);
 
 /** Apply READY/CREDIT incremental tokens. Sequence 1 starts a route generation. */
-CXX_C_API int turbo_flow_fmq_credit_worker_grant(turbo_flow_fmq_credit_worker_t *owner,
+FLOWMQ_C_API int turbo_flow_fmq_credit_worker_grant(turbo_flow_fmq_credit_worker_t *owner,
                                                  const turbo_flow_fmq_credit_grant_t *grant);
 /** Refresh a live worker lease without changing credit. */
-CXX_C_API int
+FLOWMQ_C_API int
 turbo_flow_fmq_credit_worker_heartbeat(turbo_flow_fmq_credit_worker_t *owner, const char *worker_id,
                                        const turbo_flow_protocol_route_t *worker_route,
                                        uint64_t now_ms);
 /** Nonblocking LRU dispatch; no credit returns TURBO_FLOW_FMQ_EAGAIN and stores no request. */
-CXX_C_API int turbo_flow_fmq_credit_worker_dispatch(
+FLOWMQ_C_API int turbo_flow_fmq_credit_worker_dispatch(
     turbo_flow_fmq_credit_worker_t *owner, const char *service, uint64_t request_id,
     size_t encoded_job_bytes, const turbo_flow_protocol_route_t *client_route, uint64_t now_ms,
     turbo_flow_fmq_broker_dispatch_result_t *result);
 /** Completion/cancel releases correlation but never manufactures replacement credit. */
-CXX_C_API int
+FLOWMQ_C_API int
 turbo_flow_fmq_credit_worker_complete(turbo_flow_fmq_credit_worker_t *owner, const char *worker_id,
                                       const turbo_flow_protocol_route_t *worker_route,
                                       uint64_t request_id,
                                       turbo_flow_fmq_broker_completion_result_t *result);
-CXX_C_API int
+FLOWMQ_C_API int
 turbo_flow_fmq_credit_worker_cancel(turbo_flow_fmq_credit_worker_t *owner, uint64_t request_id,
                                     turbo_flow_fmq_broker_completion_result_t *result);
 /** Expire one request from a stale worker; the worker is removed after its last correlation. */
-CXX_C_API int turbo_flow_fmq_credit_worker_expire(turbo_flow_fmq_credit_worker_t *owner,
+FLOWMQ_C_API int turbo_flow_fmq_credit_worker_expire(turbo_flow_fmq_credit_worker_t *owner,
                                                   uint64_t now_ms,
                                                   turbo_flow_fmq_broker_expire_result_t *result);
-CXX_C_API int turbo_flow_fmq_credit_worker_snapshot(const turbo_flow_fmq_credit_worker_t *owner,
+FLOWMQ_C_API int turbo_flow_fmq_credit_worker_snapshot(const turbo_flow_fmq_credit_worker_t *owner,
                                                     turbo_flow_fmq_credit_worker_snapshot_t *out);
 
 typedef struct turbo_flow_fmq_tfcw_graph_config_s {
@@ -451,7 +453,7 @@ typedef struct turbo_flow_fmq_tfcw_graph_config_s {
  * mutation. service is the fixed JOB dispatch service. All four operations
  * require the configured resource name and inline execution.
  */
-CXX_C_API int turbo_flow_fmq_tfcw_register_graph(
+FLOWMQ_C_API int turbo_flow_fmq_tfcw_register_graph(
     turbo_flow_t *flow, const char *adapter_name,
     const turbo_flow_fmq_tfcw_graph_config_t *graph_config,
     const turbo_flow_fmq_credit_worker_config_t *credit_config);
@@ -463,7 +465,7 @@ CXX_C_API int turbo_flow_fmq_tfcw_register_graph(
  * until TurboFlow provides a message-owned queue claim projection; it never
  * falls back to volatile dispatch.
  */
-CXX_C_API int turbo_flow_fmq_tfcw_register_resolved_graph(
+FLOWMQ_C_API int turbo_flow_fmq_tfcw_register_resolved_graph(
     turbo_flow_t *flow, const char *adapter_name,
     const turbo_flow_fmq_tfcw_graph_config_t *graph_config,
     const turbo_flow_resolved_config_t *resolved, const char *channel_name,
@@ -523,16 +525,16 @@ typedef struct turbo_flow_fmq_credit_settlement_snapshot_s {
  * The coordinator stores correlation metadata only. The storage owner remains the payload fact
  * source, and failed settlement leaves the claim active for retry or backend recovery.
  */
-CXX_C_API turbo_flow_fmq_credit_settlement_t *
+FLOWMQ_C_API turbo_flow_fmq_credit_settlement_t *
 turbo_flow_fmq_credit_settlement_create(turbo_flow_fmq_credit_worker_t *credit_owner,
                                         const turbo_flow_claim_settler_t *settler,
                                         const turbo_flow_fmq_credit_settlement_config_t *config);
 
 /** Destroy only after every tracked claim is settled; otherwise returns TURBO_EBUSY. */
-CXX_C_API int turbo_flow_fmq_credit_settlement_destroy(turbo_flow_fmq_credit_settlement_t *owner);
+FLOWMQ_C_API int turbo_flow_fmq_credit_settlement_destroy(turbo_flow_fmq_credit_settlement_t *owner);
 
 /** Atomically reserve coordinator metadata around a nonblocking credit dispatch. */
-CXX_C_API int turbo_flow_fmq_credit_settlement_dispatch(
+FLOWMQ_C_API int turbo_flow_fmq_credit_settlement_dispatch(
     turbo_flow_fmq_credit_settlement_t *owner, uint64_t claim_token, const char *service,
     uint64_t request_id, size_t encoded_job_bytes, const turbo_flow_protocol_route_t *client_route,
     uint64_t now_ms, turbo_flow_fmq_broker_dispatch_result_t *dispatch);
@@ -541,30 +543,30 @@ CXX_C_API int turbo_flow_fmq_credit_settlement_dispatch(
  * Accept a current-generation worker completion, then settle storage.
  * Completion ACK is returned only after the storage ACK succeeds.
  */
-CXX_C_API int turbo_flow_fmq_credit_settlement_complete(
+FLOWMQ_C_API int turbo_flow_fmq_credit_settlement_complete(
     turbo_flow_fmq_credit_settlement_t *owner, const char *worker_id,
     const turbo_flow_protocol_route_t *worker_route, uint64_t request_id,
     turbo_flow_fmq_credit_settlement_result_t *result);
 
 /** Cancel one dispatched correlation and explicitly requeue or drop its storage claim. */
-CXX_C_API int
+FLOWMQ_C_API int
 turbo_flow_fmq_credit_settlement_cancel(turbo_flow_fmq_credit_settlement_t *owner,
                                         uint64_t request_id,
                                         turbo_flow_fmq_credit_settlement_action_t action,
                                         turbo_flow_fmq_credit_settlement_result_t *result);
 
 /** Expire one stale credit correlation and apply its configured drop/requeue disposition. */
-CXX_C_API int
+FLOWMQ_C_API int
 turbo_flow_fmq_credit_settlement_expire(turbo_flow_fmq_credit_settlement_t *owner, uint64_t now_ms,
                                         turbo_flow_fmq_broker_expire_result_t *expired,
                                         turbo_flow_fmq_credit_settlement_result_t *result);
 
 /** Retry one storage settlement that previously failed; returns TURBO_ENOENT when none remain. */
-CXX_C_API int
+FLOWMQ_C_API int
 turbo_flow_fmq_credit_settlement_retry_one(turbo_flow_fmq_credit_settlement_t *owner,
                                            turbo_flow_fmq_credit_settlement_result_t *result);
 
-CXX_C_API int
+FLOWMQ_C_API int
 turbo_flow_fmq_credit_settlement_snapshot(const turbo_flow_fmq_credit_settlement_t *owner,
                                           turbo_flow_fmq_credit_settlement_snapshot_t *out);
 
@@ -631,22 +633,22 @@ typedef struct turbo_flow_fmq_credit_durable_binding_s {
  * request addresses; claim tokens and protocol routes remain process-local derived state. Missing,
  * malformed, oversized, or unavailable durable state fails creation without a volatile fallback.
  */
-CXX_C_API int turbo_flow_fmq_credit_durable_create(
+FLOWMQ_C_API int turbo_flow_fmq_credit_durable_create(
     turbo_flow_fmq_credit_worker_t *credit_owner, const turbo_flow_claim_settler_t *settler,
     const turbo_flow_fmq_credit_durable_config_t *config, turbo_flow_fmq_credit_durable_t **out);
-CXX_C_API int turbo_flow_fmq_credit_durable_create_resolved(
+FLOWMQ_C_API int turbo_flow_fmq_credit_durable_create_resolved(
     const turbo_flow_resolved_config_t *resolved, const char *channel_name,
     const turbo_flow_fmq_credit_durable_binding_t *binding,
     turbo_flow_fmq_credit_worker_t **credit_out, turbo_flow_fmq_credit_durable_t **durable_out,
     turbo_flow_config_error_t *error);
-CXX_C_API void turbo_flow_fmq_credit_durable_destroy(turbo_flow_fmq_credit_durable_t *owner);
+FLOWMQ_C_API void turbo_flow_fmq_credit_durable_destroy(turbo_flow_fmq_credit_durable_t *owner);
 
 /**
  * Close dispatch admission and apply the configured bounded shutdown policy.
  * The call is idempotent. A storage failure leaves the owner quiesced and retryable; PRESERVE
  * returns after the durable snapshot is already authoritative.
  */
-CXX_C_API int turbo_flow_fmq_credit_durable_shutdown(turbo_flow_fmq_credit_durable_t *owner,
+FLOWMQ_C_API int turbo_flow_fmq_credit_durable_shutdown(turbo_flow_fmq_credit_durable_t *owner,
                                                      uint64_t now_ms,
                                                      turbo_flow_fmq_credit_durable_snapshot_t *out);
 
@@ -655,43 +657,43 @@ CXX_C_API int turbo_flow_fmq_credit_durable_shutdown(turbo_flow_fmq_credit_durab
  * A recovered request already at max_attempts is atomically dropped/poisoned and returns
  * TURBO_EALREADY; the caller must not settle that claim again.
  */
-CXX_C_API int turbo_flow_fmq_credit_durable_dispatch(
+FLOWMQ_C_API int turbo_flow_fmq_credit_durable_dispatch(
     turbo_flow_fmq_credit_durable_t *owner, uint64_t claim_token,
     const turbo_flow_fmq_broker_logical_address_t *address, uint64_t runtime_request_id,
     const char *service, size_t encoded_job_bytes, const turbo_flow_protocol_route_t *client_route,
     uint64_t now_ms, turbo_flow_fmq_broker_dispatch_result_t *dispatch);
 
 /** Atomically commit completion-outbox state and ACK the storage claim. */
-CXX_C_API int turbo_flow_fmq_credit_durable_complete(
+FLOWMQ_C_API int turbo_flow_fmq_credit_durable_complete(
     turbo_flow_fmq_credit_durable_t *owner, const char *worker_id,
     const turbo_flow_protocol_route_t *worker_route, uint64_t runtime_request_id, uint64_t now_ms,
     turbo_flow_fmq_credit_settlement_result_t *result);
 
 /** Expire one stale dispatch and atomically requeue it, or poison it at max_attempts. */
-CXX_C_API int
+FLOWMQ_C_API int
 turbo_flow_fmq_credit_durable_expire(turbo_flow_fmq_credit_durable_t *owner, uint64_t now_ms,
                                      turbo_flow_fmq_broker_expire_result_t *expired,
                                      turbo_flow_fmq_credit_settlement_result_t *result);
 
 /** Retry one uncertain atomic commit. Exact retries are required to be idempotent. */
-CXX_C_API int
+FLOWMQ_C_API int
 turbo_flow_fmq_credit_durable_retry_one(turbo_flow_fmq_credit_durable_t *owner,
                                         turbo_flow_fmq_credit_settlement_result_t *result);
 
 /** Read/confirm completion delivery by durable logical address, never by a stale route. */
-CXX_C_API int
+FLOWMQ_C_API int
 turbo_flow_fmq_credit_durable_outbox_next(const turbo_flow_fmq_credit_durable_t *owner,
                                           turbo_flow_fmq_broker_logical_address_t *address);
-CXX_C_API int
+FLOWMQ_C_API int
 turbo_flow_fmq_credit_durable_outbox_confirm(turbo_flow_fmq_credit_durable_t *owner,
                                              const turbo_flow_fmq_broker_logical_address_t *address,
                                              uint64_t now_ms);
 /** Remove one COMPLETED/POISONED record after terminal_ttl_ms and persist the deletion. */
-CXX_C_API int
+FLOWMQ_C_API int
 turbo_flow_fmq_credit_durable_expire_terminal(turbo_flow_fmq_credit_durable_t *owner,
                                               uint64_t now_ms,
                                               turbo_flow_fmq_broker_logical_address_t *address);
-CXX_C_API int turbo_flow_fmq_credit_durable_snapshot(const turbo_flow_fmq_credit_durable_t *owner,
+FLOWMQ_C_API int turbo_flow_fmq_credit_durable_snapshot(const turbo_flow_fmq_credit_durable_t *owner,
                                                      turbo_flow_fmq_credit_durable_snapshot_t *out);
 
 #ifdef __cplusplus

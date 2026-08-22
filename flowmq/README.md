@@ -11,7 +11,7 @@
   ROUTER/BIND endpoint。
 - `flowmq/include`：独立 C API；聚合头为 `flowmq.h`。
 - 唯一安装 target：`FlowMQ::FlowMQ`。
-- 公开链接依赖：`TurboUtils::Core`、`TurboParser::Parser`。CoroNet 与 TLS backend 是构建时私有依赖。
+- 公开链接依赖：`TurboUtils::Core`、`TurboParser::Parser`。`TurboUtils::STL`、CoroNet 与 TLS backend 是构建时私有依赖。
 
 `flowmq_router_endpoint_t` 当前提供完整的 `ROUTER(BIND) ↔ DEALER(CONNECT)` 路径。ROUTER 拥有
 listener、peer registry、identity 唯一性与 generation-fenced route；DEALER 由

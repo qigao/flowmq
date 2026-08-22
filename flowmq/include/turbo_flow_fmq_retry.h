@@ -1,6 +1,8 @@
 #ifndef TURBO_FLOW_FMQ_RETRY_H
 #define TURBO_FLOW_FMQ_RETRY_H
 
+#include "flowmq_export.h"
+
 #include "turbo_flow_config.h"
 #include "turbo_flow_fmq_broker_protocol.h"
 
@@ -93,15 +95,15 @@ typedef struct turbo_flow_fmq_retry_snapshot_s {
  * The ledger stores no payload and performs no I/O. Calls on one ledger must be serialized by
  * the host. All timestamped calls use one caller-owned monotonic millisecond clock.
  */
-CXX_C_API turbo_flow_fmq_retry_ledger_t *
+FLOWMQ_C_API turbo_flow_fmq_retry_ledger_t *
 turbo_flow_fmq_retry_ledger_create(const turbo_flow_fmq_retry_config_t *config);
 
 /** Create a retry ledger from a resolved YAML `reliable_request` channel. */
-CXX_C_API int turbo_flow_fmq_retry_ledger_create_resolved(
+FLOWMQ_C_API int turbo_flow_fmq_retry_ledger_create_resolved(
     const turbo_flow_resolved_config_t *resolved, const char *channel_name,
     turbo_flow_fmq_retry_ledger_t **out, turbo_flow_config_error_t *error);
 
-CXX_C_API void turbo_flow_fmq_retry_ledger_destroy(turbo_flow_fmq_retry_ledger_t *ledger);
+FLOWMQ_C_API void turbo_flow_fmq_retry_ledger_destroy(turbo_flow_fmq_retry_ledger_t *ledger);
 
 /**
  * Accept a logical request or classify an idempotent duplicate.
@@ -109,13 +111,13 @@ CXX_C_API void turbo_flow_fmq_retry_ledger_destroy(turbo_flow_fmq_retry_ledger_t
  * A duplicate never resets attempts or terminal TTL. TURBO_ENOSPC means the caller must apply
  * backpressure or explicitly expire terminal records; active records are never evicted.
  */
-CXX_C_API int
+FLOWMQ_C_API int
 turbo_flow_fmq_retry_ledger_accept(turbo_flow_fmq_retry_ledger_t *ledger,
                                    const turbo_flow_fmq_broker_logical_address_t *address,
                                    uint64_t now_ms, turbo_flow_fmq_retry_accept_result_t *result);
 
 /** Move one PENDING request to INFLIGHT and increment its bounded attempt count. */
-CXX_C_API int
+FLOWMQ_C_API int
 turbo_flow_fmq_retry_ledger_begin_attempt(turbo_flow_fmq_retry_ledger_t *ledger,
                                           const turbo_flow_fmq_broker_logical_address_t *address,
                                           uint64_t now_ms, turbo_flow_fmq_retry_record_t *record);
@@ -127,12 +129,12 @@ turbo_flow_fmq_retry_ledger_begin_attempt(turbo_flow_fmq_retry_ledger_t *ledger,
  * moves to POISONED. In this API the in-memory ledger is the fact owner; the returned record is
  * an observation of the committed memory transition, not proof of an external durable commit.
  */
-CXX_C_API int turbo_flow_fmq_retry_ledger_finish_attempt(
+FLOWMQ_C_API int turbo_flow_fmq_retry_ledger_finish_attempt(
     turbo_flow_fmq_retry_ledger_t *ledger, const turbo_flow_fmq_broker_logical_address_t *address,
     int success, uint64_t now_ms, turbo_flow_fmq_retry_record_t *record);
 
 /** Read one record without advancing time or changing state. */
-CXX_C_API int
+FLOWMQ_C_API int
 turbo_flow_fmq_retry_ledger_get(const turbo_flow_fmq_retry_ledger_t *ledger,
                                 const turbo_flow_fmq_broker_logical_address_t *address,
                                 turbo_flow_fmq_retry_record_t *record);
@@ -144,15 +146,15 @@ turbo_flow_fmq_retry_ledger_get(const turbo_flow_fmq_retry_ledger_t *ledger,
  * TURBO_EALREADY. Restored INFLIGHT records remain explicit: the host must reconcile the old
  * attempt and call finish_attempt rather than receiving an implicit retry.
  */
-CXX_C_API int turbo_flow_fmq_retry_ledger_restore(turbo_flow_fmq_retry_ledger_t *ledger,
+FLOWMQ_C_API int turbo_flow_fmq_retry_ledger_restore(turbo_flow_fmq_retry_ledger_t *ledger,
                                                   const turbo_flow_fmq_retry_record_t *record);
 
 /** Remove one COMPLETED/POISONED record whose terminal TTL elapsed. */
-CXX_C_API int turbo_flow_fmq_retry_ledger_expire_one(turbo_flow_fmq_retry_ledger_t *ledger,
+FLOWMQ_C_API int turbo_flow_fmq_retry_ledger_expire_one(turbo_flow_fmq_retry_ledger_t *ledger,
                                                      uint64_t now_ms,
                                                      turbo_flow_fmq_retry_record_t *expired);
 
-CXX_C_API int turbo_flow_fmq_retry_ledger_snapshot(const turbo_flow_fmq_retry_ledger_t *ledger,
+FLOWMQ_C_API int turbo_flow_fmq_retry_ledger_snapshot(const turbo_flow_fmq_retry_ledger_t *ledger,
                                                    turbo_flow_fmq_retry_snapshot_t *snapshot);
 
 #ifdef __cplusplus

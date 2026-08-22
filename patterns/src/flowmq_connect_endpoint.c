@@ -26,17 +26,17 @@ struct flowmq_connect_endpoint_s {
   flowmq_reconnect_t reconnect;
   flowmq_subscription_set_t subscriptions;
   flowmq_peer_session_t session;
-  tstr_t host;
-  tstr_t path;
-  tstr_t topic;
-  tstr_t identity;
-  tstr_t multicast_group;
-  tstr_t multicast_interface;
-  tstr_t tls_ca_file;
-  tstr_t tls_cert_file;
-  tstr_t tls_key_file;
-  tstr_t tls_key_password;
-  tstr_t tls_server_name;
+  tstr host;
+  tstr path;
+  tstr topic;
+  tstr identity;
+  tstr multicast_group;
+  tstr multicast_interface;
+  tstr tls_ca_file;
+  tstr tls_cert_file;
+  tstr tls_key_file;
+  tstr tls_key_password;
+  tstr tls_server_name;
   flowmq_coronet_tls_client_config_t tls;
   turbo_kcp_config_t kcp_config;
   int kcp_configured;
@@ -93,7 +93,7 @@ static void flowmq_connect_endpoint_set_state(flowmq_connect_endpoint_t *endpoin
 
 static void flowmq_connect_endpoint_emit(flowmq_connect_endpoint_t *endpoint,
                                          flowmq_connect_endpoint_event_kind_t kind, int status,
-                                         uint64_t delay_ms, tstr_v identity, tstr_v topic) {
+                                         uint64_t delay_ms, vstr identity, vstr topic) {
   flowmq_connect_endpoint_event_t event;
   if (!endpoint->config.on_event) return;
   memset(&event, 0, sizeof(event));
@@ -112,7 +112,7 @@ static void flowmq_connect_endpoint_emit_failure_once(flowmq_connect_endpoint_t 
     return;
   }
   flowmq_connect_endpoint_emit(endpoint, FLOWMQ_ENDPOINT_EVENT_RECONNECT_FAILED, status, 0u,
-                               (tstr_v){0}, (tstr_v){0});
+                               (vstr){0}, (vstr){0});
 }
 
 static int flowmq_connect_endpoint_socket_send(flowmq_connect_endpoint_t *endpoint,
@@ -123,7 +123,7 @@ static int flowmq_connect_endpoint_socket_send(flowmq_connect_endpoint_t *endpoi
 }
 
 static int flowmq_connect_endpoint_send_hello(flowmq_connect_endpoint_t *endpoint) {
-  tstr_t encoded = NULL;
+  tstr encoded = NULL;
   int rc;
   rc = flowmq_pattern_encode_hello(endpoint->config.pattern, tstr_to_v(endpoint->identity),
                                    tstr_to_v(endpoint->topic), endpoint->config.max_frame_size,
@@ -136,7 +136,7 @@ static int flowmq_connect_endpoint_send_hello(flowmq_connect_endpoint_t *endpoin
 
 static int flowmq_connect_endpoint_send_heartbeat(flowmq_connect_endpoint_t *endpoint,
                                                   flowmq_protocol_frame_kind_t kind) {
-  tstr_t encoded = NULL;
+  tstr encoded = NULL;
   int rc = flowmq_pattern_encode_heartbeat(endpoint->config.pattern, kind,
                                            endpoint->config.max_frame_size, &encoded);
   if (rc == TURBO_OK)
@@ -147,8 +147,8 @@ static int flowmq_connect_endpoint_send_heartbeat(flowmq_connect_endpoint_t *end
 
 static int flowmq_connect_endpoint_send_subscription(flowmq_connect_endpoint_t *endpoint,
                                                      flowmq_protocol_frame_kind_t kind,
-                                                     tstr_v topic) {
-  tstr_t encoded = NULL;
+                                                     vstr topic) {
+  tstr encoded = NULL;
   int rc = flowmq_pattern_encode_subscription(endpoint->config.pattern, kind, topic,
                                               endpoint->config.max_frame_size, &encoded);
   if (rc == TURBO_OK)
@@ -210,7 +210,7 @@ static int flowmq_connect_endpoint_read_hello(flowmq_connect_endpoint_t *endpoin
 }
 
 static int flowmq_connect_endpoint_verify_peer_identity(
-    flowmq_connect_endpoint_t *endpoint, tstr_v claimed_identity) {
+    flowmq_connect_endpoint_t *endpoint, vstr claimed_identity) {
   char certificate_sha256[CORO_TLS_PEER_CERT_SHA256_CAPACITY] = {0};
   int rc;
   if (!endpoint || !endpoint->config.verify_peer_identity) return TURBO_OK;
@@ -295,7 +295,7 @@ static int flowmq_connect_endpoint_receive(flowmq_connect_endpoint_t *endpoint,
             flowmq_protocol_heartbeat_deadlines_next(&heartbeat, now_ns, &receive_deadline_ns);
         if (action == FLOWMQ_PROTOCOL_HEARTBEAT_EXPIRED) {
           flowmq_connect_endpoint_emit(endpoint, FLOWMQ_ENDPOINT_EVENT_HEARTBEAT_TIMEOUT,
-                                       TURBO_ETIMEDOUT, 0u, (tstr_v){0}, (tstr_v){0});
+                                       TURBO_ETIMEDOUT, 0u, (vstr){0}, (vstr){0});
           return TURBO_ETIMEDOUT;
         }
         if (action == FLOWMQ_PROTOCOL_HEARTBEAT_RECV_EXPIRED) return TURBO_ETIMEDOUT;
@@ -433,7 +433,7 @@ static void flowmq_connect_endpoint_connect_task(coro_t *co, void *arg) {
     flowmq_connect_endpoint_set_state(endpoint, FLOWMQ_ENDPOINT_CONNECTION_BACKOFF, TURBO_EALREADY,
                                       0u);
     flowmq_connect_endpoint_emit(endpoint, FLOWMQ_ENDPOINT_EVENT_RECONNECT_SCHEDULED, TURBO_OK,
-                                 wait_ms, (tstr_v){0}, (tstr_v){0});
+                                 wait_ms, (vstr){0}, (vstr){0});
     if (wait_ms != 0u) {
       rc = coro_wait_for(endpoint->reconnect_wait, wait_ms);
       if (rc != TURBO_OK) break;
@@ -788,8 +788,8 @@ int flowmq_connect_endpoint_interrupt(flowmq_connect_endpoint_t *endpoint, int s
 
 int flowmq_connect_endpoint_update_endpoint(flowmq_connect_endpoint_t *endpoint, const char *host,
                                             int port, const char *path) {
-  tstr_t next_host;
-  tstr_t next_path;
+  tstr next_host;
+  tstr next_path;
   if (!endpoint || !host || !path ||
       flowmq_coronet_endpoint_validate(endpoint->config.transport, host, port, path) != TURBO_OK)
     return TURBO_EINVAL;
