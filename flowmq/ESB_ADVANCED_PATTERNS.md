@@ -74,7 +74,7 @@ typedef struct flowmq_rate_limited_priority_queue_s {
 ```c
 typedef struct flowmq_resilient_scatter_s {
   flowmq_scatter_gather_manager_t scatter_manager;
-  turbo_hash_map_t service_breakers;  /* Map<service_name -> circuit_breaker> */
+  hash_map_t service_breakers;  /* Map<service_name -> circuit_breaker> */
 } flowmq_resilient_scatter_t;
 ```
 
@@ -179,7 +179,7 @@ typedef struct flowmq_dlq_s {
 **实现方案**：
 ```c
 typedef struct flowmq_request_coalescer_s {
-  turbo_hash_map_t pending_requests;  /* Map<request_key -> request_batch> */
+  hash_map_t pending_requests;  /* Map<request_key -> request_batch> */
   uint64_t coalesce_window_ms;        /* 合并窗口（如 100ms） */
   flowmq_scatter_gather_manager_t scatter_manager;
 } flowmq_request_coalescer_t;
@@ -239,7 +239,7 @@ dequeue:
 **实现方案**：
 ```c
 typedef struct flowmq_content_router_s {
-  turbo_vec_t subscriptions;  /* Vec<subscription_rule> */
+  vec_t subscriptions;  /* Vec<subscription_rule> */
 } flowmq_content_router_t;
 
 typedef struct subscription_rule_s {
@@ -269,7 +269,7 @@ typedef struct subscription_rule_s {
 **实现方案**：
 ```c
 typedef struct flowmq_batch_aggregator_s {
-  turbo_vec_t current_batch;
+  vec_t current_batch;
   uint32_t batch_size;        /* 大小触发（如 100 条）*/
   uint64_t batch_timeout_ms;  /* 时间触发（如 5 秒） */
   uint64_t batch_start_ns;

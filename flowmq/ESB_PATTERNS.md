@@ -216,7 +216,7 @@ typedef struct {
     tstr group_id;                 /* 组 ID */
     uint64_t generation;             /* Rebalance 世代 */
     turbo_set_t members;             /* 成员列表（最多 32） */
-    turbo_hash_map_t committed_offsets;  /* 已提交 offset */
+    hash_map_t committed_offsets;  /* 已提交 offset */
     int rebalancing;                 /* 是否正在 rebalance */
 } flowmq_stream_consumer_group_t;
 ```
