@@ -1,9 +1,9 @@
 #include "turbo_flow_fmq_retry.h"
 
-#include "flowmq_stl_adapter.h"
+#include "flowmq_stl_error_internal.h"
 #include "turbo_error.h"
 #include <turbostl/hash_map.h>
-#include <turbostl/typed.h>
+#include <turbostl/meta.h>
 #include <turbostl/vec.h>
 
 #include <stdlib.h>
@@ -118,7 +118,7 @@ static int flow_fmq_retry_insert(turbo_flow_fmq_retry_ledger_t *ledger,
   if (flow_fmq_retry_records_push(&ledger->records, stored) != TURBO_OK) return TURBO_ENOMEM;
   index = flow_fmq_retry_records_size(&ledger->records) - 1u;
   if (flow_fmq_retry_index_put(&ledger->index, key, index) != TURBO_OK) {
-    (void)turbo_vec_resize(&ledger->records.raw, index);
+    (void)vec_resize(&ledger->records.raw, index);
     return TURBO_ENOMEM;
   }
   return TURBO_OK;
@@ -147,7 +147,7 @@ static int flow_fmq_retry_remove(turbo_flow_fmq_retry_ledger_t *ledger, size_t i
   } else if (!flow_fmq_retry_index_remove(&ledger->index, removed_key, NULL)) {
     return TURBO_EPROTO;
   }
-  if (turbo_vec_resize(&ledger->records.raw, count - 1u) != TURBO_OK) return TURBO_EPROTO;
+  if (vec_resize(&ledger->records.raw, count - 1u) != TURBO_OK) return TURBO_EPROTO;
   return TURBO_OK;
 }
 
@@ -172,15 +172,15 @@ turbo_flow_fmq_retry_ledger_create(const turbo_flow_fmq_retry_config_t *config) 
   if (!flow_fmq_retry_config_valid(config)) return NULL;
   ledger = (turbo_flow_fmq_retry_ledger_t *)calloc(1, sizeof(*ledger));
   if (!ledger) return NULL;
-  if (turbo_vec_init_bytes(&ledger->records.raw, sizeof(turbo_flow_fmq_retry_record_t),
+  if (vec_init_bytes(&ledger->records.raw, sizeof(turbo_flow_fmq_retry_record_t),
                            _Alignof(turbo_flow_fmq_retry_record_t), config->capacity) !=
-          TURBO_STL_OK ||
-      turbo_hash_map_init_bytes(&ledger->index.raw,
+          STL_OK ||
+      hash_map_init_bytes(&ledger->index.raw,
                                 sizeof(flow_fmq_retry_key_t), _Alignof(flow_fmq_retry_key_t),
                                 sizeof(size_t), _Alignof(size_t), config->capacity,
-                                turbo_hash_bytes, turbo_hash_key_equal, NULL) != TURBO_STL_OK ||
+                                hash_bytes, hash_key_equal, NULL) != STL_OK ||
       flow_fmq_retry_records_reserve(&ledger->records, config->capacity) != TURBO_OK ||
-      turbo_hash_map_reserve(&ledger->index.raw, config->capacity) != TURBO_OK) {
+      hash_map_reserve(&ledger->index.raw, config->capacity) != TURBO_OK) {
     turbo_flow_fmq_retry_ledger_destroy(ledger);
     return NULL;
   }

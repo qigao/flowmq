@@ -4,7 +4,7 @@
  */
 
 #include "flowmq_scatter_gather.h"
-#include "flowmq_stl_adapter.h"
+#include "flowmq_stl_error_internal.h"
 
 #include <turbostl/hash_map.h>
 #include <turbostl/vec.h>
@@ -36,14 +36,14 @@ static int flowmq_scatter_session_init(flowmq_scatter_session_t *session,
   session->client_context = client_context;
 
   /* Pre-allocate partial results vector */
-  if (turbo_vec_init_bytes(&session->partial_results,
+  if (vec_init_bytes(&session->partial_results,
                            sizeof(flowmq_scatter_partial_response_t),
                            _Alignof(flowmq_scatter_partial_response_t),
-                           expected_responses) != TURBO_STL_OK) {
+                           expected_responses) != STL_OK) {
     return TURBO_ENOMEM;
   }
-  if (turbo_vec_reserve(&session->partial_results, expected_responses) != 0) {
-    turbo_vec_destroy(&session->partial_results);
+  if (vec_reserve(&session->partial_results, expected_responses) != 0) {
+    vec_destroy(&session->partial_results);
     return TURBO_ENOMEM;
   }
 
@@ -116,7 +116,7 @@ static int flowmq_scatter_gather_create_session_impl(flowmq_scatter_gather_manag
   }
 
   /* Insert into map */
-  if (turbo_hash_map_put(&manager->sessions, &id, &session) != TURBO_OK) {
+  if (hash_map_put(&manager->sessions, &id, &session) != TURBO_OK) {
     flowmq_scatter_session_cleanup(session);
     free(session);
     return TURBO_ENOMEM;
@@ -133,15 +133,15 @@ void flowmq_scatter_session_cleanup(flowmq_scatter_session_t *session) {
   }
 
   /* Free all partial response payloads */
-  for (size_t i = 0; i < turbo_vec_size(&session->partial_results); i++) {
+  for (size_t i = 0; i < vec_size(&session->partial_results); i++) {
     flowmq_scatter_partial_response_t *resp =
-        (flowmq_scatter_partial_response_t *)turbo_vec_at(&session->partial_results, i);
+        (flowmq_scatter_partial_response_t *)vec_at(&session->partial_results, i);
     if (resp) {
       tstr_free(resp->payload);
     }
   }
 
-  turbo_vec_destroy(&session->partial_results);
+  vec_destroy(&session->partial_results);
   memset(session, 0, sizeof(*session));
 }
 
@@ -186,15 +186,15 @@ int flowmq_scatter_gather_manager_init(flowmq_scatter_gather_manager_t *manager,
   manager->next_correlation_id = 1;  /* Start from 1, 0 reserved for invalid */
 
   /* Initialize session map */
-  if (turbo_hash_map_init_bytes(&manager->sessions,
+  if (hash_map_init_bytes(&manager->sessions,
                                 sizeof(uint64_t), _Alignof(uint64_t),
                                 sizeof(flowmq_scatter_session_t *),
                                 _Alignof(flowmq_scatter_session_t *), max_sessions,
-                                turbo_hash_bytes, turbo_hash_key_equal, NULL) != TURBO_STL_OK) {
+                                hash_bytes, hash_key_equal, NULL) != STL_OK) {
     return TURBO_ENOMEM;
   }
-  if (turbo_hash_map_reserve(&manager->sessions, max_sessions) != 0) {
-    turbo_hash_map_destroy(&manager->sessions);
+  if (hash_map_reserve(&manager->sessions, max_sessions) != 0) {
+    hash_map_destroy(&manager->sessions);
     return TURBO_ENOMEM;
   }
 
@@ -207,9 +207,9 @@ void flowmq_scatter_gather_manager_destroy(flowmq_scatter_gather_manager_t *mana
   }
 
   /* Cleanup all active sessions */
-  for (size_t slot = 0; slot < turbo_hash_map_capacity(&manager->sessions); ++slot) {
+  for (size_t slot = 0; slot < hash_map_capacity(&manager->sessions); ++slot) {
     flowmq_scatter_session_t **session_ptr =
-        (flowmq_scatter_session_t **)turbo_hash_map_value_at(&manager->sessions, slot);
+        (flowmq_scatter_session_t **)hash_map_value_at(&manager->sessions, slot);
     if (!session_ptr || !*session_ptr) {
       continue;
     }
@@ -217,7 +217,7 @@ void flowmq_scatter_gather_manager_destroy(flowmq_scatter_gather_manager_t *mana
     free(*session_ptr);
   }
 
-  turbo_hash_map_destroy(&manager->sessions);
+  hash_map_destroy(&manager->sessions);
   memset(manager, 0, sizeof(*manager));
 }
 
@@ -281,7 +281,7 @@ int flowmq_scatter_gather_record_response(flowmq_scatter_gather_manager_t *manag
 
   /* Find session */
   flowmq_scatter_session_t **session_ptr =
-      (flowmq_scatter_session_t **)turbo_hash_map_get(&manager->sessions, &correlation_id);
+      (flowmq_scatter_session_t **)hash_map_get(&manager->sessions, &correlation_id);
   if (!session_ptr || !*session_ptr) {
     return TURBO_ENOENT;
   }
@@ -299,9 +299,9 @@ int flowmq_scatter_gather_record_response(flowmq_scatter_gather_manager_t *manag
   }
 
   /* Check for duplicate response */
-  for (size_t i = 0; i < turbo_vec_size(&session->partial_results); i++) {
+  for (size_t i = 0; i < vec_size(&session->partial_results); i++) {
     flowmq_scatter_partial_response_t *existing =
-        (flowmq_scatter_partial_response_t *)turbo_vec_at(&session->partial_results, i);
+        (flowmq_scatter_partial_response_t *)vec_at(&session->partial_results, i);
     if (existing && existing->index == index) {
       /* Duplicate - ignore or replace? For now, ignore */
       return TURBO_EALREADY;
@@ -317,7 +317,7 @@ int flowmq_scatter_gather_record_response(flowmq_scatter_gather_manager_t *manag
   *payload = NULL;  /* Clear source */
 
   /* Add to results */
-  if (turbo_vec_push(&session->partial_results, &resp) != TURBO_OK) {
+  if (vec_push(&session->partial_results, &resp) != TURBO_OK) {
     tstr_free(resp.payload);
     return TURBO_ENOMEM;
   }
@@ -346,7 +346,7 @@ int flowmq_scatter_gather_check_session(flowmq_scatter_gather_manager_t *manager
   }
 
   flowmq_scatter_session_t **session_ptr =
-      (flowmq_scatter_session_t **)turbo_hash_map_get(&manager->sessions, &correlation_id);
+      (flowmq_scatter_session_t **)hash_map_get(&manager->sessions, &correlation_id);
   if (!session_ptr || !*session_ptr) {
     return TURBO_ENOENT;
   }
@@ -364,7 +364,7 @@ int flowmq_scatter_gather_finalize_session(flowmq_scatter_gather_manager_t *mana
 
   /* Find and remove session */
   flowmq_scatter_session_t **session_ptr =
-      (flowmq_scatter_session_t **)turbo_hash_map_get(&manager->sessions, &correlation_id);
+      (flowmq_scatter_session_t **)hash_map_get(&manager->sessions, &correlation_id);
   if (!session_ptr || !*session_ptr) {
     return TURBO_ENOENT;
   }
@@ -380,7 +380,7 @@ int flowmq_scatter_gather_finalize_session(flowmq_scatter_gather_manager_t *mana
   *out_session = *session;
 
   /* Remove from map */
-  (void)turbo_hash_map_remove(&manager->sessions, &correlation_id, NULL);
+  (void)hash_map_remove(&manager->sessions, &correlation_id, NULL);
   free(session);  /* Free the pointer, not the session data */
 
   manager->active_sessions--;
@@ -394,7 +394,7 @@ int flowmq_scatter_gather_cancel_session(flowmq_scatter_gather_manager_t *manage
   }
 
   flowmq_scatter_session_t **session_ptr =
-      (flowmq_scatter_session_t **)turbo_hash_map_get(&manager->sessions, &correlation_id);
+      (flowmq_scatter_session_t **)hash_map_get(&manager->sessions, &correlation_id);
   if (!session_ptr || !*session_ptr) {
     return TURBO_ENOENT;
   }
@@ -404,7 +404,7 @@ int flowmq_scatter_gather_cancel_session(flowmq_scatter_gather_manager_t *manage
 
   /* Cleanup and remove */
   flowmq_scatter_session_cleanup(session);
-  (void)turbo_hash_map_remove(&manager->sessions, &correlation_id, NULL);
+  (void)hash_map_remove(&manager->sessions, &correlation_id, NULL);
   free(session);
 
   manager->active_sessions--;
@@ -424,9 +424,9 @@ uint32_t flowmq_scatter_gather_process_timeouts(flowmq_scatter_gather_manager_t 
   uint64_t timed_out_ids[FLOWMQ_SCATTER_GATHER_MAX_SESSIONS];
   uint32_t count = 0;
 
-  for (size_t slot = 0; slot < turbo_hash_map_capacity(&manager->sessions); ++slot) {
+  for (size_t slot = 0; slot < hash_map_capacity(&manager->sessions); ++slot) {
     flowmq_scatter_session_t **session_ptr =
-        (flowmq_scatter_session_t **)turbo_hash_map_value_at(&manager->sessions, slot);
+        (flowmq_scatter_session_t **)hash_map_value_at(&manager->sessions, slot);
     if (!session_ptr || !*session_ptr) {
       continue;
     }
@@ -442,7 +442,7 @@ uint32_t flowmq_scatter_gather_process_timeouts(flowmq_scatter_gather_manager_t 
   /* Mark timed out sessions */
   for (uint32_t i = 0; i < count; i++) {
     flowmq_scatter_session_t **session_ptr =
-        (flowmq_scatter_session_t **)turbo_hash_map_get(&manager->sessions, &timed_out_ids[i]);
+        (flowmq_scatter_session_t **)hash_map_get(&manager->sessions, &timed_out_ids[i]);
     if (session_ptr && *session_ptr) {
       flowmq_scatter_session_t *session = *session_ptr;
       session->state = FLOWMQ_SCATTER_TIMEOUT;

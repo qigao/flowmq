@@ -36,6 +36,7 @@ include(CmakeUtils)
 find_package(TurboUtils CONFIG REQUIRED PATHS "${TURBO_UTILS_ROOT}")
 find_package(TurboParser CONFIG REQUIRED PATHS "${TURBO_PARSER_ROOT}")
 find_package(TurboNet CONFIG REQUIRED PATHS "${TURBO_NET_ROOT}")
+find_package(TurboDB CONFIG REQUIRED PATHS "${TURBODB_ROOT}")
 find_package(OpenSSL CONFIG REQUIRED)
 
 find_program(FLOWMQ_TBE_COMPILER_EXECUTABLE NAMES tbe_compiler
@@ -45,20 +46,14 @@ if(NOT FLOWMQ_TBE_COMPILER_EXECUTABLE)
     "FlowMQ media-provider contract requires the TurboParser tbe_compiler")
 endif()
 
-get_target_property(FLOWMQ_OPENSSL_RELEASE_DLL OpenSSL::SSL IMPORTED_LOCATION_RELEASE)
-if(WIN32 AND FLOWMQ_OPENSSL_RELEASE_DLL)
-  get_filename_component(FLOWMQ_OPENSSL_RELEASE_RUNTIME_DIR
-                         "${FLOWMQ_OPENSSL_RELEASE_DLL}" DIRECTORY)
-endif()
-
 set(FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS
     "PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboNet::CoroNet>"
     "PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboParser::Parser>"
     "PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboParser::DataBind>"
     "PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboUtils::Core>")
-if(WIN32 AND FLOWMQ_OPENSSL_RELEASE_RUNTIME_DIR)
+if(WIN32)
   list(APPEND FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS
-       "PATH=path_list_prepend:${FLOWMQ_OPENSSL_RELEASE_RUNTIME_DIR}")
+       "PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenSSL::SSL>")
 endif()
 if(MSVC)
   get_filename_component(FLOWMQ_COMPILER_RUNTIME_DIR "${CMAKE_C_COMPILER}" DIRECTORY)
@@ -92,8 +87,7 @@ cmake_config_target(
   ALIAS FlowMQ::FlowMQ
   FOLDER "flowmq"
   EXPORT_NAME FlowMQ)
-target_compile_definitions(flowmq
-  PRIVATE SHARED_CXX TBE_GENERATED_BUILD_SHARED)
+target_compile_definitions(flowmq PRIVATE TBE_GENERATED_BUILD_SHARED)
 if(WIN32)
   target_compile_definitions(
     flowmq
@@ -109,7 +103,7 @@ target_include_directories(
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/patterns/src)
 target_link_libraries(flowmq
                       PUBLIC TurboUtils::Core TurboParser::Parser TurboParser::DataBind
-                      PRIVATE TurboUtils::STL TurboNet::CoroNet OpenSSL::SSL)
+                      PRIVATE TurboUtils::STL TurboNet::CoroNet TurboDB::ORM OpenSSL::SSL)
 if(TARGET flowmq_media_provider_codegen)
   add_dependencies(flowmq flowmq_media_provider_codegen)
 endif()

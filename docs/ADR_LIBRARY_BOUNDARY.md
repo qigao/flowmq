@@ -7,7 +7,7 @@ CONNECT endpoint 与 ROUTER/BIND endpoint；未迁移或重写协议数据。
 
 ## 背景
 
-新仓库最初复制了 TurboFlow 顶层工程，根 CMake 仍构建 Graph、FlowStore、Flowie、Gateway 等不存在
+新仓库最初复制了 TurboFlow 顶层工程，根 CMake 仍构建 Graph、旧持久化、Flowie、Gateway 等不存在
 目录；FlowMQ endpoint security 又直接包含 `turbo_flow_fmq.h`。这使新工程既不能独立 configure，
 也无法证明基础消息模式不依赖 Graph。
 

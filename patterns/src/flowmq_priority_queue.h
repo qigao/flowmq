@@ -47,7 +47,7 @@ typedef struct flowmq_priority_message_s {
  * Multi-level FIFO queues indexed by priority.
  */
 typedef struct flowmq_priority_queue_s {
-  turbo_deque_t buckets[FLOWMQ_PRIORITY_LEVELS];  /* Per-priority queues */
+  deque_t buckets[FLOWMQ_PRIORITY_LEVELS];  /* Per-priority queues */
   uint8_t max_priority;                           /* Highest non-empty priority */
   uint64_t total_messages;                        /* Total message count */
   uint64_t max_capacity;                          /* Capacity limit (0=unlimited) */

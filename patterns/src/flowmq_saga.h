@@ -84,7 +84,7 @@ typedef struct flowmq_saga_transaction_s {
                                            runs reverse from this index while in
                                            FLOWMQ_SAGA_RUNTIME_COMPENSATING */
   
-  turbo_vec_t steps;                  /* Vec<flowmq_saga_step_t> */
+  vec_t steps;                  /* Vec<flowmq_saga_step_t> */
   
   void *user_context;                 /* User-defined context */
 } flowmq_saga_transaction_t;
@@ -94,7 +94,7 @@ typedef struct flowmq_saga_transaction_s {
  * Manages multiple concurrent SAGA transactions.
  */
 typedef struct flowmq_saga_coordinator_s {
-  turbo_hash_map_t transactions;      /* Map<saga_id -> flowmq_saga_transaction_t*> */
+  hash_map_t transactions;      /* Map<saga_id -> flowmq_saga_transaction_t*> */
   uint32_t max_transactions;          /* Capacity limit */
   uint64_t next_saga_id;              /* Monotonic ID generator */
 } flowmq_saga_coordinator_t;

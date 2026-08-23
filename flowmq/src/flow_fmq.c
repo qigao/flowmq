@@ -1,6 +1,6 @@
 #include "turbo_flow_fmq.h"
 
-#include "flowmq_stl_adapter.h"
+#include "flowmq_stl_error_internal.h"
 #include "flowmq_connect_endpoint.h"
 #include "flowmq_coronet_transport.h"
 #include "flow_fmq_internal.h"
@@ -22,7 +22,7 @@
 #include "fmt.h"
 #include "turbo_buffer.h"
 #include <turbostl/deque.h>
-#include <turbostl/typed.h>
+#include <turbostl/meta.h>
 #include "turbo_error.h"
 #include "turbo_str.h"
 #include "turbo_thread.h"
@@ -622,7 +622,7 @@ typedef struct flow_fmq_peer_s {
   flowmq_subscription_set_t subscriptions;
   flow_fmq_reader_t reader;
   flow_fmq_peer_send_requests send_queue;
-  turbo_vec_t send_iov;
+  vec_t send_iov;
   tf_io_budget_t send_budget;
   int send_queue_initialized;
   int send_iov_initialized;
@@ -1145,8 +1145,8 @@ struct flow_fmq_adapter_s {
   coro_context_t *ctx;
   coro_socket_t *server;
   flowmq_connect_endpoint_t *connect_endpoint;
-  turbo_vec_t peers;
-  turbo_vec_t security_selection;
+  vec_t peers;
+  vec_t security_selection;
   tstr host;
   tstr path;
   tstr topic;
@@ -1567,20 +1567,20 @@ static int flow_fmq_read_hello(flow_fmq_adapter_t *adapter, coro_socket_t *socke
 
 static int flow_fmq_add_peer(flow_fmq_adapter_t *adapter, flow_fmq_peer_t *peer) {
   int rc;
-  if (turbo_vec_size(&adapter->peers) >= adapter->max_connections) return TURBO_ENOBUFS;
-  if (adapter->pattern == TURBO_FLOW_FMQ_PAIR && !turbo_vec_empty(&adapter->peers)) {
+  if (vec_size(&adapter->peers) >= adapter->max_connections) return TURBO_ENOBUFS;
+  if (adapter->pattern == TURBO_FLOW_FMQ_PAIR && !vec_empty(&adapter->peers)) {
     return TURBO_EBUSY;
   }
   if (adapter->pattern == TURBO_FLOW_FMQ_ROUTER || adapter->fanout_enabled) {
-    for (size_t i = 0; i < turbo_vec_size(&adapter->peers); ++i) {
+    for (size_t i = 0; i < vec_size(&adapter->peers); ++i) {
       flow_fmq_peer_t *const *existing =
-          (flow_fmq_peer_t *const *)turbo_vec_at_const(&adapter->peers, i);
+          (flow_fmq_peer_t *const *)vec_at_const(&adapter->peers, i);
       if (existing && *existing && tstr_cmp((*existing)->identity, peer->identity) == 0) {
         return TURBO_EALREADY;
       }
     }
   }
-  rc = turbo_vec_push(&adapter->peers, &peer);
+  rc = vec_push(&adapter->peers, &peer);
   if (rc == TURBO_OK)
     atomic_fetch_add_explicit(&adapter->connections_current, 1u, memory_order_release);
   return rc;
@@ -1589,8 +1589,8 @@ static int flow_fmq_add_peer(flow_fmq_adapter_t *adapter, flow_fmq_peer_t *peer)
 static flow_fmq_peer_t *flow_fmq_find_peer(flow_fmq_adapter_t *adapter,
                                            flow_fmq_route_token_t route) {
   if (!adapter) return NULL;
-  for (size_t i = 0; i < turbo_vec_size(&adapter->peers); ++i) {
-    flow_fmq_peer_t *const *peer = (flow_fmq_peer_t *const *)turbo_vec_at_const(&adapter->peers, i);
+  for (size_t i = 0; i < vec_size(&adapter->peers); ++i) {
+    flow_fmq_peer_t *const *peer = (flow_fmq_peer_t *const *)vec_at_const(&adapter->peers, i);
     if (peer && *peer &&
         flow_fmq_route_matches(atomic_load_explicit(&adapter->generation, memory_order_acquire),
                                route, (*peer)->route)) {
@@ -1608,16 +1608,16 @@ static int flow_fmq_routes_equal(flow_fmq_route_token_t left, flow_fmq_route_tok
 static void flow_fmq_remove_peer(flow_fmq_adapter_t *adapter, flow_fmq_peer_t *peer) {
   size_t count;
   if (!adapter || !peer) return;
-  count = turbo_vec_size(&adapter->peers);
+  count = vec_size(&adapter->peers);
   for (size_t i = 0; i < count; ++i) {
-    flow_fmq_peer_t **slot = (flow_fmq_peer_t **)turbo_vec_at(&adapter->peers, i);
+    flow_fmq_peer_t **slot = (flow_fmq_peer_t **)vec_at(&adapter->peers, i);
     if (slot && *slot == peer) {
       if (i + 1u < count) {
         flow_fmq_peer_t *const *last =
-            (flow_fmq_peer_t *const *)turbo_vec_at_const(&adapter->peers, count - 1u);
+            (flow_fmq_peer_t *const *)vec_at_const(&adapter->peers, count - 1u);
         *slot = last ? *last : NULL;
       }
-      (void)turbo_vec_resize(&adapter->peers, count - 1u);
+      (void)vec_resize(&adapter->peers, count - 1u);
       atomic_fetch_sub_explicit(&adapter->connections_current, 1u, memory_order_release);
       return;
     }
@@ -1626,8 +1626,8 @@ static void flow_fmq_remove_peer(flow_fmq_adapter_t *adapter, flow_fmq_peer_t *p
 
 static void flow_fmq_interrupt_peers(flow_fmq_adapter_t *adapter) {
   if (!adapter) return;
-  for (size_t i = 0; i < turbo_vec_size(&adapter->peers); ++i) {
-    flow_fmq_peer_t *const *peer = (flow_fmq_peer_t *const *)turbo_vec_at_const(&adapter->peers, i);
+  for (size_t i = 0; i < vec_size(&adapter->peers); ++i) {
+    flow_fmq_peer_t *const *peer = (flow_fmq_peer_t *const *)vec_at_const(&adapter->peers, i);
     if (peer && *peer && (*peer)->socket) {
       flow_fmq_emit_peer_disconnected(adapter, *peer, TURBO_ESHUTDOWN);
       (void)coro_socket_interrupt_wait((*peer)->socket, TURBO_ESHUTDOWN);
@@ -1648,17 +1648,17 @@ static int flow_fmq_peer_send_queue_init(flow_fmq_peer_t *peer) {
         peer->adapter->pattern == TURBO_FLOW_FMQ_PUSH)) {
     return TURBO_OK;
   }
-  if (turbo_deque_init_bytes(&peer->send_queue.raw, sizeof(flow_fmq_send_request_t *),
+  if (deque_init_bytes(&peer->send_queue.raw, sizeof(flow_fmq_send_request_t *),
                              _Alignof(flow_fmq_send_request_t *),
                              peer->adapter->frame_hwm_messages == 0u
                                  ? SIZE_MAX
-                                 : peer->adapter->frame_hwm_messages) != TURBO_STL_OK)
+                                 : peer->adapter->frame_hwm_messages) != STL_OK)
     return TURBO_ENOMEM;
   peer->send_queue_initialized = 1;
   if (peer->adapter->pattern == TURBO_FLOW_FMQ_PUSH) {
-    if (turbo_vec_init_bytes(&peer->send_iov, sizeof(turbo_iovec_t),
+    if (vec_init_bytes(&peer->send_iov, sizeof(turbo_iovec_t),
                              _Alignof(turbo_iovec_t), FLOW_FMQ_PUSH_SENDV_MAX_IOV) !=
-        TURBO_STL_OK) {
+        STL_OK) {
       flow_fmq_peer_send_requests_destroy(&peer->send_queue);
       peer->send_queue_initialized = 0;
       return TURBO_ENOMEM;
@@ -1690,7 +1690,7 @@ static void flow_fmq_peer_send_queue_destroy(flow_fmq_peer_t *peer) {
   if (!peer || !peer->send_queue_initialized) return;
   flow_fmq_peer_send_requests_destroy(&peer->send_queue);
   if (peer->send_iov_initialized) {
-    turbo_vec_destroy(&peer->send_iov);
+    vec_destroy(&peer->send_iov);
     peer->send_iov_initialized = 0;
   }
   if (peer->send_budget_initialized) {
@@ -2188,7 +2188,7 @@ static int flow_fmq_close_resources_call(void *arg) {
 static int flow_fmq_clear_peers_call(void *arg) {
   flow_fmq_adapter_t *adapter = (flow_fmq_adapter_t *)arg;
   if (!adapter) return TURBO_EINVAL;
-  turbo_vec_clear(&adapter->peers);
+  vec_clear(&adapter->peers);
   return TURBO_OK;
 }
 
@@ -2509,11 +2509,11 @@ static int flow_fmq_fanout_selected(flow_fmq_adapter_t *adapter, size_t peer_ind
                                     flow_fmq_peer_t *peer, vstr topic) {
   const uint8_t *selected;
   if (!adapter || !peer || !adapter->security_selection_initialized ||
-      peer_index >= turbo_vec_size(&adapter->security_selection) ||
+      peer_index >= vec_size(&adapter->security_selection) ||
       !flow_fmq_topic_matches(adapter, peer, topic)) {
     return 0;
   }
-  selected = (const uint8_t *)turbo_vec_at_const(&adapter->security_selection, peer_index);
+  selected = (const uint8_t *)vec_at_const(&adapter->security_selection, peer_index);
   return selected && *selected != 0u;
 }
 
@@ -2808,9 +2808,9 @@ static int flow_fmq_push_peer_send_group(flow_fmq_peer_t *peer) {
 
   if (selected_count == 0u) return TURBO_EPROTO;
   if (selected_iov_count > 0u) {
-    rc = turbo_vec_resize(&peer->send_iov, selected_iov_count);
+    rc = vec_resize(&peer->send_iov, selected_iov_count);
     if (rc == TURBO_OK) {
-      iov = (turbo_iovec_t *)turbo_vec_data(&peer->send_iov);
+      iov = (turbo_iovec_t *)vec_data(&peer->send_iov);
       if (!iov) rc = TURBO_EPROTO;
     }
     if (rc != TURBO_OK) {
@@ -2872,7 +2872,7 @@ static int flow_fmq_push_peer_send_group(flow_fmq_peer_t *peer) {
       send_status = TURBO_ESHUTDOWN;
     }
   }
-  (void)turbo_vec_resize(&peer->send_iov, 0u);
+  (void)vec_resize(&peer->send_iov, 0u);
   while (head) {
     flow_fmq_send_request_t *next = head->drop_next;
     request = head;
@@ -2999,10 +2999,10 @@ static void flow_fmq_release_peer_reservations(flow_fmq_adapter_t *adapter, vstr
                                                size_t end_index, size_t frame_bytes) {
   size_t count;
   if (!adapter) return;
-  count = turbo_vec_size(&adapter->peers);
+  count = vec_size(&adapter->peers);
   if (end_index > count) end_index = count;
   for (size_t i = 0; i < end_index; ++i) {
-    flow_fmq_peer_t *const *slot = (flow_fmq_peer_t *const *)turbo_vec_at_const(&adapter->peers, i);
+    flow_fmq_peer_t *const *slot = (flow_fmq_peer_t *const *)vec_at_const(&adapter->peers, i);
     if (!slot || !*slot || !flow_fmq_fanout_selected(adapter, i, *slot, topic)) continue;
     (void)tf_io_budget_release(&(*slot)->send_budget, frame_bytes);
   }
@@ -3011,8 +3011,8 @@ static void flow_fmq_release_peer_reservations(flow_fmq_adapter_t *adapter, vstr
 static void flow_fmq_rollback_fanout_enqueue(flow_fmq_adapter_t *adapter,
                                              flow_fmq_send_request_t *request, vstr topic) {
   if (!adapter || !request) return;
-  for (size_t i = 0; i < turbo_vec_size(&adapter->peers); ++i) {
-    flow_fmq_peer_t *const *slot = (flow_fmq_peer_t *const *)turbo_vec_at_const(&adapter->peers, i);
+  for (size_t i = 0; i < vec_size(&adapter->peers); ++i) {
+    flow_fmq_peer_t *const *slot = (flow_fmq_peer_t *const *)vec_at_const(&adapter->peers, i);
     flow_fmq_send_request_t **back;
     flow_fmq_send_request_t *removed = NULL;
     if (!slot || !*slot || !flow_fmq_fanout_selected(adapter, i, *slot, topic)) continue;
@@ -3045,7 +3045,7 @@ static int flow_fmq_peer_selection_begin(flow_fmq_adapter_t *adapter,
   if (!adapter || !iterator) return TURBO_EINVAL;
   *iterator = (turbo_flow_pattern_selection_iterator_t)TURBO_FLOW_PATTERN_SELECTION_ITERATOR_INIT;
   return turbo_flow_pattern_selection_begin(&adapter->selector, selection,
-                                            turbo_vec_size(&adapter->peers), iterator);
+                                            vec_size(&adapter->peers), iterator);
 }
 
 static int flow_fmq_enqueue_fanout(flow_fmq_send_request_t *request, vstr topic) {
@@ -3059,21 +3059,21 @@ static int flow_fmq_enqueue_fanout(flow_fmq_send_request_t *request, vstr topic)
     return TURBO_EINVAL;
   }
   if (!adapter->security_selection_initialized) return TURBO_EPROTO;
-  memset(turbo_vec_data(&adapter->security_selection), 0,
-         turbo_vec_size(&adapter->security_selection));
+  memset(vec_data(&adapter->security_selection), 0,
+         vec_size(&adapter->security_selection));
   rc = flow_fmq_peer_selection_begin(adapter, TURBO_FLOW_PATTERN_SELECT_FAN_OUT, &selection);
   if (rc == TURBO_ENOENT) return TURBO_ENOTCONN;
   if (rc != TURBO_OK) return rc;
   while ((rc = turbo_flow_pattern_selection_next(&selection, &peer_index)) == TURBO_OK) {
     flow_fmq_peer_t *const *slot =
-        (flow_fmq_peer_t *const *)turbo_vec_at_const(&adapter->peers, peer_index);
+        (flow_fmq_peer_t *const *)vec_at_const(&adapter->peers, peer_index);
     uint8_t *selected;
     if (!slot || !*slot || !flow_fmq_topic_matches(adapter, *slot, topic)) continue;
     if (flow_fmq_peer_authorize(adapter, *slot, TURBO_FLOW_SECURITY_ACTION_READ, topic, 1) !=
         TURBO_OK) {
       continue;
     }
-    selected = (uint8_t *)turbo_vec_at(&adapter->security_selection, peer_index);
+    selected = (uint8_t *)vec_at(&adapter->security_selection, peer_index);
     if (!selected) return TURBO_EPROTO;
     *selected = 1u;
     matched += 1u;
@@ -3087,7 +3087,7 @@ static int flow_fmq_enqueue_fanout(flow_fmq_send_request_t *request, vstr topic)
   if (rc != TURBO_OK) return rc;
   while ((rc = turbo_flow_pattern_selection_next(&selection, &peer_index)) == TURBO_OK) {
     flow_fmq_peer_t *const *slot =
-        (flow_fmq_peer_t *const *)turbo_vec_at_const(&adapter->peers, peer_index);
+        (flow_fmq_peer_t *const *)vec_at_const(&adapter->peers, peer_index);
     flow_fmq_peer_t *peer;
     if (!slot || !(peer = *slot) ||
         !flow_fmq_fanout_selected(adapter, peer_index, peer, topic))
@@ -3133,7 +3133,7 @@ static int flow_fmq_enqueue_fanout(flow_fmq_send_request_t *request, vstr topic)
   }
   while ((rc = turbo_flow_pattern_selection_next(&selection, &peer_index)) == TURBO_OK) {
     flow_fmq_peer_t *const *slot =
-        (flow_fmq_peer_t *const *)turbo_vec_at_const(&adapter->peers, peer_index);
+        (flow_fmq_peer_t *const *)vec_at_const(&adapter->peers, peer_index);
     if (!slot || !*slot || !flow_fmq_fanout_selected(adapter, peer_index, *slot, topic)) continue;
     rc = flow_fmq_peer_send_requests_push_back(&(*slot)->send_queue, request);
     if (rc != TURBO_OK) {
@@ -3152,7 +3152,7 @@ static int flow_fmq_enqueue_fanout(flow_fmq_send_request_t *request, vstr topic)
   }
   while ((rc = turbo_flow_pattern_selection_next(&selection, &peer_index)) == TURBO_OK) {
     flow_fmq_peer_t *const *slot =
-        (flow_fmq_peer_t *const *)turbo_vec_at_const(&adapter->peers, peer_index);
+        (flow_fmq_peer_t *const *)vec_at_const(&adapter->peers, peer_index);
     if (!slot || !*slot || !flow_fmq_fanout_selected(adapter, peer_index, *slot, topic)) continue;
     rc = flow_fmq_schedule_peer_send_drain(*slot);
     if (rc != TURBO_OK) {
@@ -3196,12 +3196,12 @@ static int flow_fmq_send_frame_now(flow_fmq_send_request_t *request) {
     }
     if (adapter->fanout_enabled) return flow_fmq_enqueue_fanout(request, topic);
     rc = turbo_flow_pattern_selection_begin(&adapter->selector, TURBO_FLOW_PATTERN_SELECT_FAN_OUT,
-                                            turbo_vec_size(&adapter->peers), &selection);
+                                            vec_size(&adapter->peers), &selection);
     if (rc == TURBO_ENOENT) return TURBO_ENOTCONN;
     if (rc != TURBO_OK) return rc;
     while ((rc = turbo_flow_pattern_selection_next(&selection, &peer_index)) == TURBO_OK) {
       flow_fmq_peer_t *const *peer =
-          (flow_fmq_peer_t *const *)turbo_vec_at_const(&adapter->peers, peer_index);
+          (flow_fmq_peer_t *const *)vec_at_const(&adapter->peers, peer_index);
       int peer_rc;
       if (!peer || !*peer || !flow_fmq_topic_matches(adapter, *peer, topic)) continue;
       if (flow_fmq_peer_authorize(adapter, *peer, TURBO_FLOW_SECURITY_ACTION_READ, topic, 1) !=
@@ -3224,7 +3224,7 @@ static int flow_fmq_send_frame_now(flow_fmq_send_request_t *request) {
     return TURBO_OK;
   }
   if (adapter->pattern == TURBO_FLOW_FMQ_PUSH) {
-    size_t count = turbo_vec_size(&adapter->peers);
+    size_t count = vec_size(&adapter->peers);
     size_t index;
     flow_fmq_peer_t *const *peer = NULL;
     vstr topic;
@@ -3239,7 +3239,7 @@ static int flow_fmq_send_frame_now(flow_fmq_send_request_t *request) {
       if (rc != TURBO_OK) return rc;
       rc = turbo_flow_pattern_selection_next(&selection, &index);
       if (rc != TURBO_OK) return rc;
-      peer = (flow_fmq_peer_t *const *)turbo_vec_at_const(&adapter->peers, index);
+      peer = (flow_fmq_peer_t *const *)vec_at_const(&adapter->peers, index);
       if (peer && *peer &&
           flow_fmq_peer_authorize(adapter, *peer, TURBO_FLOW_SECURITY_ACTION_READ, topic, 0) ==
               TURBO_OK) {
@@ -3807,7 +3807,7 @@ static void flow_fmq_send_bind_pub_batch(flow_fmq_send_batch_t *batch) {
     }
   }
   rc = turbo_flow_pattern_selection_begin(&adapter->selector, TURBO_FLOW_PATTERN_SELECT_FAN_OUT,
-                                          turbo_vec_size(&adapter->peers), &selection);
+                                          vec_size(&adapter->peers), &selection);
   if (rc == TURBO_ENOENT) {
     flow_fmq_send_batch_finish_items(batch);
     return;
@@ -3822,7 +3822,7 @@ static void flow_fmq_send_bind_pub_batch(flow_fmq_send_batch_t *batch) {
   while ((rc = turbo_flow_pattern_selection_next(&selection, &peer_index)) == TURBO_OK) {
     flow_fmq_profile_batch_socket_sample_t socket_sample;
     flow_fmq_peer_t *const *peer =
-        (flow_fmq_peer_t *const *)turbo_vec_at_const(&adapter->peers, peer_index);
+        (flow_fmq_peer_t *const *)vec_at_const(&adapter->peers, peer_index);
     size_t iovcnt = 0u;
     size_t frame_count = 0u;
     int complete_peer_iov;
@@ -3900,7 +3900,7 @@ static int flow_fmq_select_push_peer(flow_fmq_adapter_t *adapter, vstr topic,
   if (rc != TURBO_OK) return rc;
   while ((rc = turbo_flow_pattern_selection_next(&selection, &peer_index)) == TURBO_OK) {
     flow_fmq_peer_t *const *slot =
-        (flow_fmq_peer_t *const *)turbo_vec_at_const(&adapter->peers, peer_index);
+        (flow_fmq_peer_t *const *)vec_at_const(&adapter->peers, peer_index);
     flow_fmq_peer_t *peer;
     if (!slot || !(peer = *slot) || peer->closing || !peer->send_queue_initialized) continue;
     if (peer->send_drain_active && !peer->push_dispatch_reserved) {
@@ -3920,9 +3920,9 @@ static int flow_fmq_select_push_peer(flow_fmq_adapter_t *adapter, vstr topic,
 
 static void flow_fmq_clear_push_dispatch_reservations(flow_fmq_adapter_t *adapter) {
   if (!adapter) return;
-  for (size_t i = 0u; i < turbo_vec_size(&adapter->peers); ++i) {
+  for (size_t i = 0u; i < vec_size(&adapter->peers); ++i) {
     flow_fmq_peer_t *const *slot =
-        (flow_fmq_peer_t *const *)turbo_vec_at_const(&adapter->peers, i);
+        (flow_fmq_peer_t *const *)vec_at_const(&adapter->peers, i);
     if (slot && *slot) (*slot)->push_dispatch_reserved = 0;
   }
 }
@@ -3947,7 +3947,7 @@ static int flow_fmq_send_bind_push_batch(flow_fmq_send_batch_t *batch) {
   size_t assigned = 0u;
   int rc = TURBO_OK;
   if (!batch || !(adapter = batch->adapter)) return TURBO_EINVAL;
-  candidate_count = turbo_vec_size(&adapter->peers);
+  candidate_count = vec_size(&adapter->peers);
   flow_fmq_clear_push_dispatch_reservations(adapter);
   for (size_t i = 0u; i < batch->count; ++i) {
     flow_fmq_send_batch_item_t *item = &batch->items[i];
@@ -3989,9 +3989,9 @@ static int flow_fmq_send_bind_push_batch(flow_fmq_send_batch_t *batch) {
     return TURBO_OK;
   }
 
-  for (size_t peer_index = 0u; peer_index < turbo_vec_size(&adapter->peers); ++peer_index) {
+  for (size_t peer_index = 0u; peer_index < vec_size(&adapter->peers); ++peer_index) {
     flow_fmq_peer_t *const *slot =
-        (flow_fmq_peer_t *const *)turbo_vec_at_const(&adapter->peers, peer_index);
+        (flow_fmq_peer_t *const *)vec_at_const(&adapter->peers, peer_index);
     flow_fmq_peer_t *peer;
     size_t peer_count = 0u;
     if (!slot || !(peer = *slot) || !peer->push_dispatch_reserved) continue;
@@ -4024,9 +4024,9 @@ static int flow_fmq_send_bind_push_batch(flow_fmq_send_batch_t *batch) {
       flow_fmq_complete_push_batch_item(batch, i, batch->items[i].status);
     }
   }
-  for (size_t peer_index = 0u; peer_index < turbo_vec_size(&adapter->peers); ++peer_index) {
+  for (size_t peer_index = 0u; peer_index < vec_size(&adapter->peers); ++peer_index) {
     flow_fmq_peer_t *const *slot =
-        (flow_fmq_peer_t *const *)turbo_vec_at_const(&adapter->peers, peer_index);
+        (flow_fmq_peer_t *const *)vec_at_const(&adapter->peers, peer_index);
     flow_fmq_peer_t *peer;
     if (!slot || !(peer = *slot) || !peer->push_dispatch_reserved) continue;
     peer->push_dispatch_reserved = 0;
@@ -4039,9 +4039,9 @@ static int flow_fmq_send_bind_push_batch(flow_fmq_send_batch_t *batch) {
   return TURBO_OK;
 
 rollback_peer_queues:
-  for (size_t peer_index = 0u; peer_index < turbo_vec_size(&adapter->peers); ++peer_index) {
+  for (size_t peer_index = 0u; peer_index < vec_size(&adapter->peers); ++peer_index) {
     flow_fmq_peer_t *const *slot =
-        (flow_fmq_peer_t *const *)turbo_vec_at_const(&adapter->peers, peer_index);
+        (flow_fmq_peer_t *const *)vec_at_const(&adapter->peers, peer_index);
     flow_fmq_send_request_t *removed = NULL;
     if (!slot || !*slot || !(*slot)->push_dispatch_reserved) continue;
     while (flow_fmq_peer_send_requests_pop_front(&(*slot)->send_queue, &removed)) {
@@ -4070,7 +4070,7 @@ static int flow_fmq_dispatch_push_request(flow_fmq_send_request_t *request) {
   if (!request || !(adapter = request->adapter)) return TURBO_EINVAL;
   rc = flow_fmq_request_encoded_topic(request, adapter->max_frame_size, &topic);
   if (rc != TURBO_OK) return rc;
-  rc = flow_fmq_select_push_peer(adapter, topic, turbo_vec_size(&adapter->peers), &peer);
+  rc = flow_fmq_select_push_peer(adapter, topic, vec_size(&adapter->peers), &peer);
   if (rc != TURBO_OK) return rc;
   request->route = peer->route;
   rc = flow_fmq_reserve_peer_queue_slot(peer);
@@ -5272,10 +5272,10 @@ static void flow_fmq_shutdown(void *ctx) {
   tf_coronet_execution_destroy(&adapter->execution);
   flowmq_security_binding_destroy(&adapter->security);
   if (adapter->security_selection_initialized) {
-    turbo_vec_destroy(&adapter->security_selection);
+    vec_destroy(&adapter->security_selection);
     adapter->security_selection_initialized = 0;
   }
-  turbo_vec_destroy(&adapter->peers);
+  vec_destroy(&adapter->peers);
   tstr_freep(&adapter->host);
   tstr_freep(&adapter->path);
   tstr_freep(&adapter->topic);
@@ -5532,16 +5532,16 @@ flow_fmq_register_adapter_internal(turbo_flow_t *flow, const char *name,
     free(adapter);
     return rc;
   }
-  if (turbo_vec_init_bytes(
+  if (vec_init_bytes(
           &adapter->peers, sizeof(flow_fmq_peer_t *), _Alignof(flow_fmq_peer_t *),
           config->max_connections ? config->max_connections
-                                  : TURBO_FLOW_FMQ_DEFAULT_MAX_CONNECTIONS) != TURBO_STL_OK) {
+                                  : TURBO_FLOW_FMQ_DEFAULT_MAX_CONNECTIONS) != STL_OK) {
     free(adapter);
     return TURBO_ENOMEM;
   }
   rc = flowmq_security_binding_init(&adapter->security, config->mode, config->transport, security);
   if (rc != TURBO_OK) {
-    turbo_vec_destroy(&adapter->peers);
+    vec_destroy(&adapter->peers);
     free(adapter);
     return rc;
   }
@@ -5549,7 +5549,7 @@ flow_fmq_register_adapter_internal(turbo_flow_t *flow, const char *name,
     rc = tf_coronet_execution_init(&adapter->execution, execution);
     if (rc != TURBO_OK) {
       flowmq_security_binding_destroy(&adapter->security);
-      turbo_vec_destroy(&adapter->peers);
+      vec_destroy(&adapter->peers);
       free(adapter);
       return rc;
     }
@@ -5559,7 +5559,7 @@ flow_fmq_register_adapter_internal(turbo_flow_t *flow, const char *name,
       if (rc != TURBO_OK) {
         tf_coronet_execution_destroy(&adapter->execution);
         flowmq_security_binding_destroy(&adapter->security);
-        turbo_vec_destroy(&adapter->peers);
+        vec_destroy(&adapter->peers);
         free(adapter);
         return rc;
       }
@@ -5570,7 +5570,7 @@ flow_fmq_register_adapter_internal(turbo_flow_t *flow, const char *name,
     if (rc != TURBO_OK) {
       tf_coronet_execution_destroy(&adapter->execution);
       flowmq_security_binding_destroy(&adapter->security);
-      turbo_vec_destroy(&adapter->peers);
+      vec_destroy(&adapter->peers);
       free(adapter);
       return rc;
     }
@@ -5699,15 +5699,15 @@ flow_fmq_register_adapter_internal(turbo_flow_t *flow, const char *name,
     adapter->fanout = *fanout;
     adapter->fanout.size = sizeof(adapter->fanout);
     adapter->fanout_enabled = 1;
-    rc = turbo_vec_init_bytes(&adapter->security_selection, sizeof(uint8_t),
+    rc = vec_init_bytes(&adapter->security_selection, sizeof(uint8_t),
                               _Alignof(uint8_t), adapter->max_connections);
-    if (rc == TURBO_STL_OK) {
+    if (rc == STL_OK) {
       adapter->security_selection_initialized = 1;
-      rc = turbo_vec_resize(&adapter->security_selection, adapter->max_connections);
+      rc = vec_resize(&adapter->security_selection, adapter->max_connections);
     }
-    if (rc != TURBO_STL_OK) {
+    if (rc != STL_OK) {
       flow_fmq_shutdown(adapter);
-      return flowmq_stl_status_to_error((turbo_stl_status)rc);
+      return flowmq_stl_error((stl_status)rc);
     }
   }
   atomic_init(&adapter->started, 0);
@@ -5770,11 +5770,11 @@ flow_fmq_register_adapter_internal(turbo_flow_t *flow, const char *name,
     }
     adapter->ctx = flowmq_connect_endpoint_context(adapter->connect_endpoint);
   }
-  if (turbo_deque_init_bytes(&adapter->send_queue.raw, sizeof(flow_fmq_send_request_t *),
+  if (deque_init_bytes(&adapter->send_queue.raw, sizeof(flow_fmq_send_request_t *),
                              _Alignof(flow_fmq_send_request_t *),
                              adapter->frame_hwm_messages == 0u
                                  ? SIZE_MAX
-                                 : adapter->frame_hwm_messages) != TURBO_STL_OK) {
+                                 : adapter->frame_hwm_messages) != STL_OK) {
     flow_fmq_shutdown(adapter);
     return TURBO_ENOMEM;
   }
@@ -6202,10 +6202,10 @@ static int flow_fmq_app_allocate(turbo_flow_fmq_pattern_t pattern,
   if (!out || !flow_fmq_app_options_validate(options)) return TURBO_EINVAL;
   app = (turbo_flow_fmq_app_t *)calloc(1, sizeof(*app));
   if (!app) return TURBO_ENOMEM;
-  if (turbo_deque_init_bytes(&app->async_requests.raw,
+  if (deque_init_bytes(&app->async_requests.raw,
                              sizeof(flow_fmq_app_async_request_t),
                              _Alignof(flow_fmq_app_async_request_t),
-                             TURBO_FLOW_FMQ_APP_ASYNC_SEND_MAX_QUEUE_ITEMS) != TURBO_STL_OK) {
+                             TURBO_FLOW_FMQ_APP_ASYNC_SEND_MAX_QUEUE_ITEMS) != STL_OK) {
     free(app);
     return TURBO_ENOMEM;
   }

@@ -20,7 +20,7 @@ TFMP/1 采用三条彼此独立的契约：
 | --- | --- | --- | --- |
 | Management RPC | `DEALER -> ROUTER` | capability、查询、operation acceptance/result | 管理 owner/资源 owner |
 | Live event | `PUB -> SUB` | 状态变化提示、operation 进度、故障通知 | 非事实源，仅派生通知 |
-| Operation store | memory/SQLite/Redis/PG adapter | 幂等记录、长操作状态、可选 event journal | operation owner |
+| Operation repository | memory/TurboDB ORM | 幂等记录、长操作状态、可选 event journal | operation owner |
 
 该分层遵循 [ZeroMQ Guide Chapter 7](https://zguide.zeromq.org/docs/chapter7/)
 的 control/data 分离与“先固化 contract，再扩展实现”原则，但 TFMP/1 与 ZeroMQ
@@ -509,7 +509,7 @@ FMQ ROUTER stage
   decode/validate
        |
        v
-typed management command owner ---- operation store
+typed management command owner ---- operation repository
        |
        +---- resource/flow owner command
        |
@@ -520,7 +520,7 @@ accept/query result -> encode correlated response
 ```
 
 - ROUTER stage 是薄 adapter，只拥有 request/response bytes 与当前 route，不拥有 target 状态。
-- management command owner 显式注入 target registry、operation store 与 event sink；不使用
+- management command owner 显式注入 target registry、operation repository 与 event sink；不使用
   singleton 或 service locator。
 - owner mailbox 有界，命令按值复制，并在指定 CoroNet owner lane 执行。现有
   `tf_coronet_actor_t` 可复用 placement、deadline、close/drain 语义，但其 `int status` reply
@@ -540,11 +540,11 @@ transport 仍放在 `kind: fmq` adapter；TFMP policy 放在独立 `kind: fmq_ma
 
 该 channel 要求专用且已解析的 `pattern: router` FMQ adapter，拒绝 raw UDP、未知字段、
 非 1/0 协议版本、超过 dedup 容量的 mailbox，以及大于 mailbox capacity 的 per-target inflight。
-`operation_store: memory` 明确选择 volatile owner；其他值必须引用已解析的 `kind: blob_store`
-channel。宿主再用 SQLite/Redis provider 的 `*_blob_store_create_resolved()` 创建 store，并通过
-`turbo_flow_tfmp_management_service_create_configured()` 注入；引用缺失、backend 错误、store 不可用
-均启动失败且不降级。`event_replay_store: memory` 只提供当前 incarnation 的有界 replay；外部
-值必须引用同一个 `operation_store`，以保证 operation/event 单 snapshot outbox。拆分两个 store
+`operation_repository: memory` 明确选择 volatile owner；其他值必须引用已解析的
+`kind: orm_repository` channel。宿主打开 TurboDB ORM connection，并通过
+`turbo_flow_tfmp_management_service_create_configured()` 注入；引用缺失、driver 错误、repository 不可用
+均启动失败且不降级。`event_replay_repository: memory` 只提供当前 incarnation 的有界 replay；外部
+值必须引用同一个 `operation_repository`，以保证 operation/event 单 snapshot outbox。拆分两个 repository
 会在启动时失败。
 `flowmq/examples/fmq.yml` 给出 SQLite 装配配置。
 
@@ -561,11 +561,11 @@ YAML schema：
 | `max_request_bytes` / `max_reply_bytes` | 是 | 不超过 protocol 上限 |
 | `max_inflight_per_target` | 是 | 正整数，且不超过 `mailbox_capacity` |
 | `dedup_capacity` / `dedup_ttl_ms` | 是 | 正整数；active 不淘汰 |
-| `operation_store` | 否 | `memory` 或 SQLite/Redis `kind: blob_store` channel reference |
-| `event_replay_store` | 否 | `memory` 或与 `operation_store` 相同的 `blob_store` reference |
+| `operation_repository` | 否 | `memory` 或 TurboDB `kind: orm_repository` channel reference |
+| `event_replay_repository` | 否 | `memory` 或与 `operation_repository` 相同的 ORM repository reference |
 | `shutdown_timeout_ms` | 是 | close -> drain 的有界期限 |
 
-未知字段、未知 adapter reference、raw UDP RPC、durable capability 无 store、event capability 无
+未知字段、未知 adapter reference、raw UDP RPC、durable capability 无 repository、event capability 无
 publisher 都必须在启动时 fail fast。命令行和环境变量若覆盖这些值，仍需走同一 schema 校验。
 
 ## 10. 当前协议边界

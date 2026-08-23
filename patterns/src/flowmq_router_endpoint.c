@@ -1,5 +1,5 @@
 #include "flowmq_router_endpoint.h"
-#include "flowmq_stl_adapter.h"
+#include "flowmq_stl_error_internal.h"
 
 #include "flowmq_coronet_transport.h"
 #include "flowmq_pattern.h"
@@ -30,7 +30,7 @@ struct flowmq_router_endpoint_s {
   coro_socket_t *server;
   turbo_thread_t loop_thread;
   int loop_thread_started;
-  turbo_vec_t peers;
+  vec_t peers;
   int peers_initialized;
   tstr host;
   tstr path;
@@ -121,13 +121,13 @@ static void flowmq_router_emit(flowmq_router_endpoint_t *endpoint,
 
 static flowmq_router_peer_t *flowmq_router_find_peer(flowmq_router_endpoint_t *endpoint,
                                                      flowmq_router_route_t route) {
-  size_t count = turbo_vec_size(&endpoint->peers);
+  size_t count = vec_size(&endpoint->peers);
   if (route.endpoint_id != endpoint->endpoint_id || route.generation != endpoint->generation ||
       route.session_id == 0u)
     return NULL;
   for (size_t index = 0u; index < count; ++index) {
     flowmq_router_peer_t *const *slot =
-        (flowmq_router_peer_t *const *)turbo_vec_at_const(&endpoint->peers, index);
+        (flowmq_router_peer_t *const *)vec_at_const(&endpoint->peers, index);
     if (slot && *slot && (*slot)->route.session_id == route.session_id) return *slot;
   }
   return NULL;
@@ -135,27 +135,27 @@ static flowmq_router_peer_t *flowmq_router_find_peer(flowmq_router_endpoint_t *e
 
 static int flowmq_router_add_peer(flowmq_router_endpoint_t *endpoint,
                                   flowmq_router_peer_t *peer) {
-  size_t count = turbo_vec_size(&endpoint->peers);
+  size_t count = vec_size(&endpoint->peers);
   if (count >= endpoint->config.max_connections) return TURBO_ENOBUFS;
   for (size_t index = 0u; index < count; ++index) {
     flowmq_router_peer_t *const *slot =
-        (flowmq_router_peer_t *const *)turbo_vec_at_const(&endpoint->peers, index);
+        (flowmq_router_peer_t *const *)vec_at_const(&endpoint->peers, index);
     if (slot && *slot && tstr_cmp((*slot)->identity, peer->identity) == 0)
       return TURBO_EALREADY;
   }
-  if (turbo_vec_push(&endpoint->peers, &peer) != TURBO_OK) return TURBO_ENOMEM;
+  if (vec_push(&endpoint->peers, &peer) != TURBO_OK) return TURBO_ENOMEM;
   atomic_fetch_add_explicit(&endpoint->connections_current, 1u, memory_order_release);
   return TURBO_OK;
 }
 
 static void flowmq_router_remove_peer(flowmq_router_endpoint_t *endpoint,
                                       flowmq_router_peer_t *peer) {
-  size_t count = turbo_vec_size(&endpoint->peers);
+  size_t count = vec_size(&endpoint->peers);
   for (size_t index = 0u; index < count; ++index) {
     flowmq_router_peer_t *const *slot =
-        (flowmq_router_peer_t *const *)turbo_vec_at_const(&endpoint->peers, index);
+        (flowmq_router_peer_t *const *)vec_at_const(&endpoint->peers, index);
     if (slot && *slot == peer) {
-      (void)turbo_vec_swap_remove(&endpoint->peers, index, NULL);
+      (void)vec_swap_remove(&endpoint->peers, index, NULL);
       atomic_fetch_sub_explicit(&endpoint->connections_current, 1u, memory_order_release);
       return;
     }
@@ -570,16 +570,16 @@ int flowmq_router_endpoint_create(const flowmq_router_endpoint_config_t *config,
   turbo_mutex_init(&endpoint->mutex);
   turbo_cond_init(&endpoint->changed);
   endpoint->sync_initialized = 1;
-  rc = turbo_vec_init_bytes(&endpoint->peers, sizeof(flowmq_router_peer_t *),
+  rc = vec_init_bytes(&endpoint->peers, sizeof(flowmq_router_peer_t *),
                             _Alignof(flowmq_router_peer_t *), config->max_connections);
-  if (rc == TURBO_STL_OK) endpoint->peers_initialized = 1;
-  if (rc == TURBO_STL_OK) rc = turbo_vec_reserve(&endpoint->peers, config->max_connections);
-  if (rc == TURBO_STL_OK)
+  if (rc == STL_OK) endpoint->peers_initialized = 1;
+  if (rc == STL_OK) rc = vec_reserve(&endpoint->peers, config->max_connections);
+  if (rc == STL_OK)
     rc = flowmq_posted_send_init(&endpoint->posted_send, endpoint->context,
                                  endpoint, flowmq_router_execute_posted_send,
                                  &config->send_admission);
   else
-    rc = flowmq_stl_status_to_error((turbo_stl_status)rc);
+    rc = flowmq_stl_error((stl_status)rc);
   if (rc != TURBO_OK) {
     flowmq_router_endpoint_destroy(endpoint);
     return rc;
@@ -674,7 +674,7 @@ void flowmq_router_endpoint_destroy(flowmq_router_endpoint_t *endpoint) {
   if (!endpoint) return;
   flowmq_router_endpoint_stop(endpoint);
   flowmq_posted_send_destroy(&endpoint->posted_send);
-  if (endpoint->peers_initialized) turbo_vec_destroy(&endpoint->peers);
+  if (endpoint->peers_initialized) vec_destroy(&endpoint->peers);
   if (endpoint->sync_initialized) {
     turbo_cond_destroy(&endpoint->changed);
     turbo_mutex_destroy(&endpoint->mutex);

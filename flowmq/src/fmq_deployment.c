@@ -1,10 +1,10 @@
 #include "turbo_flow_fmq_deployment.h"
 
-#include "flowmq_stl_adapter.h"
+#include "flowmq_stl_error_internal.h"
 #include "turbo_error.h"
 #include "turbo_str.h"
 #include <turbostl/vec.h>
-#include <turbostl/typed.h>
+#include <turbostl/meta.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -235,14 +235,14 @@ int turbo_flow_fmq_deployment_controller_create(const turbo_flow_fmq_deployment_
   controller = (turbo_flow_fmq_deployment_controller_t *)calloc(1u, sizeof(*controller));
   if (!controller) return TURBO_ENOMEM;
   controller->config = *config;
-  if (turbo_vec_init_bytes(&controller->members.raw,
+  if (vec_init_bytes(&controller->members.raw,
                            sizeof(flow_fmq_deployment_member_record_t),
                            _Alignof(flow_fmq_deployment_member_record_t),
-                           config->member_capacity) != TURBO_STL_OK ||
-      turbo_vec_init_bytes(&controller->routes.raw,
+                           config->member_capacity) != STL_OK ||
+      vec_init_bytes(&controller->routes.raw,
                            sizeof(turbo_flow_fmq_route_snapshot_t),
                            _Alignof(turbo_flow_fmq_route_snapshot_t),
-                           config->member_capacity) != TURBO_STL_OK ||
+                           config->member_capacity) != STL_OK ||
       flow_fmq_deployment_members_reserve(&controller->members, config->member_capacity) !=
           TURBO_OK ||
       flow_fmq_deployment_routes_reserve(&controller->routes, config->member_capacity) !=
@@ -346,7 +346,7 @@ int turbo_flow_fmq_deployment_apply(turbo_flow_fmq_deployment_controller_t *cont
     } else if (command->kind == TURBO_FLOW_FMQ_MEMBERSHIP_DRAIN) {
       record->value.state = TURBO_FLOW_FMQ_MEMBER_DRAINING;
     } else {
-      rc = turbo_vec_swap_remove(&controller->members.raw, (size_t)index, NULL);
+      rc = vec_swap_remove(&controller->members.raw, (size_t)index, NULL);
       if (rc != TURBO_OK) return rc;
       record = NULL;
     }
@@ -398,7 +398,7 @@ int turbo_flow_fmq_deployment_tick(turbo_flow_fmq_deployment_controller_t *contr
              strlen(record->value.logical_route) + 1u);
       ++affected_count;
     }
-    rc = turbo_vec_swap_remove(&controller->members.raw, i - 1u, NULL);
+    rc = vec_swap_remove(&controller->members.raw, i - 1u, NULL);
     if (rc != TURBO_OK) return rc;
     ++*expired_count;
   }

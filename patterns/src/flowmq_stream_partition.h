@@ -57,7 +57,7 @@ typedef struct flowmq_stream_partition_s {
   uint64_t high_watermark;      /* Next offset to assign */
   uint64_t low_watermark;       /* Oldest retained offset */
   
-  turbo_deque_t messages;       /* Deque<flowmq_stream_message_t> */
+  deque_t messages;       /* Deque<flowmq_stream_message_t> */
   
   /* Capacity limits */
   uint32_t max_messages;        /* Message count limit */
@@ -78,7 +78,7 @@ typedef struct flowmq_stream_consumer_s {
   uint64_t last_heartbeat_ns;   /* Last heartbeat */
   
   /* Assigned partitions */
-  turbo_hash_set_t assigned_partitions;  /* HashSet<uint32_t> */
+  hash_set_t assigned_partitions;  /* HashSet<uint32_t> */
 } flowmq_stream_consumer_t;
 
 /**
@@ -89,8 +89,8 @@ typedef struct flowmq_stream_consumer_group_s {
   tstr group_id;              /* Group identifier (owned) */
   uint64_t generation;          /* Rebalance generation */
   
-  turbo_hash_map_t members;     /* Map<member_id, consumer*> */
-  turbo_hash_map_t offsets;     /* Map<partition_id, committed_offset> */
+  hash_map_t members;     /* Map<member_id, consumer*> */
+  hash_map_t offsets;     /* Map<partition_id, committed_offset> */
   
   /* Rebalance state */
   int rebalancing;              /* Rebalance in progress */
@@ -107,7 +107,7 @@ typedef struct flowmq_stream_topic_s {
   uint32_t partition_count;     /* Number of partitions */
   flowmq_stream_partition_t *partitions;  /* Array of partitions */
   
-  turbo_hash_map_t consumer_groups;  /* Map<group_id, group*> */
+  hash_map_t consumer_groups;  /* Map<group_id, group*> */
   
   /* Default configuration */
   uint32_t default_max_messages;

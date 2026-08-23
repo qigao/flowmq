@@ -5,6 +5,8 @@
 #include "turbo_str.h"
 #include "turbo_uuid.h"
 
+#include <orm.h>
+
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
@@ -100,8 +102,9 @@ struct turbo_flow_tfmp_management_service_s {
   size_t event_count;
   uint64_t event_sequence;
   int durable_event_replay;
-  const turbo_flow_blob_store_t *operation_store;
-  char operation_store_key[TURBO_FLOW_TFMP_MANAGEMENT_STORE_KEY_MAX + 1u];
+  orm_connection_t *operation_repository;
+  char operation_repository_table[TURBO_FLOW_TFMP_MANAGEMENT_REPOSITORY_TABLE_MAX + 1u];
+  char operation_repository_key[TURBO_FLOW_TFMP_MANAGEMENT_REPOSITORY_KEY_MAX + 1u];
   uint8_t *store_buffer;
   size_t store_buffer_capacity;
   uint8_t *store_record_buffer;
@@ -110,7 +113,7 @@ struct turbo_flow_tfmp_management_service_s {
   size_t recovery_required_count;
 };
 
-static int flow_tfmp_management_store_commit(turbo_flow_tfmp_management_service_t *service);
+static int flow_tfmp_management_repository_commit(turbo_flow_tfmp_management_service_t *service);
 
 static int flow_tfmp_management_operation_terminal(turbo_flow_tfmp_operation_state_t state);
 
@@ -139,6 +142,153 @@ static uint64_t flow_tfmp_management_unix_ms(void) {
   if (timespec_get(&value, TIME_UTC) != TIME_UTC || value.tv_sec < 0) return 0u;
   if ((uint64_t)value.tv_sec > UINT64_MAX / UINT64_C(1000)) return UINT64_MAX;
   return (uint64_t)value.tv_sec * UINT64_C(1000) + (uint64_t)value.tv_nsec / UINT64_C(1000000);
+}
+
+static orm_string_view_t flow_tfmp_orm_view(const char *value) {
+  return vstr_from_buf(value, value ? strlen(value) : 0u);
+}
+
+static orm_value_t flow_tfmp_orm_text(const char *value) {
+  orm_value_t result = {0};
+  result.kind = ORM_VALUE_TEXT;
+  result.data.text_value = flow_tfmp_orm_view(value);
+  return result;
+}
+
+static orm_value_t flow_tfmp_orm_blob(const uint8_t *data, size_t size) {
+  orm_value_t result = {0};
+  result.kind = ORM_VALUE_BLOB;
+  result.data.blob_value.data = data;
+  result.data.blob_value.size = size;
+  return result;
+}
+
+static int flow_tfmp_orm_status(orm_status_t status) {
+  switch (status) {
+  case ORM_STATUS_OK:
+    return TURBO_OK;
+  case ORM_STATUS_INVALID_ARGUMENT:
+  case ORM_STATUS_ABI_MISMATCH:
+  case ORM_STATUS_INVALID_STATE:
+    return TURBO_EINVAL;
+  case ORM_STATUS_OUT_OF_MEMORY:
+    return TURBO_ENOMEM;
+  case ORM_STATUS_OUT_OF_RANGE:
+    return TURBO_ERANGE;
+  case ORM_STATUS_LIMIT_EXCEEDED:
+    return TURBO_ENOSPC;
+  case ORM_STATUS_BUSY:
+    return TURBO_EBUSY;
+  case ORM_STATUS_UNSUPPORTED:
+    return TURBO_ENOTSUP;
+  case ORM_STATUS_TYPE_ERROR:
+  case ORM_STATUS_NULL_VALUE:
+    return TURBO_EPROTO;
+  case ORM_STATUS_CONNECTION_ERROR:
+  case ORM_STATUS_SQL_ERROR:
+  case ORM_STATUS_INTERNAL_ERROR:
+  case ORM_STATUS_DATASTORE_ERROR:
+  default:
+    return TURBO_EIO;
+  }
+}
+
+static int flow_tfmp_orm_snapshot_load(turbo_flow_tfmp_management_service_t *service,
+                                       uint8_t *out, size_t capacity, size_t *out_size) {
+  orm_query_t *query = NULL;
+  orm_result_t *result = NULL;
+  orm_blob_t snapshot = {0};
+  orm_error_t error;
+  uint64_t rows = 0u;
+  int rc;
+  if (out_size) *out_size = 0u;
+  if (!service || !service->operation_repository || !out || !out_size) return TURBO_EINVAL;
+  orm_error_init(&error);
+  rc = flow_tfmp_orm_status(orm_query_create(
+      service->operation_repository, flow_tfmp_orm_view(service->operation_repository_table),
+      &query, &error));
+  if (rc == TURBO_OK)
+    rc = flow_tfmp_orm_status(
+        orm_query_add_column(query, flow_tfmp_orm_view("snapshot"), &error));
+  if (rc == TURBO_OK)
+    rc = flow_tfmp_orm_status(orm_query_where(
+        query, flow_tfmp_orm_view("owner_key"), ORM_COMPARE_EQUAL,
+        flow_tfmp_orm_text(service->operation_repository_key), &error));
+  if (rc == TURBO_OK)
+    rc = flow_tfmp_orm_status(orm_query_set_limit(query, 2u, &error));
+  if (rc == TURBO_OK)
+    rc = flow_tfmp_orm_status(orm_query_execute(query, &result, &error));
+  if (rc == TURBO_OK)
+    rc = flow_tfmp_orm_status(orm_result_row_count(result, &rows, &error));
+  if (rc == TURBO_OK && rows == 0u) rc = TURBO_ENOENT;
+  if (rc == TURBO_OK && rows != 1u) rc = TURBO_EPROTO;
+  if (rc == TURBO_OK)
+    rc = flow_tfmp_orm_status(orm_result_get_blob(result, 0u, 0u, &snapshot, &error));
+  if (rc == TURBO_OK) {
+    *out_size = snapshot.size;
+    if (snapshot.size > capacity) {
+      rc = TURBO_ENOSPC;
+    } else if (snapshot.size != 0u && !snapshot.data) {
+      rc = TURBO_EPROTO;
+    } else {
+      memcpy(out, snapshot.data, snapshot.size);
+    }
+  }
+  orm_result_destroy(result);
+  orm_query_destroy(query);
+  return rc;
+}
+
+static int flow_tfmp_orm_snapshot_commit(turbo_flow_tfmp_management_service_t *service,
+                                         const uint8_t *data, size_t data_size) {
+  orm_transaction_t *transaction = NULL;
+  orm_query_t *query = NULL;
+  orm_result_t *result = NULL;
+  orm_error_t error;
+  int rc;
+  if (!service || !service->operation_repository || !data || data_size == 0u ||
+      data_size > service->store_buffer_capacity)
+    return TURBO_EINVAL;
+  orm_error_init(&error);
+  rc = flow_tfmp_orm_status(orm_transaction_begin(
+      service->operation_repository, ORM_ISOLATION_SERIALIZABLE, &transaction, &error));
+  if (rc == TURBO_OK)
+    rc = flow_tfmp_orm_status(orm_delete(
+        service->operation_repository, flow_tfmp_orm_view(service->operation_repository_table),
+        &query, &error));
+  if (rc == TURBO_OK)
+    rc = flow_tfmp_orm_status(orm_query_where(
+        query, flow_tfmp_orm_view("owner_key"), ORM_COMPARE_EQUAL,
+        flow_tfmp_orm_text(service->operation_repository_key), &error));
+  if (rc == TURBO_OK)
+    rc = flow_tfmp_orm_status(
+        orm_query_execute_in_transaction(query, transaction, &result, &error));
+  orm_result_destroy(result);
+  result = NULL;
+  orm_query_destroy(query);
+  query = NULL;
+  if (rc == TURBO_OK)
+    rc = flow_tfmp_orm_status(orm_insert(
+        service->operation_repository, flow_tfmp_orm_view(service->operation_repository_table),
+        &query, &error));
+  if (rc == TURBO_OK)
+    rc = flow_tfmp_orm_status(orm_query_set(query, flow_tfmp_orm_view("owner_key"),
+                                            flow_tfmp_orm_text(service->operation_repository_key),
+                                            &error));
+  if (rc == TURBO_OK)
+    rc = flow_tfmp_orm_status(orm_query_set(query, flow_tfmp_orm_view("snapshot"),
+                                            flow_tfmp_orm_blob(data, data_size), &error));
+  if (rc == TURBO_OK)
+    rc = flow_tfmp_orm_status(
+        orm_query_execute_in_transaction(query, transaction, &result, &error));
+  orm_result_destroy(result);
+  orm_query_destroy(query);
+  if (rc == TURBO_OK)
+    rc = flow_tfmp_orm_status(orm_transaction_commit(transaction, &error));
+  else if (transaction)
+    (void)orm_transaction_rollback(transaction, &error);
+  orm_transaction_destroy(transaction);
+  return rc;
 }
 
 static const char *flow_tfmp_management_event_category_name(uint16_t category) {
@@ -216,7 +366,7 @@ static int flow_tfmp_management_event_emit(turbo_flow_tfmp_management_service_t 
   record->body_size = builder.length;
   memcpy(record->body, body, builder.length);
   if (service->durable_event_replay) {
-    rc = flow_tfmp_management_store_commit(service);
+    rc = flow_tfmp_management_repository_commit(service);
     if (rc != TURBO_OK) {
       *record = previous_record;
       service->event_head = previous_head;
@@ -559,15 +709,15 @@ static int flow_tfmp_management_build_capabilities(turbo_flow_tfmp_management_se
   turbo_flow_tfmp_body_builder_t builder = TURBO_FLOW_TFMP_BODY_BUILDER_INIT;
   uint8_t descriptor[64];
   const uint8_t *capabilities =
-      service->target ? (service->operation_store ? durable_capabilities : volatile_capabilities)
+      service->target ? (service->operation_repository ? durable_capabilities : volatile_capabilities)
                       : NULL;
   size_t capability_size = service->target
-                               ? (service->operation_store ? sizeof(durable_capabilities)
+                               ? (service->operation_repository ? sizeof(durable_capabilities)
                                                            : sizeof(volatile_capabilities))
                                : 0u;
   uint16_t durability_mask =
       TURBO_FLOW_TFMP_DURABILITY_MASK_VOLATILE |
-      (service->operation_store ? TURBO_FLOW_TFMP_DURABILITY_MASK_DURABLE : 0u);
+      (service->operation_repository ? TURBO_FLOW_TFMP_DURABILITY_MASK_DURABLE : 0u);
   if (service->target && service->config.event_capacity == 0u) capability_size -= 4u;
   int rc = turbo_flow_tfmp_body_builder_init(&builder, service->reply_body,
                                              service->reply_body_capacity);
@@ -583,7 +733,7 @@ static int flow_tfmp_management_build_capabilities(turbo_flow_tfmp_management_se
     size_t descriptor_size = 0u;
     uint16_t command_durability =
         TURBO_FLOW_TFMP_DURABILITY_MASK_VOLATILE |
-        (service->operation_store &&
+        (service->operation_repository &&
                  flow_tfmp_management_reconcile_supported(service, command_types[i])
              ? TURBO_FLOW_TFMP_DURABILITY_MASK_DURABLE
              : 0u);
@@ -995,7 +1145,7 @@ static int flow_tfmp_management_records_purge(turbo_flow_tfmp_management_service
     --service->command_record_count;
   }
   if (durable_removed > 0u) {
-    int rc = flow_tfmp_management_store_commit(service);
+    int rc = flow_tfmp_management_repository_commit(service);
     if (rc != TURBO_OK) {
       for (size_t i = 0u; i < service->config.dedup_capacity; ++i) {
         flow_tfmp_command_record_t *record = &service->command_records[i];
@@ -1445,7 +1595,7 @@ static int flow_tfmp_management_build_command_submit(turbo_flow_tfmp_management_
       (command.required_durability != TURBO_FLOW_TFMP_DURABILITY_VOLATILE &&
        command.required_durability != TURBO_FLOW_TFMP_DURABILITY_DURABLE) ||
       (command.required_durability == TURBO_FLOW_TFMP_DURABILITY_DURABLE &&
-       (!service->operation_store ||
+       (!service->operation_repository ||
         command.reply_mode != TURBO_FLOW_TFMP_REPLY_MODE_ACCEPT_OPERATION ||
         !flow_tfmp_management_reconcile_supported(service, command.command_type)))) {
     flow_tfmp_management_result_fail(result, TURBO_FLOW_TFMP_STATUS_UNSUPPORTED_CAPABILITY,
@@ -1536,7 +1686,7 @@ static int flow_tfmp_management_build_command_submit(turbo_flow_tfmp_management_
                                          ? TURBO_FLOW_TFMP_DISPOSITION_ACCEPTED_DURABLE
                                          : TURBO_FLOW_TFMP_DISPOSITION_ACCEPTED_VOLATILE;
     if (record->durable && !service->durable_event_replay) {
-      rc = flow_tfmp_management_store_commit(service);
+      rc = flow_tfmp_management_repository_commit(service);
       if (rc != TURBO_OK) {
         flow_tfmp_management_record_clear(record);
         --service->command_record_count;
@@ -1712,7 +1862,7 @@ static int flow_tfmp_management_build_operation_cancel(
     record->terminal_ns = turbo_hrtime();
     record->terminal_unix_ms = record->updated_unix_ms;
     if (record->durable && !service->durable_event_replay) {
-      rc = flow_tfmp_management_store_commit(service);
+      rc = flow_tfmp_management_repository_commit(service);
       if (rc != TURBO_OK) {
         free(record->cancel_request_body);
         record->cancel_request_body = NULL;
@@ -2020,8 +2170,8 @@ int turbo_flow_tfmp_management_channel_config_resolve(
   static const char *const allowed[] = {
       "protocol_major",          "protocol_minor",     "authority_id",       "rpc_adapter",
       "event_adapter",           "mailbox_capacity",   "max_request_bytes",  "max_reply_bytes",
-      "max_inflight_per_target", "dedup_capacity",     "dedup_ttl_ms",       "operation_store",
-      "event_capacity",          "event_replay_store", "shutdown_timeout_ms"};
+      "max_inflight_per_target", "dedup_capacity",     "dedup_ttl_ms",       "operation_repository",
+      "event_capacity",          "event_replay_repository", "shutdown_timeout_ms"};
   turbo_flow_tfmp_management_channel_config_t parsed =
       TURBO_FLOW_TFMP_MANAGEMENT_CHANNEL_CONFIG_INIT;
   turbo_json_doc_t *document = NULL;
@@ -2153,40 +2303,40 @@ int turbo_flow_tfmp_management_channel_config_resolve(
                                            "event_adapter must be a bounded reference");
     goto done;
   }
-  rc = flow_tfmp_management_config_copy(fields, "operation_store", 0, parsed.operation_store,
-                                        sizeof(parsed.operation_store));
+  rc = flow_tfmp_management_config_copy(fields, "operation_repository", 0, parsed.operation_repository,
+                                        sizeof(parsed.operation_repository));
   if (rc != TURBO_OK && rc != TURBO_ENOENT) {
-    rc = flow_tfmp_management_config_error(error, rc, channel_name, "operation_store",
-                                           "operation_store must be a bounded reference");
+    rc = flow_tfmp_management_config_error(error, rc, channel_name, "operation_repository",
+                                           "operation_repository must be a bounded reference");
     goto done;
   }
-  rc = flow_tfmp_management_config_copy(fields, "event_replay_store", 0, parsed.event_replay_store,
-                                        sizeof(parsed.event_replay_store));
+  rc = flow_tfmp_management_config_copy(fields, "event_replay_repository", 0, parsed.event_replay_repository,
+                                        sizeof(parsed.event_replay_repository));
   if (rc != TURBO_OK && rc != TURBO_ENOENT) {
-    rc = flow_tfmp_management_config_error(error, rc, channel_name, "event_replay_store",
-                                           "event_replay_store must be a bounded reference");
+    rc = flow_tfmp_management_config_error(error, rc, channel_name, "event_replay_repository",
+                                           "event_replay_repository must be a bounded reference");
     goto done;
   }
-  if (strcmp(parsed.operation_store, "memory") != 0) {
-    rc = flow_tfmp_management_config_channel(document, channel_name, "operation_store",
-                                             parsed.operation_store, "blob_store", error);
+  if (strcmp(parsed.operation_repository, "memory") != 0) {
+    rc = flow_tfmp_management_config_channel(document, channel_name, "operation_repository",
+                                             parsed.operation_repository, "orm_repository", error);
     if (rc != TURBO_OK) goto done;
   }
-  if ((parsed.event_adapter[0] != '\0' || parsed.event_replay_store[0] != '\0') &&
+  if ((parsed.event_adapter[0] != '\0' || parsed.event_replay_repository[0] != '\0') &&
       parsed.service.event_capacity == 0u) {
     rc = flow_tfmp_management_config_error(error, TURBO_EINVAL, channel_name, "event_capacity",
                                            "event adapters require a positive event_capacity");
     goto done;
   }
-  if (parsed.event_replay_store[0] != '\0' && strcmp(parsed.event_replay_store, "memory") != 0) {
-    rc = flow_tfmp_management_config_channel(document, channel_name, "event_replay_store",
-                                             parsed.event_replay_store, "blob_store", error);
+  if (parsed.event_replay_repository[0] != '\0' && strcmp(parsed.event_replay_repository, "memory") != 0) {
+    rc = flow_tfmp_management_config_channel(document, channel_name, "event_replay_repository",
+                                             parsed.event_replay_repository, "orm_repository", error);
     if (rc != TURBO_OK) goto done;
-    if (strcmp(parsed.operation_store, "memory") == 0 ||
-        strcmp(parsed.event_replay_store, parsed.operation_store) != 0) {
+    if (strcmp(parsed.operation_repository, "memory") == 0 ||
+        strcmp(parsed.event_replay_repository, parsed.operation_repository) != 0) {
       rc = flow_tfmp_management_config_error(
-          error, TURBO_EINVAL, channel_name, "event_replay_store",
-          "durable event replay must share operation_store for atomic outbox commits");
+          error, TURBO_EINVAL, channel_name, "event_replay_repository",
+          "durable event replay must share operation_repository for atomic outbox commits");
       goto done;
     }
   }
@@ -2301,14 +2451,14 @@ static int flow_tfmp_store_record_encode(const flow_tfmp_command_record_t *recor
   return rc;
 }
 
-static int flow_tfmp_management_store_commit(turbo_flow_tfmp_management_service_t *service) {
+static int flow_tfmp_management_repository_commit(turbo_flow_tfmp_management_service_t *service) {
   uint8_t header[FLOW_TFMP_STORE_HEADER_SIZE] = {'T', 'F',
                                                  'M', 'S',
                                                  0u,  FLOW_TFMP_STORE_VERSION_MAJOR,
                                                  0u,  FLOW_TFMP_STORE_VERSION_MINOR_OPERATIONS};
   size_t length = 0u;
   int rc;
-  if (!service || !service->operation_store) return TURBO_ENOTSUP;
+  if (!service || !service->operation_repository) return TURBO_ENOTSUP;
   if (service->durable_event_replay) header[7] = FLOW_TFMP_STORE_VERSION_MINOR_EVENTS;
   rc = flow_tfmp_store_append(service->store_buffer, service->store_buffer_capacity, &length, 1u,
                               header, sizeof(header));
@@ -2348,8 +2498,7 @@ static int flow_tfmp_management_store_commit(turbo_flow_tfmp_management_service_
                                 encoded, encoded_size);
   }
   if (rc != TURBO_OK) return rc;
-  return service->operation_store->commit(
-      service->operation_store->ctx, service->operation_store_key, service->store_buffer, length);
+  return flow_tfmp_orm_snapshot_commit(service, service->store_buffer, length);
 }
 
 static int flow_tfmp_store_copy_text(char *out, size_t capacity, const uint8_t *value,
@@ -2363,7 +2512,7 @@ static int flow_tfmp_store_copy_text(char *out, size_t capacity, const uint8_t *
   return TURBO_OK;
 }
 
-static int flow_tfmp_management_store_decode_record(turbo_flow_tfmp_management_service_t *service,
+static int flow_tfmp_management_repository_decode_record(turbo_flow_tfmp_management_service_t *service,
                                                     const uint8_t *data, size_t data_size,
                                                     int *snapshot_dirty) {
   const uint8_t *values[8] = {0};
@@ -2527,7 +2676,7 @@ fail:
 }
 
 static int
-flow_tfmp_management_store_decode_event_metadata(turbo_flow_tfmp_management_service_t *service,
+flow_tfmp_management_repository_decode_event_metadata(turbo_flow_tfmp_management_service_t *service,
                                                  const uint8_t *value, size_t value_size) {
   if (!service || !value || value_size != FLOW_TFMP_STORE_EVENT_METADATA_SIZE) return TURBO_EPROTO;
   memcpy(service->incarnation_id.bytes, value, sizeof(service->incarnation_id.bytes));
@@ -2535,7 +2684,7 @@ flow_tfmp_management_store_decode_event_metadata(turbo_flow_tfmp_management_serv
   return TURBO_OK;
 }
 
-static int flow_tfmp_management_store_decode_event(turbo_flow_tfmp_management_service_t *service,
+static int flow_tfmp_management_repository_decode_event(turbo_flow_tfmp_management_service_t *service,
                                                    const uint8_t *value, size_t value_size) {
   turbo_flow_tfmp_envelope_t envelope = TURBO_FLOW_TFMP_ENVELOPE_INIT;
   turbo_flow_tfmp_field_t field = TURBO_FLOW_TFMP_FIELD_INIT;
@@ -2581,7 +2730,7 @@ static int flow_tfmp_management_store_decode_event(turbo_flow_tfmp_management_se
   return TURBO_OK;
 }
 
-static int flow_tfmp_management_store_load(turbo_flow_tfmp_management_service_t *service) {
+static int flow_tfmp_management_repository_load(turbo_flow_tfmp_management_service_t *service) {
   size_t loaded_size = 0u;
   size_t offset = 0u;
   uint8_t previous_type = 0u;
@@ -2591,10 +2740,9 @@ static int flow_tfmp_management_store_load(turbo_flow_tfmp_management_service_t 
   int event_metadata_seen = 0;
   int snapshot_dirty = 0;
   int rc;
-  if (!service || !service->operation_store) return TURBO_EINVAL;
-  rc = service->operation_store->load(service->operation_store->ctx, service->operation_store_key,
-                                      service->store_buffer, service->store_buffer_capacity,
-                                      &loaded_size);
+  if (!service || !service->operation_repository) return TURBO_EINVAL;
+  rc = flow_tfmp_orm_snapshot_load(service, service->store_buffer, service->store_buffer_capacity,
+                                   &loaded_size);
   if (rc == TURBO_ENOENT) return TURBO_OK;
   if (rc != TURBO_OK) return rc;
   if (loaded_size == 0u) return TURBO_EPROTO;
@@ -2654,7 +2802,7 @@ static int flow_tfmp_management_store_load(turbo_flow_tfmp_management_service_t 
         turbo_free_ltv(&message);
         return TURBO_EPROTO;
       }
-      rc = flow_tfmp_management_store_decode_record(service, value, value_size, &snapshot_dirty);
+      rc = flow_tfmp_management_repository_decode_record(service, value, value_size, &snapshot_dirty);
       if (rc != TURBO_OK) {
         turbo_free_ltv(&message);
         return rc;
@@ -2665,7 +2813,7 @@ static int flow_tfmp_management_store_load(turbo_flow_tfmp_management_service_t 
         turbo_free_ltv(&message);
         return TURBO_EPROTO;
       }
-      rc = flow_tfmp_management_store_decode_event_metadata(service, value, value_size);
+      rc = flow_tfmp_management_repository_decode_event_metadata(service, value, value_size);
       if (rc != TURBO_OK) {
         turbo_free_ltv(&message);
         return rc;
@@ -2676,7 +2824,7 @@ static int flow_tfmp_management_store_load(turbo_flow_tfmp_management_service_t 
         turbo_free_ltv(&message);
         return TURBO_EPROTO;
       }
-      rc = flow_tfmp_management_store_decode_event(service, value, value_size);
+      rc = flow_tfmp_management_repository_decode_event(service, value, value_size);
       if (rc != TURBO_OK) {
         turbo_free_ltv(&message);
         return rc;
@@ -2696,12 +2844,12 @@ static int flow_tfmp_management_store_load(turbo_flow_tfmp_management_service_t 
   } else if (service->durable_event_replay) {
     snapshot_dirty = 1;
   }
-  return snapshot_dirty ? flow_tfmp_management_store_commit(service) : TURBO_OK;
+  return snapshot_dirty ? flow_tfmp_management_repository_commit(service) : TURBO_OK;
 }
 
 static int flow_tfmp_management_service_create_internal(
     const turbo_flow_tfmp_management_config_t *config,
-    const turbo_flow_tfmp_management_store_binding_t *binding, int durable_event_replay,
+    const turbo_flow_tfmp_management_repository_binding_t *binding, int durable_event_replay,
     turbo_flow_tfmp_management_service_t **out) {
   turbo_flow_tfmp_management_service_t *service = NULL;
   const char *authority_end;
@@ -2712,11 +2860,12 @@ static int flow_tfmp_management_service_create_internal(
   if (!config || config->size < sizeof(*config) || !out ||
       (durable_event_replay && (!binding || config->event_capacity == 0u)))
     return TURBO_EINVAL;
-  if (binding && (binding->size < sizeof(*binding) || !binding->store ||
-                  binding->store->size < sizeof(*binding->store) || !binding->store->ctx ||
-                  !binding->store->load || !binding->store->commit ||
-                  binding->store->max_value_size == 0u || !binding->key || !binding->key[0] ||
-                  strlen(binding->key) > TURBO_FLOW_TFMP_MANAGEMENT_STORE_KEY_MAX))
+  if (binding && (binding->size < sizeof(*binding) || !binding->connection || !binding->table ||
+                  !binding->table[0] ||
+                  strlen(binding->table) > TURBO_FLOW_TFMP_MANAGEMENT_REPOSITORY_TABLE_MAX ||
+                  !binding->key || !binding->key[0] ||
+                  strlen(binding->key) > TURBO_FLOW_TFMP_MANAGEMENT_REPOSITORY_KEY_MAX ||
+                  binding->max_snapshot_size == 0u))
     return TURBO_EINVAL;
   authority_end = (const char *)memchr(config->authority_id, '\0', sizeof(config->authority_id));
   if (!authority_end || authority_end == config->authority_id ||
@@ -2745,11 +2894,12 @@ static int flow_tfmp_management_service_create_internal(
       rc = TURBO_ERANGE;
       goto cleanup;
     }
-    service->operation_store = binding->store;
-    service->store_buffer_capacity = binding->store->max_value_size;
+    service->operation_repository = binding->connection;
+    service->store_buffer_capacity = binding->max_snapshot_size;
     service->store_record_buffer_capacity =
         (size_t)config->max_request_bytes * 2u + FLOW_TFMP_STORE_RECORD_OVERHEAD;
-    memcpy(service->operation_store_key, binding->key, strlen(binding->key) + 1u);
+    memcpy(service->operation_repository_table, binding->table, strlen(binding->table) + 1u);
+    memcpy(service->operation_repository_key, binding->key, strlen(binding->key) + 1u);
     service->store_buffer = (uint8_t *)malloc(service->store_buffer_capacity);
     service->store_record_buffer = (uint8_t *)malloc(service->store_record_buffer_capacity);
     if (!service->store_buffer || !service->store_record_buffer) {
@@ -2786,8 +2936,8 @@ static int flow_tfmp_management_service_create_internal(
   service->started_ns = turbo_hrtime();
   rc = turbo_uuid_v7_generate(&service->incarnation_id);
   if (rc != TURBO_OK) goto cleanup;
-  if (service->operation_store) {
-    rc = flow_tfmp_management_store_load(service);
+  if (service->operation_repository) {
+    rc = flow_tfmp_management_repository_load(service);
     if (rc != TURBO_OK) goto cleanup;
   }
 
@@ -2814,39 +2964,39 @@ cleanup:
   return rc;
 }
 
-int turbo_flow_tfmp_management_service_create_with_store(
+int turbo_flow_tfmp_management_service_create_with_repository(
     const turbo_flow_tfmp_management_config_t *config,
-    const turbo_flow_tfmp_management_store_binding_t *binding,
+    const turbo_flow_tfmp_management_repository_binding_t *binding,
     turbo_flow_tfmp_management_service_t **out) {
   return flow_tfmp_management_service_create_internal(config, binding, 0, out);
 }
 
 int turbo_flow_tfmp_management_service_create(const turbo_flow_tfmp_management_config_t *config,
                                               turbo_flow_tfmp_management_service_t **out) {
-  return turbo_flow_tfmp_management_service_create_with_store(config, NULL, out);
+  return turbo_flow_tfmp_management_service_create_with_repository(config, NULL, out);
 }
 
 int turbo_flow_tfmp_management_service_create_configured(
     const turbo_flow_tfmp_management_channel_config_t *config,
-    const turbo_flow_tfmp_management_store_binding_t *binding,
+    const turbo_flow_tfmp_management_repository_binding_t *binding,
     turbo_flow_tfmp_management_service_t **out) {
   const char *store_end;
   const char *event_store_end;
   int uses_memory;
   int durable_event_replay;
   if (!config || config->size < sizeof(*config) || !out) return TURBO_EINVAL;
-  store_end = (const char *)memchr(config->operation_store, '\0', sizeof(config->operation_store));
-  if (!store_end || store_end == config->operation_store) return TURBO_EINVAL;
-  uses_memory = (size_t)(store_end - config->operation_store) == sizeof("memory") - 1u &&
-                memcmp(config->operation_store, "memory", sizeof("memory") - 1u) == 0;
+  store_end = (const char *)memchr(config->operation_repository, '\0', sizeof(config->operation_repository));
+  if (!store_end || store_end == config->operation_repository) return TURBO_EINVAL;
+  uses_memory = (size_t)(store_end - config->operation_repository) == sizeof("memory") - 1u &&
+                memcmp(config->operation_repository, "memory", sizeof("memory") - 1u) == 0;
   if (uses_memory != (binding == NULL)) return TURBO_EINVAL;
   event_store_end =
-      (const char *)memchr(config->event_replay_store, '\0', sizeof(config->event_replay_store));
+      (const char *)memchr(config->event_replay_repository, '\0', sizeof(config->event_replay_repository));
   if (!event_store_end) return TURBO_EINVAL;
-  durable_event_replay = event_store_end != config->event_replay_store &&
-                         strcmp(config->event_replay_store, "memory") != 0;
+  durable_event_replay = event_store_end != config->event_replay_repository &&
+                         strcmp(config->event_replay_repository, "memory") != 0;
   if (durable_event_replay &&
-      (uses_memory || strcmp(config->event_replay_store, config->operation_store) != 0))
+      (uses_memory || strcmp(config->event_replay_repository, config->operation_repository) != 0))
     return TURBO_EINVAL;
   return flow_tfmp_management_service_create_internal(&config->service, binding,
                                                       durable_event_replay, out);
@@ -3117,7 +3267,7 @@ static int flow_tfmp_management_reconcile_finish(
   record->terminal_ns = turbo_hrtime();
   record->terminal_unix_ms = record->updated_unix_ms;
   if (!service->durable_event_replay) {
-    rc = flow_tfmp_management_store_commit(service);
+    rc = flow_tfmp_management_repository_commit(service);
     if (rc != TURBO_OK) {
       service->state = TURBO_FLOW_TFMP_OWNER_FAILED;
       return rc;
@@ -3154,7 +3304,7 @@ int turbo_flow_tfmp_management_service_reconcile_one(
   uint64_t observed_generation = 0u;
   char operation_key[TURBO_UUID_STRING_SIZE];
   int rc;
-  if (!service || !service->target || !service->operation_store) return TURBO_EINVAL;
+  if (!service || !service->target || !service->operation_repository) return TURBO_EINVAL;
   if (service->state != TURBO_FLOW_TFMP_OWNER_STARTING &&
       service->state != TURBO_FLOW_TFMP_OWNER_READY)
     return TURBO_EBUSY;
@@ -3244,7 +3394,7 @@ int turbo_flow_tfmp_management_service_run_one(turbo_flow_tfmp_management_servic
   ++record->operation_revision;
   record->updated_unix_ms = flow_tfmp_management_unix_ms();
   if (record->durable && !service->durable_event_replay) {
-    rc = flow_tfmp_management_store_commit(service);
+    rc = flow_tfmp_management_repository_commit(service);
     if (rc != TURBO_OK) {
       record->operation_state = TURBO_FLOW_TFMP_OPERATION_ACCEPTED;
       --record->operation_revision;
@@ -3313,7 +3463,7 @@ int turbo_flow_tfmp_management_service_run_one(turbo_flow_tfmp_management_servic
   record->terminal_ns = turbo_hrtime();
   record->terminal_unix_ms = record->updated_unix_ms;
   if (record->durable && !service->durable_event_replay) {
-    rc = flow_tfmp_management_store_commit(service);
+    rc = flow_tfmp_management_repository_commit(service);
     if (rc != TURBO_OK) {
       service->state = TURBO_FLOW_TFMP_OWNER_FAILED;
       return rc;

@@ -30,13 +30,13 @@ fragments:
 
 channels:
   management-operations:
-    kind: blob_store
+    kind: orm_repository
     config:
-      backend: sqlite
-      database_path: flow-management.sqlite3
+      driver: sqlite
+      filename: flow-management.sqlite3
+      table: tfmp_management_snapshot
       key: tfmp:local-flow-management
-      busy_timeout_ms: 1000
-      max_value_size: 8388608
+      max_snapshot_size: 8388608
 
   flow-management:
     kind: fmq_management
@@ -51,10 +51,10 @@ channels:
       max_inflight_per_target: 8
       dedup_capacity: 512
       dedup_ttl_ms: 300000
-      operation_store: management-operations
+      operation_repository: management-operations
       event_adapter: fmq.management.events
       event_capacity: 1024
-      event_replay_store: management-operations
+      event_replay_repository: management-operations
       shutdown_timeout_ms: 5000
 
   request-broker:

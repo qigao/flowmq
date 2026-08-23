@@ -4,7 +4,7 @@
  */
 
 #include "flowmq_priority_queue.h"
-#include "flowmq_stl_adapter.h"
+#include "flowmq_stl_error_internal.h"
 #include "tlog.h"
 
 #include <string.h>
@@ -30,14 +30,14 @@ int flowmq_priority_queue_init(flowmq_priority_queue_t *pq,
   /* Initialize all priority buckets */
   for (int i = 0; i < FLOWMQ_PRIORITY_LEVELS; i++) {
     const size_t bucket_limit = max_capacity == 0u ? SIZE_MAX : (size_t)max_capacity;
-    int rc = turbo_deque_init_bytes(&pq->buckets[i], sizeof(flowmq_priority_message_t),
+    int rc = deque_init_bytes(&pq->buckets[i], sizeof(flowmq_priority_message_t),
                                     _Alignof(flowmq_priority_message_t), bucket_limit);
-    if (rc != TURBO_STL_OK) {
+    if (rc != STL_OK) {
       /* Cleanup already initialized buckets */
       for (int j = 0; j < i; j++) {
-        turbo_deque_destroy(&pq->buckets[j]);
+        deque_destroy(&pq->buckets[j]);
       }
-      return flowmq_stl_status_to_error((turbo_stl_status)rc);
+      return flowmq_stl_error((stl_status)rc);
     }
   }
   
@@ -49,13 +49,13 @@ void flowmq_priority_queue_destroy(flowmq_priority_queue_t *pq) {
   
   /* Cleanup all messages in all buckets */
   for (int i = 0; i < FLOWMQ_PRIORITY_LEVELS; i++) {
-    turbo_deque_t *bucket = &pq->buckets[i];
+    deque_t *bucket = &pq->buckets[i];
     while (bucket->size > 0) {
-      flowmq_priority_message_t *msg = (flowmq_priority_message_t *)turbo_deque_front(bucket);
+      flowmq_priority_message_t *msg = (flowmq_priority_message_t *)deque_front(bucket);
       flowmq_priority_message_cleanup(msg);
-      turbo_deque_pop_front(bucket, NULL);
+      deque_pop_front(bucket, NULL);
     }
-    turbo_deque_destroy(bucket);
+    deque_destroy(bucket);
   }
 }
 
@@ -84,12 +84,12 @@ int flowmq_priority_queue_enqueue(flowmq_priority_queue_t *pq,
   msg.topic = *topic;      /* Transfer ownership */
   
   /* Enqueue to appropriate bucket */
-  int rc = turbo_deque_push_back(&pq->buckets[priority], &msg);
-  if (rc != TURBO_STL_OK) {
+  int rc = deque_push_back(&pq->buckets[priority], &msg);
+  if (rc != STL_OK) {
     /* Restore ownership on failure */
     *payload = msg.payload;
     *topic = msg.topic;
-    return flowmq_stl_status_to_error((turbo_stl_status)rc);
+    return flowmq_stl_error((stl_status)rc);
   }
   
   /* Update statistics */
@@ -114,17 +114,17 @@ int flowmq_priority_queue_dequeue(flowmq_priority_queue_t *pq,
   
   /* Find highest non-empty bucket */
   for (int pri = FLOWMQ_PRIORITY_MAX; pri >= FLOWMQ_PRIORITY_MIN; pri--) {
-    turbo_deque_t *bucket = &pq->buckets[pri];
+    deque_t *bucket = &pq->buckets[pri];
     if (bucket->size > 0) {
       /* Dequeue from this bucket */
-      flowmq_priority_message_t *msg = (flowmq_priority_message_t *)turbo_deque_front(bucket);
+      flowmq_priority_message_t *msg = (flowmq_priority_message_t *)deque_front(bucket);
       *out_message = *msg;  /* Transfer ownership */
       
       /* Update statistics */
       pq->total_messages--;
       pq->total_bytes -= (tstr_len(msg->payload) + tstr_len(msg->topic));
       
-      turbo_deque_pop_front(bucket, NULL);
+      deque_pop_front(bucket, NULL);
       
       /* Update max_priority if this was the last message at this priority */
       if (bucket->size == 0 && (uint8_t)pri == pq->max_priority) {
@@ -156,9 +156,9 @@ int flowmq_priority_queue_peek(flowmq_priority_queue_t *pq,
   
   /* Find highest non-empty bucket */
   for (int pri = FLOWMQ_PRIORITY_MAX; pri >= FLOWMQ_PRIORITY_MIN; pri--) {
-    turbo_deque_t *bucket = &pq->buckets[pri];
+    deque_t *bucket = &pq->buckets[pri];
     if (bucket->size > 0) {
-      *out_message = (const flowmq_priority_message_t *)turbo_deque_front(bucket);
+      *out_message = (const flowmq_priority_message_t *)deque_front(bucket);
       return TURBO_OK;
     }
   }
@@ -192,11 +192,11 @@ void flowmq_priority_queue_clear(flowmq_priority_queue_t *pq) {
   
   /* Clear all buckets */
   for (int i = 0; i < FLOWMQ_PRIORITY_LEVELS; i++) {
-    turbo_deque_t *bucket = &pq->buckets[i];
+    deque_t *bucket = &pq->buckets[i];
     while (bucket->size > 0) {
-      flowmq_priority_message_t *msg = (flowmq_priority_message_t *)turbo_deque_front(bucket);
+      flowmq_priority_message_t *msg = (flowmq_priority_message_t *)deque_front(bucket);
       flowmq_priority_message_cleanup(msg);
-      turbo_deque_pop_front(bucket, NULL);
+      deque_pop_front(bucket, NULL);
     }
   }
   

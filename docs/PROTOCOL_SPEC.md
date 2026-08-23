@@ -32,7 +32,7 @@
 | FMQ/3 | socket framing | CoroNet endpoint 的字节流/报文 | FlowMQ protocol decoder 与 peer session |
 | FMS/3 | HELLO security envelope | FMQ/3 HELLO payload | security owner 与 BIND peer admission |
 | TKSH/1、TKSR/1、TKF1/1 | secure KCP transport | UDP datagram | CoroNet KCP session owner |
-| TFMP/1 | 管理应用协议 | FMQ/3 DATA payload | management owner 与 operation store |
+| TFMP/1 | 管理应用协议 | FMQ/3 DATA payload | management owner 与 operation repository |
 | TFMS/1.0、1.1 | 管理持久化格式 | SQLite/Redis blob snapshot | operation owner |
 | TFCW/1 | credit-worker 应用协议 | FMQ/3 DATA payload | credit worker owner |
 | TFBR/1 | broker logical address | TFCW body、outbox、持久化记录 | broker/settlement owner |

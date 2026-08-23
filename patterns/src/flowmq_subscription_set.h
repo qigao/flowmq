@@ -12,7 +12,7 @@ typedef struct flowmq_subscription_s {
 } flowmq_subscription_t;
 
 typedef struct flowmq_subscription_set_s {
-  turbo_vec_t entries;
+  vec_t entries;
   int initialized;
 } flowmq_subscription_set_t;
 

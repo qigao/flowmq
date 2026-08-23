@@ -81,7 +81,7 @@ decoder 不接受其他版本，部署面不提供版本范围、mixed-version e
 
 ## 4. Durable side-effect reconcile
 
-operation store 与 Flow/resource mutation 不构成分布式事务。durable execution 的顺序为：
+operation repository 与 Flow/resource mutation 不构成分布式事务。durable execution 的顺序为：
 
 1. 原子提交 `ACCEPTED`；
 2. claim 后原子提交 `RUNNING`；

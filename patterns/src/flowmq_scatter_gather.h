@@ -62,7 +62,7 @@ typedef struct flowmq_scatter_session_s {
   uint32_t success_responses;       /* Successful responses */
   uint32_t error_responses;         /* Failed responses */
   
-  turbo_vec_t partial_results;      /* Vec<flowmq_scatter_partial_response_t> */
+  vec_t partial_results;      /* Vec<flowmq_scatter_partial_response_t> */
   
   /* Client context (borrowed, for callback) */
   void *client_context;
@@ -77,7 +77,7 @@ typedef struct flowmq_scatter_gather_manager_s {
   uint32_t active_sessions;         /* Current count */
   uint64_t next_correlation_id;     /* Monotonic ID generator */
   
-  turbo_hash_map_t sessions;        /* Map<correlation_id, session*> */
+  hash_map_t sessions;        /* Map<correlation_id, session*> */
   
   /* Timeout tracking (optional) */
   uint64_t default_timeout_ms;

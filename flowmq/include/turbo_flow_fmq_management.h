@@ -7,6 +7,8 @@
 #include "turbo_flow_config.h"
 #include "turbo_flow_fmq_management_protocol.h"
 
+#include <orm.h>
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -20,7 +22,8 @@ extern "C" {
 #define TURBO_FLOW_TFMP_MANAGEMENT_DEDUP_MAX 4096u
 #define TURBO_FLOW_TFMP_MANAGEMENT_REFERENCE_MAX 255u
 #define TURBO_FLOW_TFMP_MANAGEMENT_DEFAULT_INFLIGHT_PER_TARGET 8u
-#define TURBO_FLOW_TFMP_MANAGEMENT_STORE_KEY_MAX 1024u
+#define TURBO_FLOW_TFMP_MANAGEMENT_REPOSITORY_KEY_MAX 1024u
+#define TURBO_FLOW_TFMP_MANAGEMENT_REPOSITORY_TABLE_MAX 63u
 #define TURBO_FLOW_TFMP_MANAGEMENT_EVENT_MAX 4096u
 #define TURBO_FLOW_TFMP_MANAGEMENT_EVENT_TOPIC_MAX 31u
 
@@ -58,8 +61,8 @@ typedef struct turbo_flow_tfmp_management_channel_config_s {
   turbo_flow_tfmp_management_config_t service;
   char rpc_adapter[TURBO_FLOW_TFMP_MANAGEMENT_REFERENCE_MAX + 1u];
   char event_adapter[TURBO_FLOW_TFMP_MANAGEMENT_REFERENCE_MAX + 1u];
-  char operation_store[TURBO_FLOW_TFMP_MANAGEMENT_REFERENCE_MAX + 1u];
-  char event_replay_store[TURBO_FLOW_TFMP_MANAGEMENT_REFERENCE_MAX + 1u];
+  char operation_repository[TURBO_FLOW_TFMP_MANAGEMENT_REFERENCE_MAX + 1u];
+  char event_replay_repository[TURBO_FLOW_TFMP_MANAGEMENT_REFERENCE_MAX + 1u];
   uint32_t max_inflight_per_target;
   uint64_t shutdown_timeout_ms;
 } turbo_flow_tfmp_management_channel_config_t;
@@ -78,17 +81,21 @@ typedef struct turbo_flow_tfmp_management_channel_config_s {
 
 typedef struct turbo_flow_tfmp_management_service_s turbo_flow_tfmp_management_service_t;
 
-typedef struct turbo_flow_tfmp_management_store_binding_s {
-  /** Set to sizeof(turbo_flow_tfmp_management_store_binding_t). */
+typedef struct turbo_flow_tfmp_management_repository_binding_s {
+  /** Set to sizeof(turbo_flow_tfmp_management_repository_binding_t). */
   size_t size;
-  /** Borrowed atomic blob store; must outlive the management service. */
-  const turbo_flow_blob_store_t *store;
-  /** Stable provider key, copied by the service. */
+  /** Borrowed single-thread TurboDB ORM connection; must outlive the service. */
+  orm_connection_t *connection;
+  /** Existing table with unique `owner_key` TEXT and `snapshot` BLOB columns. */
+  const char *table;
+  /** Stable repository key, copied by the service. */
   const char *key;
-} turbo_flow_tfmp_management_store_binding_t;
+  /** Hard snapshot bound used for allocation and persistence validation. */
+  size_t max_snapshot_size;
+} turbo_flow_tfmp_management_repository_binding_t;
 
-#define TURBO_FLOW_TFMP_MANAGEMENT_STORE_BINDING_INIT                                              \
-  {sizeof(turbo_flow_tfmp_management_store_binding_t), NULL, NULL}
+#define TURBO_FLOW_TFMP_MANAGEMENT_REPOSITORY_BINDING_INIT                                      \
+  {sizeof(turbo_flow_tfmp_management_repository_binding_t), NULL, NULL, NULL, 0u}
 
 typedef enum turbo_flow_tfmp_reconcile_outcome_e {
   /** The desired side effect is already visible; finish without reapplying it. */
@@ -154,31 +161,31 @@ turbo_flow_tfmp_management_service_create(const turbo_flow_tfmp_management_confi
                                           turbo_flow_tfmp_management_service_t **out);
 
 /**
- * Create an owner with an atomic durable operation store.
+ * Create an owner with an atomic durable operation repository.
  *
  * Existing snapshots are strictly decoded before the owner is returned. A
  * missing key starts empty; malformed, oversized, or unavailable storage fails
  * creation without a volatile fallback. This entry point does not persist the
  * event journal; use the resolved-channel entry point for durable event replay.
  */
-FLOWMQ_C_API int turbo_flow_tfmp_management_service_create_with_store(
+FLOWMQ_C_API int turbo_flow_tfmp_management_service_create_with_repository(
     const turbo_flow_tfmp_management_config_t *config,
-    const turbo_flow_tfmp_management_store_binding_t *binding,
+    const turbo_flow_tfmp_management_repository_binding_t *binding,
     turbo_flow_tfmp_management_service_t **out);
 
 /**
  * Create an owner from a resolved management channel projection.
  *
- * `operation_store: memory` requires a NULL binding and exposes volatile ACK
- * only. A referenced `kind: blob_store` channel requires a non-NULL binding
+ * `operation_repository: memory` requires a NULL binding and exposes volatile ACK
+ * only. A referenced `kind: orm_repository` channel requires a non-NULL binding
  * resolved and owned by the host; missing or extra bindings fail fast. An
- * external `event_replay_store` must name that same operation store so each
- * durable operation transition and derived event use one atomic blob commit.
- * The binding and its store must outlive the returned service.
+ * external `event_replay_repository` must name that same repository so each
+ * durable operation transition and derived event uses one serializable ORM transaction.
+ * The binding and its connection must outlive the returned service.
  */
 FLOWMQ_C_API int turbo_flow_tfmp_management_service_create_configured(
     const turbo_flow_tfmp_management_channel_config_t *config,
-    const turbo_flow_tfmp_management_store_binding_t *binding,
+    const turbo_flow_tfmp_management_repository_binding_t *binding,
     turbo_flow_tfmp_management_service_t **out);
 
 /**

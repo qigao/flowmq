@@ -4,7 +4,7 @@
  */
 
 #include "flowmq_saga.h"
-#include "flowmq_stl_adapter.h"
+#include "flowmq_stl_error_internal.h"
 #include "tlog.h"
 
 #include <inttypes.h>
@@ -52,7 +52,7 @@ static flowmq_saga_transaction_t *flowmq_saga_find_transaction(
   }
 
   flowmq_saga_transaction_t **txn_ptr =
-      (flowmq_saga_transaction_t **)turbo_hash_map_get(&coordinator->transactions, saga_id);
+      (flowmq_saga_transaction_t **)hash_map_get(&coordinator->transactions, saga_id);
   if (!txn_ptr || !*txn_ptr) {
     if (out_rc) *out_rc = TURBO_ENOENT;
     return NULL;
@@ -67,11 +67,11 @@ void flowmq_saga_transaction_cleanup(flowmq_saga_transaction_t *txn) {
 
   tstr_free(txn->saga_id);
 
-  for (size_t i = 0; i < turbo_vec_size(&txn->steps); i++) {
-    flowmq_saga_step_t *step = (flowmq_saga_step_t *)turbo_vec_at(&txn->steps, i);
+  for (size_t i = 0; i < vec_size(&txn->steps); i++) {
+    flowmq_saga_step_t *step = (flowmq_saga_step_t *)vec_at(&txn->steps, i);
     saga_step_cleanup(step);
   }
-  turbo_vec_destroy(&txn->steps);
+  vec_destroy(&txn->steps);
 }
 
 int flowmq_saga_coordinator_init(flowmq_saga_coordinator_t *coordinator,
@@ -85,13 +85,13 @@ int flowmq_saga_coordinator_init(flowmq_saga_coordinator_t *coordinator,
   coordinator->max_transactions = max_transactions;
   coordinator->next_saga_id = 1;
 
-  int rc = turbo_hash_map_init_bytes(&coordinator->transactions,
+  int rc = hash_map_init_bytes(&coordinator->transactions,
                                      sizeof(tstr), _Alignof(tstr),
                                      sizeof(flowmq_saga_transaction_t *),
                                      _Alignof(flowmq_saga_transaction_t *),
                                      max_transactions, saga_id_hash, saga_id_eq, NULL);
-  if (rc != TURBO_STL_OK) {
-    return flowmq_stl_status_to_error((turbo_stl_status)rc);
+  if (rc != STL_OK) {
+    return flowmq_stl_error((stl_status)rc);
   }
 
   return TURBO_OK;
@@ -101,9 +101,9 @@ void flowmq_saga_coordinator_destroy(flowmq_saga_coordinator_t *coordinator) {
   if (!coordinator) return;
 
   /* Cleanup all transactions. */
-  for (size_t slot = 0; slot < turbo_hash_map_capacity(&coordinator->transactions); ++slot) {
+  for (size_t slot = 0; slot < hash_map_capacity(&coordinator->transactions); ++slot) {
     flowmq_saga_transaction_t **txn_ptr =
-        (flowmq_saga_transaction_t **)turbo_hash_map_value_at(&coordinator->transactions, slot);
+        (flowmq_saga_transaction_t **)hash_map_value_at(&coordinator->transactions, slot);
     if (!txn_ptr || !*txn_ptr) {
       continue;
     }
@@ -111,7 +111,7 @@ void flowmq_saga_coordinator_destroy(flowmq_saga_coordinator_t *coordinator) {
     free(*txn_ptr);
   }
 
-  turbo_hash_map_destroy(&coordinator->transactions);
+  hash_map_destroy(&coordinator->transactions);
 }
 
 int flowmq_saga_coordinator_create(flowmq_saga_coordinator_t *coordinator,
@@ -123,7 +123,7 @@ int flowmq_saga_coordinator_create(flowmq_saga_coordinator_t *coordinator,
   if (num_steps == 0 || num_steps > FLOWMQ_SAGA_MAX_STEPS) return TURBO_EINVAL;
 
   /* Check capacity. */
-  if (turbo_hash_map_size(&coordinator->transactions) >= coordinator->max_transactions) {
+  if (hash_map_size(&coordinator->transactions) >= coordinator->max_transactions) {
     return TURBO_ENOSPC;
   }
 
@@ -148,26 +148,26 @@ int flowmq_saga_coordinator_create(flowmq_saga_coordinator_t *coordinator,
   txn->user_context = user_context;
 
   /* Initialize steps vector. */
-  int rc = turbo_vec_init_bytes(&txn->steps, sizeof(flowmq_saga_step_t),
+  int rc = vec_init_bytes(&txn->steps, sizeof(flowmq_saga_step_t),
                                 _Alignof(flowmq_saga_step_t), num_steps);
-  if (rc != TURBO_STL_OK) {
+  if (rc != STL_OK) {
     tstr_free(txn->saga_id);
     free(txn);
-    return flowmq_stl_status_to_error((turbo_stl_status)rc);
+    return flowmq_stl_error((stl_status)rc);
   }
-  rc = turbo_vec_reserve(&txn->steps, num_steps);
-  if (rc != TURBO_STL_OK) {
+  rc = vec_reserve(&txn->steps, num_steps);
+  if (rc != STL_OK) {
     flowmq_saga_transaction_cleanup(txn);
     free(txn);
-    return flowmq_stl_status_to_error((turbo_stl_status)rc);
+    return flowmq_stl_error((stl_status)rc);
   }
 
   /* Insert into coordinator map. */
-  rc = turbo_hash_map_put(&coordinator->transactions, &txn->saga_id, &txn);
-  if (rc != TURBO_STL_OK) {
+  rc = hash_map_put(&coordinator->transactions, &txn->saga_id, &txn);
+  if (rc != STL_OK) {
     flowmq_saga_transaction_cleanup(txn);
     free(txn);
-    return flowmq_stl_status_to_error((turbo_stl_status)rc);
+    return flowmq_stl_error((stl_status)rc);
   }
 
   /* Return SAGA ID. */
@@ -229,10 +229,10 @@ int flowmq_saga_coordinator_add_step(flowmq_saga_coordinator_t *coordinator,
   step.compensated_ns = 0;
 
   /* Add to vector. */
-  rc = turbo_vec_push(&txn->steps, &step);
-  if (rc != TURBO_STL_OK) {
+  rc = vec_push(&txn->steps, &step);
+  if (rc != STL_OK) {
     saga_step_cleanup(&step);
-    return flowmq_stl_status_to_error((turbo_stl_status)rc);
+    return flowmq_stl_error((stl_status)rc);
   }
 
   TLOG_DEBUGF("Added step {} to SAGA {}: service={}",
@@ -291,7 +291,7 @@ int flowmq_saga_coordinator_record_step_result(flowmq_saga_coordinator_t *coordi
   }
 
   /* Record result. */
-  flowmq_saga_step_t *step = (flowmq_saga_step_t *)turbo_vec_at(&txn->steps, step_id);
+  flowmq_saga_step_t *step = (flowmq_saga_step_t *)vec_at(&txn->steps, step_id);
   step->result = success ? FLOWMQ_SAGA_STEP_SUCCESS : FLOWMQ_SAGA_STEP_FAILED;
   step->error_code = error_code;
   step->executed_ns = timestamp_ns;
@@ -341,7 +341,7 @@ int flowmq_saga_coordinator_compensate(flowmq_saga_coordinator_t *coordinator,
 
   /* Find the next step that still needs compensation. */
   for (;;) {
-    flowmq_saga_step_t *step = (flowmq_saga_step_t *)turbo_vec_at(&txn->steps, txn->current_step);
+    flowmq_saga_step_t *step = (flowmq_saga_step_t *)vec_at(&txn->steps, txn->current_step);
     if (!step) {
       return TURBO_EINVAL;
     }
@@ -389,7 +389,7 @@ int flowmq_saga_coordinator_record_compensation(flowmq_saga_coordinator_t *coord
   }
 
   /* Record compensation. */
-  flowmq_saga_step_t *step = (flowmq_saga_step_t *)turbo_vec_at(&txn->steps, step_id);
+  flowmq_saga_step_t *step = (flowmq_saga_step_t *)vec_at(&txn->steps, step_id);
   if (step->result != FLOWMQ_SAGA_STEP_SUCCESS) {
     return TURBO_EINVAL;
   }
@@ -416,7 +416,7 @@ int flowmq_saga_coordinator_record_compensation(flowmq_saga_coordinator_t *coord
 
   if (txn->current_step < txn->total_steps) {
     flowmq_saga_step_t *next =
-        (flowmq_saga_step_t *)turbo_vec_at(&txn->steps, txn->current_step);
+        (flowmq_saga_step_t *)vec_at(&txn->steps, txn->current_step);
     if (!next) {
       return TURBO_EINVAL;
     }
@@ -459,7 +459,7 @@ int flowmq_saga_coordinator_peek_compensation(flowmq_saga_coordinator_t *coordin
       return TURBO_EINVAL;
     }
 
-    flowmq_saga_step_t *step = (flowmq_saga_step_t *)turbo_vec_at(&txn->steps, step_idx);
+    flowmq_saga_step_t *step = (flowmq_saga_step_t *)vec_at(&txn->steps, step_idx);
     if (!step) {
       return TURBO_EINVAL;
     }
@@ -525,7 +525,7 @@ int flowmq_saga_coordinator_abort(flowmq_saga_coordinator_t *coordinator,
   if (rc != TURBO_OK) return rc;
 
   /* Remove from map. */
-  if (turbo_hash_map_remove(&coordinator->transactions, saga_id, NULL) != TURBO_OK) {
+  if (hash_map_remove(&coordinator->transactions, saga_id, NULL) != TURBO_OK) {
     return TURBO_ENOENT;
   }
 
@@ -542,7 +542,7 @@ void flowmq_saga_coordinator_stats(flowmq_saga_coordinator_t *coordinator,
                                   uint32_t *out_active,
                                   uint32_t *out_capacity) {
   if (!coordinator) return;
-  if (out_active) *out_active = (uint32_t)turbo_hash_map_size(&coordinator->transactions);
+  if (out_active) *out_active = (uint32_t)hash_map_size(&coordinator->transactions);
   if (out_capacity) *out_capacity = coordinator->max_transactions;
 }
 
@@ -551,9 +551,9 @@ uint32_t flowmq_saga_coordinator_process_timeouts(flowmq_saga_coordinator_t *coo
   if (!coordinator) return 0;
 
   uint32_t timed_out = 0;
-  for (size_t slot = 0; slot < turbo_hash_map_capacity(&coordinator->transactions); ++slot) {
+  for (size_t slot = 0; slot < hash_map_capacity(&coordinator->transactions); ++slot) {
     flowmq_saga_transaction_t **txn_ptr =
-        (flowmq_saga_transaction_t **)turbo_hash_map_value_at(&coordinator->transactions, slot);
+        (flowmq_saga_transaction_t **)hash_map_value_at(&coordinator->transactions, slot);
     if (!txn_ptr || !*txn_ptr) {
       continue;
     }

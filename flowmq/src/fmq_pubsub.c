@@ -1,6 +1,6 @@
 #include "turbo_flow_fmq_pubsub.h"
 
-#include "flowmq_stl_adapter.h"
+#include "flowmq_stl_error_internal.h"
 #include "turbo_flow_fmq.h"
 
 #include <turbostl.h>
@@ -29,22 +29,22 @@ typedef struct flow_fmq_pubsub_owned_record_s {
 
 struct turbo_flow_fmq_pubsub_state_s {
   turbo_flow_fmq_pubsub_config_t config;
-  turbo_vec_t entries;
-  turbo_hash_map_t index;
-  turbo_deque_t updates;
+  vec_t entries;
+  hash_map_t index;
+  deque_t updates;
   size_t state_bytes;
   size_t update_bytes;
   uint64_t latest_sequence;
 };
 
 struct turbo_flow_fmq_pubsub_snapshot_cursor_s {
-  turbo_vec_t records;
+  vec_t records;
   size_t position;
   uint64_t barrier;
 };
 
 struct turbo_flow_fmq_pubsub_update_cursor_s {
-  turbo_vec_t records;
+  vec_t records;
   size_t position;
   uint64_t upper_bound;
 };
@@ -202,7 +202,7 @@ static size_t flow_fmq_pubsub_topic_hash(const void *key, size_t key_size, void 
   const vstr *topic = (const vstr *)key;
   (void)key_size;
   (void)ctx;
-  return turbo_hash_bytes(topic->data, topic->len, NULL);
+  return hash_bytes(topic->data, topic->len, NULL);
 }
 
 static bool flow_fmq_pubsub_topic_equal(const void *left, const void *right, size_t key_size,
@@ -220,17 +220,17 @@ static void flow_fmq_pubsub_owned_record_cleanup(flow_fmq_pubsub_owned_record_t 
   tstr_freep(&record->payload);
 }
 
-static void flow_fmq_pubsub_record_vec_clear(turbo_vec_t *records) {
+static void flow_fmq_pubsub_record_vec_clear(vec_t *records) {
   if (!records) return;
-  for (size_t i = 0u; i < turbo_vec_size(records); ++i) {
+  for (size_t i = 0u; i < vec_size(records); ++i) {
     flow_fmq_pubsub_owned_record_t *record =
-        (flow_fmq_pubsub_owned_record_t *)turbo_vec_at(records, i);
+        (flow_fmq_pubsub_owned_record_t *)vec_at(records, i);
     flow_fmq_pubsub_owned_record_cleanup(record);
   }
-  turbo_vec_clear(records);
+  vec_clear(records);
 }
 
-static int flow_fmq_pubsub_record_copy(turbo_vec_t *records,
+static int flow_fmq_pubsub_record_copy(vec_t *records,
                                        turbo_flow_fmq_pubsub_operation_t operation,
                                        uint64_t sequence, vstr topic, vstr payload) {
   flow_fmq_pubsub_owned_record_t record;
@@ -244,7 +244,7 @@ static int flow_fmq_pubsub_record_copy(turbo_vec_t *records,
     flow_fmq_pubsub_owned_record_cleanup(&record);
     return TURBO_ENOMEM;
   }
-  rc = turbo_vec_push(records, &record);
+  rc = vec_push(records, &record);
   if (rc != TURBO_OK) flow_fmq_pubsub_owned_record_cleanup(&record);
   return rc;
 }
@@ -252,7 +252,7 @@ static int flow_fmq_pubsub_record_copy(turbo_vec_t *records,
 static flow_fmq_pubsub_entry_t *flow_fmq_pubsub_find(const turbo_flow_fmq_pubsub_state_t *state,
                                                      vstr topic) {
   flow_fmq_pubsub_entry_t *const *found =
-      (flow_fmq_pubsub_entry_t *const *)turbo_hash_map_get_const(&state->index, &topic);
+      (flow_fmq_pubsub_entry_t *const *)hash_map_get_const(&state->index, &topic);
   return found ? *found : NULL;
 }
 
@@ -273,22 +273,22 @@ turbo_flow_fmq_pubsub_state_create(const turbo_flow_fmq_pubsub_config_t *config)
   state = (turbo_flow_fmq_pubsub_state_t *)calloc(1, sizeof(*state));
   if (!state) return NULL;
   state->config = *config;
-  rc = turbo_vec_init_bytes(&state->entries, sizeof(flow_fmq_pubsub_entry_t *),
+  rc = vec_init_bytes(&state->entries, sizeof(flow_fmq_pubsub_entry_t *),
                             _Alignof(flow_fmq_pubsub_entry_t *), config->max_topics);
-  if (rc != TURBO_STL_OK) goto fail;
-  rc = turbo_hash_map_init_bytes(&state->index,
+  if (rc != STL_OK) goto fail;
+  rc = hash_map_init_bytes(&state->index,
                                  sizeof(vstr), _Alignof(vstr),
                                  sizeof(flow_fmq_pubsub_entry_t *),
                                  _Alignof(flow_fmq_pubsub_entry_t *), config->max_topics,
                                  flow_fmq_pubsub_topic_hash, flow_fmq_pubsub_topic_equal, NULL);
-  if (rc != TURBO_STL_OK) goto fail;
-  rc = turbo_deque_init_bytes(&state->updates, sizeof(flow_fmq_pubsub_owned_record_t),
+  if (rc != STL_OK) goto fail;
+  rc = deque_init_bytes(&state->updates, sizeof(flow_fmq_pubsub_owned_record_t),
                               _Alignof(flow_fmq_pubsub_owned_record_t),
                               config->update_capacity);
-  if (rc != TURBO_STL_OK) goto fail;
-  if (turbo_vec_reserve(&state->entries, config->max_topics) != TURBO_OK ||
-      turbo_hash_map_reserve(&state->index, config->max_topics) != TURBO_OK ||
-      turbo_deque_reserve(&state->updates, config->update_capacity) != TURBO_OK) {
+  if (rc != STL_OK) goto fail;
+  if (vec_reserve(&state->entries, config->max_topics) != TURBO_OK ||
+      hash_map_reserve(&state->index, config->max_topics) != TURBO_OK ||
+      deque_reserve(&state->updates, config->update_capacity) != TURBO_OK) {
     goto fail;
   }
   return state;
@@ -300,21 +300,21 @@ fail:
 
 void turbo_flow_fmq_pubsub_state_destroy(turbo_flow_fmq_pubsub_state_t *state) {
   if (!state) return;
-  for (size_t i = 0u; i < turbo_vec_size(&state->entries); ++i) {
-    flow_fmq_pubsub_entry_t **entry = (flow_fmq_pubsub_entry_t **)turbo_vec_at(&state->entries, i);
+  for (size_t i = 0u; i < vec_size(&state->entries); ++i) {
+    flow_fmq_pubsub_entry_t **entry = (flow_fmq_pubsub_entry_t **)vec_at(&state->entries, i);
     if (!entry || !*entry) continue;
     tstr_freep(&(*entry)->topic);
     tstr_freep(&(*entry)->payload);
     free(*entry);
   }
-  while (!turbo_deque_empty(&state->updates)) {
+  while (!deque_empty(&state->updates)) {
     flow_fmq_pubsub_owned_record_t record;
-    if (turbo_deque_pop_front(&state->updates, &record) != TURBO_OK) break;
+    if (deque_pop_front(&state->updates, &record) != TURBO_OK) break;
     flow_fmq_pubsub_owned_record_cleanup(&record);
   }
-  turbo_deque_destroy(&state->updates);
-  turbo_hash_map_destroy(&state->index);
-  turbo_vec_destroy(&state->entries);
+  deque_destroy(&state->updates);
+  hash_map_destroy(&state->index);
+  vec_destroy(&state->entries);
   free(state);
 }
 
@@ -336,11 +336,11 @@ static int flow_fmq_pubsub_journal_append(turbo_flow_fmq_pubsub_state_t *state,
     flow_fmq_pubsub_owned_record_cleanup(&record);
     return TURBO_ENOMEM;
   }
-  while (turbo_deque_size(&state->updates) >= state->config.update_capacity ||
+  while (deque_size(&state->updates) >= state->config.update_capacity ||
          state->update_bytes > state->config.max_update_bytes - record_bytes) {
     flow_fmq_pubsub_owned_record_t evicted;
     size_t evicted_bytes;
-    rc = turbo_deque_pop_front(&state->updates, &evicted);
+    rc = deque_pop_front(&state->updates, &evicted);
     if (rc != TURBO_OK) {
       flow_fmq_pubsub_owned_record_cleanup(&record);
       return rc;
@@ -349,7 +349,7 @@ static int flow_fmq_pubsub_journal_append(turbo_flow_fmq_pubsub_state_t *state,
     state->update_bytes -= evicted_bytes;
     flow_fmq_pubsub_owned_record_cleanup(&evicted);
   }
-  rc = turbo_deque_push_back(&state->updates, &record);
+  rc = deque_push_back(&state->updates, &record);
   if (rc != TURBO_OK) {
     flow_fmq_pubsub_owned_record_cleanup(&record);
     return rc;
@@ -375,7 +375,7 @@ int turbo_flow_fmq_pubsub_put(turbo_flow_fmq_pubsub_state_t *state, vstr topic, 
     return TURBO_ERANGE;
   }
   entry = flow_fmq_pubsub_find(state, topic);
-  if (!entry && turbo_vec_size(&state->entries) >= state->config.max_topics) return TURBO_ENOSPC;
+  if (!entry && vec_size(&state->entries) >= state->config.max_topics) return TURBO_ENOSPC;
   next_state_bytes = entry ? state->state_bytes - tstr_len(entry->payload) + payload.len
                            : state->state_bytes + topic.len + payload.len;
   if (next_state_bytes > state->config.max_state_bytes) return TURBO_ENOSPC;
@@ -394,7 +394,7 @@ int turbo_flow_fmq_pubsub_put(turbo_flow_fmq_pubsub_state_t *state, vstr topic, 
       return TURBO_ENOMEM;
     }
     created->payload = next_payload;
-    created->slot = turbo_vec_size(&state->entries);
+    created->slot = vec_size(&state->entries);
   }
   next_sequence = state->latest_sequence + 1u;
   rc = flow_fmq_pubsub_journal_append(state, TURBO_FLOW_FMQ_PUBSUB_PUT, next_sequence, topic,
@@ -416,9 +416,9 @@ int turbo_flow_fmq_pubsub_put(turbo_flow_fmq_pubsub_state_t *state, vstr topic, 
   } else {
     vstr stored_topic;
     created->sequence = next_sequence;
-    if (turbo_vec_push(&state->entries, &created) != TURBO_OK) {
+    if (vec_push(&state->entries, &created) != TURBO_OK) {
       flow_fmq_pubsub_owned_record_t rollback;
-      (void)turbo_deque_pop_back(&state->updates, &rollback);
+      (void)deque_pop_back(&state->updates, &rollback);
       state->update_bytes -= tstr_len(rollback.topic) + tstr_len(rollback.payload);
       flow_fmq_pubsub_owned_record_cleanup(&rollback);
       tstr_freep(&created->topic);
@@ -427,12 +427,12 @@ int turbo_flow_fmq_pubsub_put(turbo_flow_fmq_pubsub_state_t *state, vstr topic, 
       return TURBO_ENOMEM;
     }
     stored_topic = tstr_to_v(created->topic);
-    rc = turbo_hash_map_put(&state->index, &stored_topic, &created);
+    rc = hash_map_put(&state->index, &stored_topic, &created);
     if (rc != TURBO_OK) {
       flow_fmq_pubsub_owned_record_t rollback;
       flow_fmq_pubsub_entry_t *removed = NULL;
-      (void)turbo_vec_pop(&state->entries, &removed);
-      (void)turbo_deque_pop_back(&state->updates, &rollback);
+      (void)vec_pop(&state->entries, &removed);
+      (void)deque_pop_back(&state->updates, &rollback);
       state->update_bytes -= tstr_len(rollback.topic) + tstr_len(rollback.payload);
       flow_fmq_pubsub_owned_record_cleanup(&rollback);
       tstr_freep(&created->topic);
@@ -464,12 +464,12 @@ int turbo_flow_fmq_pubsub_delete(turbo_flow_fmq_pubsub_state_t *state, vstr topi
     flow_fmq_pubsub_entry_t *removed = NULL;
     flow_fmq_pubsub_entry_t **moved;
     vstr stored_topic = tstr_to_v(entry->topic);
-    rc = turbo_hash_map_remove(&state->index, &stored_topic, NULL);
+    rc = hash_map_remove(&state->index, &stored_topic, NULL);
     if (rc != TURBO_OK ||
-        turbo_vec_swap_remove(&state->entries, entry->slot, &removed) != TURBO_OK) {
+        vec_swap_remove(&state->entries, entry->slot, &removed) != TURBO_OK) {
       return TURBO_EPROTO;
     }
-    moved = (flow_fmq_pubsub_entry_t **)turbo_vec_at(&state->entries, entry->slot);
+    moved = (flow_fmq_pubsub_entry_t **)vec_at(&state->entries, entry->slot);
     if (moved && *moved) (*moved)->slot = entry->slot;
     state->state_bytes -= tstr_len(entry->topic) + tstr_len(entry->payload);
     tstr_freep(&entry->topic);
@@ -499,18 +499,18 @@ int turbo_flow_fmq_pubsub_snapshot_open(const turbo_flow_fmq_pubsub_state_t *sta
   if (prefix.len > TURBO_FLOW_FMQ_PUBSUB_MAX_TOPIC_SIZE) return TURBO_ENAMETOOLONG;
   cursor = (turbo_flow_fmq_pubsub_snapshot_cursor_t *)calloc(1, sizeof(*cursor));
   if (!cursor) return TURBO_ENOMEM;
-  rc = turbo_vec_init_bytes(&cursor->records, sizeof(flow_fmq_pubsub_owned_record_t),
+  rc = vec_init_bytes(&cursor->records, sizeof(flow_fmq_pubsub_owned_record_t),
                             _Alignof(flow_fmq_pubsub_owned_record_t),
-                            turbo_vec_size(&state->entries));
-  if (rc != TURBO_STL_OK ||
-      turbo_vec_reserve(&cursor->records, turbo_vec_size(&state->entries)) != TURBO_OK) {
+                            vec_size(&state->entries));
+  if (rc != STL_OK ||
+      vec_reserve(&cursor->records, vec_size(&state->entries)) != TURBO_OK) {
     turbo_flow_fmq_pubsub_snapshot_destroy(cursor);
     return TURBO_ENOMEM;
   }
   cursor->barrier = state->latest_sequence;
-  for (size_t i = 0u; i < turbo_vec_size(&state->entries); ++i) {
+  for (size_t i = 0u; i < vec_size(&state->entries); ++i) {
     flow_fmq_pubsub_entry_t *const *entry =
-        (flow_fmq_pubsub_entry_t *const *)turbo_vec_at_const(&state->entries, i);
+        (flow_fmq_pubsub_entry_t *const *)vec_at_const(&state->entries, i);
     if (!entry || !*entry || !flow_fmq_pubsub_prefix_matches(tstr_to_v((*entry)->topic), prefix))
       continue;
     rc =
@@ -534,7 +534,7 @@ int turbo_flow_fmq_pubsub_snapshot_next(turbo_flow_fmq_pubsub_snapshot_cursor_t 
                                         turbo_flow_fmq_pubsub_record_t *record) {
   const flow_fmq_pubsub_owned_record_t *owned;
   if (!cursor || !record || record->size < sizeof(*record)) return TURBO_EINVAL;
-  owned = (const flow_fmq_pubsub_owned_record_t *)turbo_vec_at_const(&cursor->records,
+  owned = (const flow_fmq_pubsub_owned_record_t *)vec_at_const(&cursor->records,
                                                                      cursor->position);
   if (!owned) return TURBO_ENOENT;
   cursor->position += 1u;
@@ -545,7 +545,7 @@ int turbo_flow_fmq_pubsub_snapshot_next(turbo_flow_fmq_pubsub_snapshot_cursor_t 
 void turbo_flow_fmq_pubsub_snapshot_destroy(turbo_flow_fmq_pubsub_snapshot_cursor_t *cursor) {
   if (!cursor) return;
   flow_fmq_pubsub_record_vec_clear(&cursor->records);
-  turbo_vec_destroy(&cursor->records);
+  vec_destroy(&cursor->records);
   free(cursor);
 }
 
@@ -559,22 +559,22 @@ int turbo_flow_fmq_pubsub_updates_open(const turbo_flow_fmq_pubsub_state_t *stat
   if (!state || !out || !flow_fmq_pubsub_view_valid(prefix)) return TURBO_EINVAL;
   if (prefix.len > TURBO_FLOW_FMQ_PUBSUB_MAX_TOPIC_SIZE) return TURBO_ENAMETOOLONG;
   if (after_sequence > state->latest_sequence) return TURBO_ERANGE;
-  oldest = (const flow_fmq_pubsub_owned_record_t *)turbo_deque_front_const(&state->updates);
+  oldest = (const flow_fmq_pubsub_owned_record_t *)deque_front_const(&state->updates);
   if (oldest && after_sequence < oldest->sequence - 1u) return TURBO_ERANGE;
   cursor = (turbo_flow_fmq_pubsub_update_cursor_t *)calloc(1, sizeof(*cursor));
   if (!cursor) return TURBO_ENOMEM;
-  rc = turbo_vec_init_bytes(&cursor->records, sizeof(flow_fmq_pubsub_owned_record_t),
+  rc = vec_init_bytes(&cursor->records, sizeof(flow_fmq_pubsub_owned_record_t),
                             _Alignof(flow_fmq_pubsub_owned_record_t),
-                            turbo_deque_size(&state->updates));
-  if (rc != TURBO_STL_OK ||
-      turbo_vec_reserve(&cursor->records, turbo_deque_size(&state->updates)) != TURBO_OK) {
+                            deque_size(&state->updates));
+  if (rc != STL_OK ||
+      vec_reserve(&cursor->records, deque_size(&state->updates)) != TURBO_OK) {
     turbo_flow_fmq_pubsub_updates_destroy(cursor);
     return TURBO_ENOMEM;
   }
   cursor->upper_bound = state->latest_sequence;
-  for (size_t i = 0u; i < turbo_deque_size(&state->updates); ++i) {
+  for (size_t i = 0u; i < deque_size(&state->updates); ++i) {
     const flow_fmq_pubsub_owned_record_t *update =
-        (const flow_fmq_pubsub_owned_record_t *)turbo_deque_at_const(&state->updates, i);
+        (const flow_fmq_pubsub_owned_record_t *)deque_at_const(&state->updates, i);
     if (!update || update->sequence <= after_sequence ||
         !flow_fmq_pubsub_prefix_matches(tstr_to_v(update->topic), prefix)) {
       continue;
@@ -599,7 +599,7 @@ int turbo_flow_fmq_pubsub_updates_next(turbo_flow_fmq_pubsub_update_cursor_t *cu
                                        turbo_flow_fmq_pubsub_record_t *record) {
   const flow_fmq_pubsub_owned_record_t *owned;
   if (!cursor || !record || record->size < sizeof(*record)) return TURBO_EINVAL;
-  owned = (const flow_fmq_pubsub_owned_record_t *)turbo_vec_at_const(&cursor->records,
+  owned = (const flow_fmq_pubsub_owned_record_t *)vec_at_const(&cursor->records,
                                                                      cursor->position);
   if (!owned) return TURBO_ENOENT;
   cursor->position += 1u;
@@ -610,7 +610,7 @@ int turbo_flow_fmq_pubsub_updates_next(turbo_flow_fmq_pubsub_update_cursor_t *cu
 void turbo_flow_fmq_pubsub_updates_destroy(turbo_flow_fmq_pubsub_update_cursor_t *cursor) {
   if (!cursor) return;
   flow_fmq_pubsub_record_vec_clear(&cursor->records);
-  turbo_vec_destroy(&cursor->records);
+  vec_destroy(&cursor->records);
   free(cursor);
 }
 
@@ -618,11 +618,11 @@ int turbo_flow_fmq_pubsub_status(const turbo_flow_fmq_pubsub_state_t *state,
                                  turbo_flow_fmq_pubsub_status_t *status) {
   const flow_fmq_pubsub_owned_record_t *oldest;
   if (!state || !status || status->size < sizeof(*status)) return TURBO_EINVAL;
-  oldest = (const flow_fmq_pubsub_owned_record_t *)turbo_deque_front_const(&state->updates);
+  oldest = (const flow_fmq_pubsub_owned_record_t *)deque_front_const(&state->updates);
   *status = (turbo_flow_fmq_pubsub_status_t)TURBO_FLOW_FMQ_PUBSUB_STATUS_INIT;
-  status->topics = turbo_vec_size(&state->entries);
+  status->topics = vec_size(&state->entries);
   status->state_bytes = state->state_bytes;
-  status->retained_updates = turbo_deque_size(&state->updates);
+  status->retained_updates = deque_size(&state->updates);
   status->retained_update_bytes = state->update_bytes;
   status->earliest_update_sequence = oldest ? oldest->sequence : 0u;
   status->latest_sequence = state->latest_sequence;
@@ -1050,14 +1050,14 @@ static int flow_fmq_pubsub_snapshot_response(
   uint16_t record_count;
   int rc = turbo_flow_fmq_pubsub_snapshot_open(service->state, request->prefix, &cursor);
   if (rc != TURBO_OK) return rc;
-  if (turbo_vec_size(&cursor->records) > TURBO_FLOW_FMQ_PUBSUB_RECOVERY_MAX_RECORDS) {
+  if (vec_size(&cursor->records) > TURBO_FLOW_FMQ_PUBSUB_RECOVERY_MAX_RECORDS) {
     rc = TURBO_ENOSPC;
     goto done;
   }
-  record_count = (uint16_t)turbo_vec_size(&cursor->records);
-  for (size_t i = 0u; i < turbo_vec_size(&cursor->records); ++i) {
+  record_count = (uint16_t)vec_size(&cursor->records);
+  for (size_t i = 0u; i < vec_size(&cursor->records); ++i) {
     const flow_fmq_pubsub_owned_record_t *record =
-        (const flow_fmq_pubsub_owned_record_t *)turbo_vec_at_const(&cursor->records, i);
+        (const flow_fmq_pubsub_owned_record_t *)vec_at_const(&cursor->records, i);
     size_t record_size;
     if (!record) {
       rc = TURBO_EPROTO;
@@ -1079,9 +1079,9 @@ static int flow_fmq_pubsub_snapshot_response(
       0u, TURBO_OK, request->request_id, cursor->barrier, 0u, (uint32_t)body_size, 0u,
       record_count);
   offset = TURBO_FLOW_FMQ_PUBSUB_RECOVERY_HEADER_SIZE;
-  for (size_t i = 0u; i < turbo_vec_size(&cursor->records); ++i) {
+  for (size_t i = 0u; i < vec_size(&cursor->records); ++i) {
     const flow_fmq_pubsub_owned_record_t *record =
-        (const flow_fmq_pubsub_owned_record_t *)turbo_vec_at_const(&cursor->records, i);
+        (const flow_fmq_pubsub_owned_record_t *)vec_at_const(&cursor->records, i);
     size_t written = 0u;
     rc = flow_fmq_pubsub_record_write(
         (uint8_t *)*out + offset, tstr_len(*out) - offset, record->operation, record->sequence,
@@ -1123,9 +1123,9 @@ static int flow_fmq_pubsub_updates_response(
   }
   if (page_limit > service->config.max_update_records)
     page_limit = service->config.max_update_records;
-  for (size_t i = 0u; i < turbo_vec_size(&cursor->records); ++i) {
+  for (size_t i = 0u; i < vec_size(&cursor->records); ++i) {
     const flow_fmq_pubsub_owned_record_t *record =
-        (const flow_fmq_pubsub_owned_record_t *)turbo_vec_at_const(&cursor->records, i);
+        (const flow_fmq_pubsub_owned_record_t *)vec_at_const(&cursor->records, i);
     if (!record || record->sequence > upper_bound) break;
     available_records += 1u;
   }
@@ -1134,7 +1134,7 @@ static int flow_fmq_pubsub_updates_response(
   resume_sequence = complete ? upper_bound : request->sequence;
   for (size_t i = 0u; i < selected_records; ++i) {
     const flow_fmq_pubsub_owned_record_t *record =
-        (const flow_fmq_pubsub_owned_record_t *)turbo_vec_at_const(&cursor->records, i);
+        (const flow_fmq_pubsub_owned_record_t *)vec_at_const(&cursor->records, i);
     size_t record_size;
     rc = flow_fmq_pubsub_record_wire_size(tstr_to_v(record->topic), tstr_to_v(record->payload),
                                           &record_size);
@@ -1156,7 +1156,7 @@ static int flow_fmq_pubsub_updates_response(
   offset = TURBO_FLOW_FMQ_PUBSUB_RECOVERY_HEADER_SIZE;
   for (size_t i = 0u; i < selected_records; ++i) {
     const flow_fmq_pubsub_owned_record_t *record =
-        (const flow_fmq_pubsub_owned_record_t *)turbo_vec_at_const(&cursor->records, i);
+        (const flow_fmq_pubsub_owned_record_t *)vec_at_const(&cursor->records, i);
     size_t written = 0u;
     rc = flow_fmq_pubsub_record_write(
         (uint8_t *)*out + offset, tstr_len(*out) - offset, record->operation, record->sequence,

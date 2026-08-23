@@ -1,9 +1,9 @@
 #include "turbo_flow_fmq_broker.h"
 
-#include "flowmq_stl_adapter.h"
+#include "flowmq_stl_error_internal.h"
 #include "turbo_error.h"
 #include <turbostl/hash_map.h>
-#include <turbostl/typed.h>
+#include <turbostl/meta.h>
 #include "turbo_parser.h"
 #include "turbo_str.h"
 #include "turbo_str.h"
@@ -225,7 +225,7 @@ static int flow_fmq_broker_inflight_remove(turbo_flow_fmq_broker_t *broker, size
                                                    NULL)) {
     return TURBO_EPROTO;
   }
-  if (turbo_vec_resize(&broker->inflight.raw, count - 1u) != TURBO_OK) return TURBO_EPROTO;
+  if (vec_resize(&broker->inflight.raw, count - 1u) != TURBO_OK) return TURBO_EPROTO;
   return TURBO_OK;
 }
 
@@ -253,7 +253,7 @@ static int flow_fmq_broker_accepted_remove(turbo_flow_fmq_broker_t *broker, size
                                                     NULL)) {
     return TURBO_EPROTO;
   }
-  if (turbo_vec_resize(&broker->accepted.raw, count - 1u) != TURBO_OK) return TURBO_EPROTO;
+  if (vec_resize(&broker->accepted.raw, count - 1u) != TURBO_OK) return TURBO_EPROTO;
   return TURBO_OK;
 }
 
@@ -274,7 +274,7 @@ static int flow_fmq_broker_dispatch_store(turbo_flow_fmq_broker_t *broker, size_
   stored_index = flow_fmq_broker_inflight_size(&broker->inflight) - 1u;
   if (flow_fmq_broker_request_index_put(&broker->request_index, request_id, stored_index) !=
       TURBO_OK) {
-    (void)turbo_vec_resize(&broker->inflight.raw, stored_index);
+    (void)vec_resize(&broker->inflight.raw, stored_index);
     return TURBO_ENOMEM;
   }
   worker->state = FLOW_FMQ_BROKER_WORKER_BUSY;
@@ -293,34 +293,34 @@ turbo_flow_fmq_broker_create(const turbo_flow_fmq_broker_config_t *config) {
   if (!flow_fmq_broker_config_valid(config)) return NULL;
   broker = (turbo_flow_fmq_broker_t *)calloc(1, sizeof(*broker));
   if (!broker) return NULL;
-  if (turbo_vec_init_bytes(&broker->workers.raw, sizeof(flow_fmq_broker_worker_t),
+  if (vec_init_bytes(&broker->workers.raw, sizeof(flow_fmq_broker_worker_t),
                            _Alignof(flow_fmq_broker_worker_t), config->max_workers) !=
-          TURBO_STL_OK ||
-      turbo_vec_init_bytes(&broker->inflight.raw, sizeof(flow_fmq_broker_inflight_t),
+          STL_OK ||
+      vec_init_bytes(&broker->inflight.raw, sizeof(flow_fmq_broker_inflight_t),
                            _Alignof(flow_fmq_broker_inflight_t), config->max_inflight) !=
-          TURBO_STL_OK ||
-      turbo_vec_init_bytes(&broker->accepted.raw, sizeof(flow_fmq_broker_accepted_t),
+          STL_OK ||
+      vec_init_bytes(&broker->accepted.raw, sizeof(flow_fmq_broker_accepted_t),
                            _Alignof(flow_fmq_broker_accepted_t), config->max_inflight) !=
-          TURBO_STL_OK ||
-      turbo_hash_map_init_bytes(&broker->worker_index.raw,
+          STL_OK ||
+      hash_map_init_bytes(&broker->worker_index.raw,
                                 sizeof(flow_fmq_broker_worker_key_t),
                                 _Alignof(flow_fmq_broker_worker_key_t), sizeof(size_t),
                                 _Alignof(size_t), config->max_workers,
-                                turbo_hash_bytes, turbo_hash_key_equal, NULL) != TURBO_STL_OK ||
-      turbo_hash_map_init_bytes(&broker->request_index.raw,
+                                hash_bytes, hash_key_equal, NULL) != STL_OK ||
+      hash_map_init_bytes(&broker->request_index.raw,
                                 sizeof(uint64_t), _Alignof(uint64_t), sizeof(size_t),
                                 _Alignof(size_t), config->max_inflight,
-                                turbo_hash_bytes, turbo_hash_key_equal, NULL) != TURBO_STL_OK ||
-      turbo_hash_map_init_bytes(&broker->accepted_index.raw,
+                                hash_bytes, hash_key_equal, NULL) != STL_OK ||
+      hash_map_init_bytes(&broker->accepted_index.raw,
                                 sizeof(uint64_t), _Alignof(uint64_t), sizeof(size_t),
                                 _Alignof(size_t), config->max_inflight,
-                                turbo_hash_bytes, turbo_hash_key_equal, NULL) != TURBO_STL_OK ||
+                                hash_bytes, hash_key_equal, NULL) != STL_OK ||
       flow_fmq_broker_workers_reserve(&broker->workers, config->max_workers) != TURBO_OK ||
       flow_fmq_broker_inflight_reserve(&broker->inflight, config->max_inflight) != TURBO_OK ||
       flow_fmq_broker_accepted_reserve(&broker->accepted, config->max_inflight) != TURBO_OK ||
-      turbo_hash_map_reserve(&broker->worker_index.raw, config->max_workers) != TURBO_OK ||
-      turbo_hash_map_reserve(&broker->request_index.raw, config->max_inflight) != TURBO_OK ||
-      turbo_hash_map_reserve(&broker->accepted_index.raw, config->max_inflight) != TURBO_OK) {
+      hash_map_reserve(&broker->worker_index.raw, config->max_workers) != TURBO_OK ||
+      hash_map_reserve(&broker->request_index.raw, config->max_inflight) != TURBO_OK ||
+      hash_map_reserve(&broker->accepted_index.raw, config->max_inflight) != TURBO_OK) {
     turbo_flow_fmq_broker_destroy(broker);
     return NULL;
   }
@@ -393,7 +393,7 @@ static int flow_fmq_broker_worker_ready_at(turbo_flow_fmq_broker_t *broker, cons
     if (flow_fmq_broker_worker_index_put(&broker->worker_index, key, stored_index) != TURBO_OK) {
       flow_fmq_broker_worker_t *stored = flow_fmq_broker_workers_at(&broker->workers, stored_index);
       flow_fmq_broker_worker_cleanup(stored);
-      (void)turbo_vec_resize(&broker->workers.raw, stored_index);
+      (void)vec_resize(&broker->workers.raw, stored_index);
       return TURBO_ENOMEM;
     }
   }
@@ -481,7 +481,7 @@ int turbo_flow_fmq_broker_worker_remove(turbo_flow_fmq_broker_t *broker, const c
       return TURBO_EPROTO;
     flow_fmq_broker_worker_cleanup(worker);
   }
-  if (turbo_vec_resize(&broker->workers.raw, count - 1u) != TURBO_OK) return TURBO_EPROTO;
+  if (vec_resize(&broker->workers.raw, count - 1u) != TURBO_OK) return TURBO_EPROTO;
   return TURBO_OK;
 }
 
@@ -580,7 +580,7 @@ int turbo_flow_fmq_broker_record_accept_commit(turbo_flow_fmq_broker_t *broker, 
     size_t stored_index = flow_fmq_broker_accepted_size(&broker->accepted) - 1u;
     if (flow_fmq_broker_accepted_index_put(&broker->accepted_index, request_id, stored_index) !=
         TURBO_OK) {
-      (void)turbo_vec_resize(&broker->accepted.raw, stored_index);
+      (void)vec_resize(&broker->accepted.raw, stored_index);
       return TURBO_ENOMEM;
     }
   }
@@ -1186,7 +1186,7 @@ static int flow_fmq_credit_inflight_remove(turbo_flow_fmq_credit_worker_t *owner
                                                    NULL)) {
     return TURBO_EPROTO;
   }
-  return turbo_vec_resize(&owner->inflight.raw, count - 1u) == TURBO_OK ? TURBO_OK : TURBO_EPROTO;
+  return vec_resize(&owner->inflight.raw, count - 1u) == TURBO_OK ? TURBO_OK : TURBO_EPROTO;
 }
 
 static int flow_fmq_credit_worker_remove(turbo_flow_fmq_credit_worker_t *owner, size_t index) {
@@ -1216,7 +1216,7 @@ static int flow_fmq_credit_worker_remove(turbo_flow_fmq_credit_worker_t *owner, 
       return TURBO_EPROTO;
     flow_fmq_credit_worker_record_cleanup(worker);
   }
-  return turbo_vec_resize(&owner->workers.raw, count - 1u) == TURBO_OK ? TURBO_OK : TURBO_EPROTO;
+  return vec_resize(&owner->workers.raw, count - 1u) == TURBO_OK ? TURBO_OK : TURBO_EPROTO;
 }
 
 turbo_flow_fmq_credit_worker_t *
@@ -1225,25 +1225,25 @@ turbo_flow_fmq_credit_worker_create(const turbo_flow_fmq_credit_worker_config_t 
   if (!flow_fmq_credit_config_valid(config)) return NULL;
   owner = (turbo_flow_fmq_credit_worker_t *)calloc(1, sizeof(*owner));
   if (!owner) return NULL;
-  if (turbo_vec_init_bytes(&owner->workers.raw, sizeof(flow_fmq_credit_worker_record_t),
+  if (vec_init_bytes(&owner->workers.raw, sizeof(flow_fmq_credit_worker_record_t),
                            _Alignof(flow_fmq_credit_worker_record_t), config->max_workers) !=
-          TURBO_STL_OK ||
-      turbo_vec_init_bytes(&owner->inflight.raw, sizeof(flow_fmq_credit_inflight_t),
+          STL_OK ||
+      vec_init_bytes(&owner->inflight.raw, sizeof(flow_fmq_credit_inflight_t),
                            _Alignof(flow_fmq_credit_inflight_t), config->max_inflight) !=
-          TURBO_STL_OK ||
-      turbo_hash_map_init_bytes(&owner->worker_index.raw,
+          STL_OK ||
+      hash_map_init_bytes(&owner->worker_index.raw,
                                 sizeof(flow_fmq_broker_worker_key_t),
                                 _Alignof(flow_fmq_broker_worker_key_t), sizeof(size_t),
                                 _Alignof(size_t), config->max_workers,
-                                turbo_hash_bytes, turbo_hash_key_equal, NULL) != TURBO_STL_OK ||
-      turbo_hash_map_init_bytes(&owner->request_index.raw,
+                                hash_bytes, hash_key_equal, NULL) != STL_OK ||
+      hash_map_init_bytes(&owner->request_index.raw,
                                 sizeof(uint64_t), _Alignof(uint64_t), sizeof(size_t),
                                 _Alignof(size_t), config->max_inflight,
-                                turbo_hash_bytes, turbo_hash_key_equal, NULL) != TURBO_STL_OK ||
+                                hash_bytes, hash_key_equal, NULL) != STL_OK ||
       flow_fmq_credit_workers_reserve(&owner->workers, config->max_workers) != TURBO_OK ||
       flow_fmq_credit_inflight_reserve(&owner->inflight, config->max_inflight) != TURBO_OK ||
-      turbo_hash_map_reserve(&owner->worker_index.raw, config->max_workers) != TURBO_OK ||
-      turbo_hash_map_reserve(&owner->request_index.raw, config->max_inflight) != TURBO_OK) {
+      hash_map_reserve(&owner->worker_index.raw, config->max_workers) != TURBO_OK ||
+      hash_map_reserve(&owner->request_index.raw, config->max_inflight) != TURBO_OK) {
     turbo_flow_fmq_credit_worker_destroy(owner);
     return NULL;
   }
@@ -1355,7 +1355,7 @@ int turbo_flow_fmq_credit_worker_grant(turbo_flow_fmq_credit_worker_t *owner,
     flow_fmq_broker_worker_key_t key = flow_fmq_broker_worker_key(grant->worker_id);
     if (flow_fmq_credit_worker_index_put(&owner->worker_index, key, index) != TURBO_OK) {
       flow_fmq_credit_worker_record_cleanup(flow_fmq_credit_workers_at(&owner->workers, index));
-      (void)turbo_vec_resize(&owner->workers.raw, index);
+      (void)vec_resize(&owner->workers.raw, index);
       return TURBO_ENOMEM;
     }
   }
@@ -1433,7 +1433,7 @@ int turbo_flow_fmq_credit_worker_dispatch(turbo_flow_fmq_credit_worker_t *owner,
   {
     size_t index = flow_fmq_credit_inflight_size(&owner->inflight) - 1u;
     if (flow_fmq_credit_request_index_put(&owner->request_index, request_id, index) != TURBO_OK) {
-      (void)turbo_vec_resize(&owner->inflight.raw, index);
+      (void)vec_resize(&owner->inflight.raw, index);
       return TURBO_ENOMEM;
     }
   }
@@ -1632,7 +1632,7 @@ static int flow_fmq_credit_settlement_remove(turbo_flow_fmq_credit_settlement_t 
              !flow_fmq_credit_settlement_index_remove(&owner->claim_index, claim_token, NULL)) {
     return TURBO_EPROTO;
   }
-  return turbo_vec_resize(&owner->records.raw, count - 1u) == TURBO_OK ? TURBO_OK : TURBO_EPROTO;
+  return vec_resize(&owner->records.raw, count - 1u) == TURBO_OK ? TURBO_OK : TURBO_EPROTO;
 }
 
 static int flow_fmq_credit_settlement_add(turbo_flow_fmq_credit_settlement_t *owner,
@@ -1656,13 +1656,13 @@ static int flow_fmq_credit_settlement_add(turbo_flow_fmq_credit_settlement_t *ow
     return TURBO_ENOMEM;
   index = flow_fmq_credit_settlement_records_size(&owner->records) - 1u;
   if (flow_fmq_credit_settlement_index_put(&owner->request_index, request_id, index) != TURBO_OK) {
-    (void)turbo_vec_resize(&owner->records.raw, index);
+    (void)vec_resize(&owner->records.raw, index);
     return TURBO_ENOMEM;
   }
   if (flow_fmq_credit_settlement_index_put(&owner->claim_index, claim_token, index) != TURBO_OK) {
     if (!flow_fmq_credit_settlement_index_remove(&owner->request_index, request_id, NULL))
       return TURBO_EPROTO;
-    (void)turbo_vec_resize(&owner->records.raw, index);
+    (void)vec_resize(&owner->records.raw, index);
     return TURBO_ENOMEM;
   }
   *stored_index = index;
@@ -1725,21 +1725,21 @@ turbo_flow_fmq_credit_settlement_create(turbo_flow_fmq_credit_worker_t *credit_o
   }
   owner = (turbo_flow_fmq_credit_settlement_t *)calloc(1, sizeof(*owner));
   if (!owner) return NULL;
-  if (turbo_vec_init_bytes(&owner->records.raw,
+  if (vec_init_bytes(&owner->records.raw,
                            sizeof(flow_fmq_credit_settlement_record_t),
                            _Alignof(flow_fmq_credit_settlement_record_t), config->capacity) !=
-          TURBO_STL_OK ||
-      turbo_hash_map_init_bytes(&owner->request_index.raw,
+          STL_OK ||
+      hash_map_init_bytes(&owner->request_index.raw,
                                 sizeof(uint64_t), _Alignof(uint64_t), sizeof(size_t),
                                 _Alignof(size_t), config->capacity,
-                                turbo_hash_bytes, turbo_hash_key_equal, NULL) != TURBO_STL_OK ||
-      turbo_hash_map_init_bytes(&owner->claim_index.raw,
+                                hash_bytes, hash_key_equal, NULL) != STL_OK ||
+      hash_map_init_bytes(&owner->claim_index.raw,
                                 sizeof(uint64_t), _Alignof(uint64_t), sizeof(size_t),
                                 _Alignof(size_t), config->capacity,
-                                turbo_hash_bytes, turbo_hash_key_equal, NULL) != TURBO_STL_OK ||
+                                hash_bytes, hash_key_equal, NULL) != STL_OK ||
       flow_fmq_credit_settlement_records_reserve(&owner->records, config->capacity) != TURBO_OK ||
-      turbo_hash_map_reserve(&owner->request_index.raw, config->capacity) != TURBO_OK ||
-      turbo_hash_map_reserve(&owner->claim_index.raw, config->capacity) != TURBO_OK) {
+      hash_map_reserve(&owner->request_index.raw, config->capacity) != TURBO_OK ||
+      hash_map_reserve(&owner->claim_index.raw, config->capacity) != TURBO_OK) {
     flow_fmq_credit_settlement_records_destroy(&owner->records);
     flow_fmq_credit_settlement_index_destroy(&owner->request_index);
     flow_fmq_credit_settlement_index_destroy(&owner->claim_index);
@@ -2139,7 +2139,7 @@ static int flow_fmq_credit_durable_add_loaded(turbo_flow_fmq_credit_durable_t *o
     return TURBO_ENOMEM;
   index = flow_fmq_credit_durable_records_size(&owner->records) - 1u;
   if (flow_fmq_credit_durable_address_index_put(&owner->address_index, key, index) != TURBO_OK) {
-    (void)turbo_vec_resize(&owner->records.raw, index);
+    (void)vec_resize(&owner->records.raw, index);
     return TURBO_ENOMEM;
   }
   return TURBO_OK;
@@ -2259,7 +2259,7 @@ static int flow_fmq_credit_durable_remove(turbo_flow_fmq_credit_durable_t *owner
                                                   index) != TURBO_OK)
       return TURBO_EPROTO;
   }
-  return turbo_vec_resize(&owner->records.raw, count - 1u) == TURBO_OK ? TURBO_OK : TURBO_EPROTO;
+  return vec_resize(&owner->records.raw, count - 1u) == TURBO_OK ? TURBO_OK : TURBO_EPROTO;
 }
 
 static int flow_fmq_credit_durable_commit(turbo_flow_fmq_credit_durable_t *owner, size_t index,
@@ -2343,26 +2343,26 @@ int turbo_flow_fmq_credit_durable_create(turbo_flow_fmq_credit_worker_t *credit_
   owner->shutdown_max_steps = config->shutdown_max_steps;
   owner->state_capacity = settler->max_state_size;
   memcpy(owner->state_key, config->state_key, key_size + 1u);
-  rc = turbo_vec_init_bytes(&owner->records.raw, sizeof(flow_fmq_credit_durable_record_t),
+  rc = vec_init_bytes(&owner->records.raw, sizeof(flow_fmq_credit_durable_record_t),
                             _Alignof(flow_fmq_credit_durable_record_t), config->capacity);
-  if (rc == TURBO_STL_OK)
-    rc = turbo_hash_map_init_bytes(&owner->address_index.raw,
+  if (rc == STL_OK)
+    rc = hash_map_init_bytes(&owner->address_index.raw,
                                    sizeof(flow_fmq_credit_durable_key_t),
                                    _Alignof(flow_fmq_credit_durable_key_t), sizeof(size_t),
                                    _Alignof(size_t), config->capacity,
-                                   turbo_hash_bytes, turbo_hash_key_equal, NULL);
-  if (rc == TURBO_STL_OK)
-    rc = turbo_hash_map_init_bytes(&owner->runtime_index.raw,
+                                   hash_bytes, hash_key_equal, NULL);
+  if (rc == STL_OK)
+    rc = hash_map_init_bytes(&owner->runtime_index.raw,
                                    sizeof(uint64_t), _Alignof(uint64_t), sizeof(size_t),
                                    _Alignof(size_t), config->capacity,
-                                   turbo_hash_bytes, turbo_hash_key_equal, NULL);
-  if (rc == TURBO_STL_OK)
+                                   hash_bytes, hash_key_equal, NULL);
+  if (rc == STL_OK)
     rc = flow_fmq_credit_durable_records_reserve(&owner->records, config->capacity);
-  if (rc == TURBO_STL_OK) rc = turbo_hash_map_reserve(&owner->address_index.raw, config->capacity);
-  if (rc == TURBO_STL_OK) rc = turbo_hash_map_reserve(&owner->runtime_index.raw, config->capacity);
-  if (rc != TURBO_STL_OK) {
+  if (rc == STL_OK) rc = hash_map_reserve(&owner->address_index.raw, config->capacity);
+  if (rc == STL_OK) rc = hash_map_reserve(&owner->runtime_index.raw, config->capacity);
+  if (rc != STL_OK) {
     turbo_flow_fmq_credit_durable_destroy(owner);
-    return flowmq_stl_status_to_error((turbo_stl_status)rc);
+    return flowmq_stl_error((stl_status)rc);
   }
   rc = flow_fmq_credit_durable_load(owner);
   if (rc != TURBO_OK) {
