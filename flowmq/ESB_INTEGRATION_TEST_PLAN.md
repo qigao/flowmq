@@ -20,7 +20,7 @@
 #### 测试场景 1：基础 Scatter/Gather 流程
 **目标**: 验证完整的 scatter → 多服务响应 → gather 聚合流程
 
-**实现路径**: `flowmq/runtime/tests/integration/test_scatter_gather_e2e.c`
+**规划路径**: `patterns/tests/integration/test_scatter_gather_e2e.c`（尚未实现）
 
 **测试步骤**:
 1. 启动 1 个 scatter 客户端 + 3 个 gather 服务端
@@ -96,7 +96,7 @@
 #### 测试场景 5：Producer → Consumer 基础流程
 **目标**: 验证消息发布、分区存储、消费者获取流程
 
-**实现路径**: `flowmq/runtime/tests/integration/test_stream_e2e.c`
+**规划路径**: `patterns/tests/integration/test_stream_e2e.c`（尚未实现）
 
 **测试步骤**:
 1. 创建 topic（4 个分区）
@@ -191,7 +191,7 @@
 #### Benchmark 1：聚合延迟测量
 **目标**: 测量不同聚合策略的端到端延迟
 
-**实现路径**: `flowmq/benchmarks/bench_scatter_gather_latency.c`
+**规划路径**: `flowmq/benchmarks/bench_scatter_gather_latency.c`（尚未实现）
 
 **测试配置**:
 - 期望响应数：3 / 5 / 10
@@ -243,7 +243,7 @@ CPU：<50% 单核
 #### Benchmark 3：消息发布吞吐量
 **目标**: 测量单分区写入性能
 
-**实现路径**: `flowmq/benchmarks/bench_stream_publish.c`
+**规划路径**: `flowmq/benchmarks/bench_stream_publish.c`（尚未实现）
 
 **测试配置**:
 - 分区数：1（单分区基准）
@@ -395,7 +395,7 @@ Rebalance 耗时：<100ms
 
 ### 阶段 1：环境准备（1 天）
 - [ ] 配置 CMake，确保单元测试全部通过
-- [ ] 创建 `flowmq/runtime/tests/integration/` 目录
+- [ ] 创建 `patterns/tests/integration/` 目录
 - [ ] 创建测试辅助工具（mock endpoint、消息生成器）
 
 ### 阶段 2：集成测试实现（3 天）
@@ -464,11 +464,10 @@ Rebalance 耗时：<100ms
 ## 八、参考实现
 
 ### 现有 Benchmark 参考
-- `flowmq/benchmarks/bench_fmq.c` - 基础消息发送/接收 benchmark
-- `flowmq/benchmarks/fmq_bench_stats.h` - 统计工具（P50/P95/P99）
+- `flowmq/benchmarks/bench_flowmq_protocol.c` - 协议编解码 benchmark
 
 ### 测试框架参考
-- `flowmq/runtime/tests/test_flowmq_core.c` - Core 层测试结构
+- `patterns/tests/test_flowmq_core.c` - Core 层测试结构
 - TinyTest 使用示例（已在单元测试中使用）
 
 ---
@@ -517,7 +516,7 @@ void mock_endpoint_send(mock_endpoint_t *ep, flowmq_frame_t *frame) {
 #### 测试场景 10：SAGA 成功提交流程
 **目标**: 验证多步骤事务全部成功的完整流程
 
-**实现路径**: `flowmq/runtime/tests/integration/test_saga_e2e.c`
+**规划路径**: `patterns/tests/integration/test_saga_e2e.c`（尚未实现）
 
 **测试步骤**:
 1. 创建 SAGA 事务（3 个步骤）
@@ -574,7 +573,7 @@ void mock_endpoint_send(mock_endpoint_t *ep, flowmq_frame_t *frame) {
 #### 测试场景 13：多优先级消息处理
 **目标**: 验证高优先级消息优先消费
 
-**实现路径**: `flowmq/runtime/tests/integration/test_priority_queue_e2e.c`
+**规划路径**: `patterns/tests/integration/test_priority_queue_e2e.c`（尚未实现）
 
 **测试步骤**:
 1. Producer 发布混合优先级消息（P200 × 2、P100 × 3、P50 × 2）
@@ -610,7 +609,7 @@ void mock_endpoint_send(mock_endpoint_t *ep, flowmq_frame_t *frame) {
 #### 测试场景 15：熔断器状态迁移
 **目标**: 验证完整的熔断器生命周期
 
-**实现路径**: `flowmq/runtime/tests/integration/test_circuit_breaker_e2e.c`
+**规划路径**: `patterns/tests/integration/test_circuit_breaker_e2e.c`（尚未实现）
 
 **测试步骤**:
 1. 初始化熔断器（failure_threshold=3, timeout=1s）
@@ -839,7 +838,7 @@ OPEN 状态（fail fast）：
 ### 阶段 1：环境准备（1 天）
 - [x] Phase 1-5 完成（Protocol + 5 种模式实现）
 - [ ] CMake 配置，确保单元测试全部通过（67 个测试）
-- [ ] 创建 `flowmq/runtime/tests/integration/` 目录
+- [ ] 创建 `patterns/tests/integration/` 目录
 - [ ] 创建测试辅助工具（mock endpoint、消息生成器）
 
 ### 阶段 2：核心集成测试实现（4 天）
@@ -922,9 +921,9 @@ OPEN 状态（fail fast）：
 
 ## 八、新增文件清单
 
-### 集成测试文件
+### 规划中的集成测试文件
 ```
-flowmq/runtime/tests/integration/
+patterns/tests/integration/
 ├── test_scatter_gather_e2e.c
 ├── test_stream_e2e.c
 ├── test_saga_e2e.c               # 新增
@@ -934,7 +933,7 @@ flowmq/runtime/tests/integration/
 └── test_transactional_stream_e2e.c  # 新增（组合模式）
 ```
 
-### Benchmark 文件
+### 规划中的 Benchmark 文件
 ```
 flowmq/benchmarks/
 ├── bench_scatter_gather_latency.c

@@ -1,7 +1,7 @@
 # FlowMQ
 
-FlowMQ 是独立的 C 消息模式库。默认构建不依赖 TurboFlow、Graph、YAML、数据库或 HTTP；复杂业务
-拓扑由上层适配器组合，FlowMQ 本身拥有 wire、pattern/session 状态和 CoroNet endpoint 生命周期。
+FlowMQ 是独立的 C 消息模式库。复杂业务拓扑由上层适配器组合，FlowMQ 本身拥有 wire、
+pattern/session 状态和 CoroNet endpoint 生命周期。
 
 ## Targets
 
@@ -159,8 +159,7 @@ ctest --preset win-dev-user -L flowmq --output-on-failure
 - copied send admission 是 MPSC→单 endpoint-context consumer。成功时 endpoint 拥有 frame 副本；失败
   时不接收所有权且不调用 completion。`stop()` 原子关闭 admission、排空已接受 callback，再停止
   socket/context；队列 current/high-water、满额拒绝和 completion/failure 可读取。
-- 当前仓库中保留的 `turbo_flow_fmq*`、security owner、management 和 deployment 文件只是历史迁移
-  参考，不属于任何默认 target，也不进入安装包。旧 `add_subdirectory(flowmq)` 会明确失败；外部适配器
-  只能消费已安装的 `FlowMQ::FlowMQ`。
+- 外部适配器只能消费已安装的 `FlowMQ::FlowMQ`，不能反向拥有 endpoint 的 socket、session 或
+  peer registry。
 
-架构决策见 [ADR_LIBRARY_BOUNDARY.md](ADR_LIBRARY_BOUNDARY.md)。
+架构与所有权边界见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。

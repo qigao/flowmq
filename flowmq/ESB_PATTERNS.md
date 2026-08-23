@@ -533,7 +533,7 @@ stream:
 
 ### 5.3 Benchmark（Phase 4 规划）
 
-参见 `flowmq/benchmarks/README.md`：
+当前 `flowmq/benchmarks/bench_flowmq_protocol.c` 覆盖协议编解码；以下 ESB benchmark 尚待实现：
 - Scatter 请求吞吐量
 - Gather 聚合延迟（不同策略对比）
 - Stream 发布/消费吞吐量
@@ -584,10 +584,9 @@ stream:
 ## 八、参考资料
 
 ### 8.1 内部文档
-- [FlowMQ 协议规范](PROTOCOL_SPEC.md)
-- [Wire Protocol](FMQ_WIRE_PROTOCOL.md)
-- [架构文档](ARCHITECTURE.md)
-- [开发指南](DEVELOPER_GUIDE.md)
+- [FlowMQ 协议规范](../docs/PROTOCOL_SPEC.md)
+- [Wire Protocol](../docs/FMQ_WIRE_PROTOCOL.md)
+- [架构文档](../docs/ARCHITECTURE.md)
 
 ### 8.2 相关标准
 - [Enterprise Integration Patterns](https://www.enterpriseintegrationpatterns.com/) - Scatter-Gather, Content-Based Router
@@ -596,8 +595,8 @@ stream:
 
 ### 8.3 实现参考
 - `flowmq/protocol/include/flowmq_protocol_esb.h` - TLV 编解码
-- `flowmq/runtime/src/flowmq_scatter_gather.c` - 会话管理
-- `flowmq/runtime/src/flowmq_stream_partition.c` - 分区管理
+- `patterns/src/flowmq_scatter_gather.c` - 会话管理
+- `patterns/src/flowmq_stream_partition.c` - 分区管理
 
 ---
 

@@ -1,8 +1,8 @@
 # FlowMQ architecture
 
 FlowMQ 是独立的 pattern-oriented messaging library。它负责 wire、pattern/session 状态和 CoroNet
-endpoint 生命周期；Raft、TurboFlow 或其他宿主只通过公开 callback/send API 组合业务语义，不反向
-拥有 socket 或复制 peer 状态。
+endpoint 生命周期；TurboRaft 或其他宿主只通过公开 callback/send API 组合业务语义，不反向拥有
+socket 或复制 peer 状态。
 
 ## Layers
 

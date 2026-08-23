@@ -96,19 +96,19 @@
 #### 新增文件
 | 文件 | 行数 | 功能 |
 |------|------|------|
-| `flowmq/runtime/src/flowmq_scatter_gather.h` | ~150 | Scatter/Gather 状态机 API |
-| `flowmq/runtime/src/flowmq_scatter_gather.c` | ~400 | 会话管理、聚合策略、超时处理 |
-| `flowmq/runtime/src/flowmq_stream_partition.h` | ~200 | Stream 分区管理 API |
-| `flowmq/runtime/src/flowmq_stream_partition.c` | ~600 | Topic、分区、消费者组、rebalance |
-| `flowmq/runtime/tests/test_flowmq_scatter_gather.c` | ~300 | 10 个单元测试 |
-| `flowmq/runtime/tests/test_flowmq_stream_partition.c` | ~400 | 12 个单元测试 |
+| `patterns/src/flowmq_scatter_gather.h` | ~150 | Scatter/Gather 状态机 API |
+| `patterns/src/flowmq_scatter_gather.c` | ~400 | 会话管理、聚合策略、超时处理 |
+| `patterns/src/flowmq_stream_partition.h` | ~200 | Stream 分区管理 API |
+| `patterns/src/flowmq_stream_partition.c` | ~600 | Topic、分区、消费者组、rebalance |
+| `patterns/tests/test_flowmq_scatter_gather.c` | ~300 | 10 个单元测试 |
+| `patterns/tests/test_flowmq_stream_partition.c` | ~400 | 12 个单元测试 |
 
 #### 修改文件
 | 文件 | 变更 |
 |------|------|
-| `flowmq/runtime/src/flowmq_pattern.c` | 扩展支持 ESB pattern 范围（12-31） |
-| `flowmq/runtime/CMakeLists.txt` | 添加 scatter_gather 和 stream_partition 源文件 |
-| `flowmq/runtime/tests/CMakeLists.txt` | 添加 2 个测试 target |
+| `patterns/src/flowmq_pattern.c` | 扩展支持 ESB pattern 范围（12-31） |
+| `patterns/CMakeLists.txt` | 添加 scatter_gather 和 stream_partition 源文件 |
+| `patterns/tests/CMakeLists.txt` | 添加 2 个测试 target |
 | `flowmq/include/flowmq.h` | 引用 ESB 头文件 |
 
 #### Scatter/Gather 功能

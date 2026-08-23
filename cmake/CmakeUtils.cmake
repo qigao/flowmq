@@ -31,13 +31,6 @@ function(cmake_config_target target_name)
         set_target_properties(${target_name} PROPERTIES OUTPUT_NAME ${ARG_OUTPUT_NAME})
     endif()
 
-    if(WIN32 AND TARGET turbo_flow_external_runtime)
-        get_target_property(target_imported ${target_name} IMPORTED)
-        if(NOT target_imported)
-            add_dependencies(${target_name} turbo_flow_external_runtime)
-        endif()
-    endif()
-
     if(target_type STREQUAL "SHARED_LIBRARY" OR target_type STREQUAL "STATIC_LIBRARY")
         if(NOT ARG_VERSION AND PROJECT_VERSION)
             set(ARG_VERSION ${PROJECT_VERSION})

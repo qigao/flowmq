@@ -4,9 +4,7 @@ FMQ/3 是 FlowMQ 唯一 socket framing；FMS/3 是可选但不可降级的 HELLO
 envelope。本文是 wire 字段、校验、分片、心跳、pattern、queue 和
 backpressure 边界的唯一详细正文。
 
-协议总索引见 [PROTOCOL_SPEC.md](PROTOCOL_SPEC.md)。安全决策、provider 生命周期、
-ACL 和决策理由见 [ADR_FMQ_V3_SECURITY.md](ADR_FMQ_V3_SECURITY.md)。本文不定义
-TFMP 或 TFCW 的应用字段。
+协议总索引见 [PROTOCOL_SPEC.md](PROTOCOL_SPEC.md)。本文定义 wire envelope，不定义应用 payload。
 
 KCP transport 的 TKSH/1、TKSR/1 与 TKF1/1 由
 [KCP_TRANSPORT_PROTOCOL.md](KCP_TRANSPORT_PROTOCOL.md) 定义。
@@ -16,7 +14,7 @@ KCP transport 的 TKSH/1、TKSR/1 与 TKF1/1 由
 FMQ/3 位于 CoroNet transport 之上，应用协议位于 FMQ `DATA` payload 之内：
 
 ```text
-TFMP/1、TFCW/1
+     应用 payload
               |
        FMQ/3 DATA payload
               |
@@ -231,10 +229,9 @@ stop/shutdown 顺序固定为：
 
 ## 8. Implementation evidence
 
-规范实现位于 `protocol/include/flowmq_protocol.h`、`protocol/src/flowmq_protocol.c`
-、`runtime/src/flowmq_pattern.c` 和 `src/flow_fmq.c`。对应测试覆盖 encode/decode、
+规范实现位于 `flowmq/protocol/include/flowmq_protocol.h`、
+`flowmq/protocol/src/flowmq_protocol.c` 和 `patterns/src/flowmq_pattern.c`。对应测试覆盖 encode/decode、
 fragmentation、security envelope、unknown version、malformed control frame、
 pattern pairing、heartbeat deadline、slow-subscriber policy、PUSH round-robin、
 route generation fencing 和 slow-PULL credit isolation，入口为
-`protocol/tests/test_flowmq_protocol.c`、`runtime/tests/test_flowmq_pattern.c` 与
-`tests/test_fmq.c`。
+`flowmq/protocol/tests/test_flowmq_protocol.c` 与 `patterns/tests/test_flowmq_pattern.c`。

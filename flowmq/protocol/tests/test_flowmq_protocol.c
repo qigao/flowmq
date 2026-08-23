@@ -125,7 +125,7 @@ spec("flowmq_protocol") {
     flowmq_protocol_segmented_frame_cleanup(NULL);
   }
 
-  it("round trips binary data without a TurboFlow dependency") {
+  it("round trips binary data through the public protocol API") {
     static const char payload[] = {'a', '\0', 'b'};
     flowmq_protocol_frame_t input;
     flowmq_protocol_frame_t output;

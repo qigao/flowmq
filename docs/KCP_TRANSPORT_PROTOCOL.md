@@ -7,7 +7,7 @@ Reed-Solomon FEC、重放边界和公开调优参数。不存在 raw KCP、未�
 ## 1. 分层
 
 ```text
-TFMP/1、TFCW/1 或应用 payload
+              应用 payload
                     |
                   FMQ/3
                     |
@@ -100,8 +100,7 @@ receive group 使用 session-owned 固定 ring。新 group 覆盖仍未完成的
 ## 5. KCP 与确认语义
 
 KCP 的 ACK、重传、窗口和拥塞算法属于 transport 内部状态，不是 FMQ delivery ACK。
-应用请求不等待逐条管理结果；TFMP mutation 先返回 correlated ACCEPT，终态由
-`OPERATION_GET` 或 event channel 获取。KCP conv 从 session epoch 派生，不使用固定值。
+KCP conv 从 session epoch 派生，不使用固定值。
 
 peer 只有在 TKSH MAC 验证成功后才能锁定。shutdown 顺序为停止 admission、取消或
 drain FEC group/KCP packet、停止 timer/UDP callback、清零 session keys，再释放
@@ -133,6 +132,6 @@ FlowMQ/YAML 的 PSK 使用恰好 64 个十六进制字符。其他字段为启�
 ## 7. 验证入口
 
 实现位于 CoroNet `src/turbo_kcp.c`、`src/turbo_kcp_secure.c` 和
-`src/turbo_kcp_fec.c`。`tests/test_kcp.c` 覆盖错误 PSK、篡改、重放、parity corruption、
-丢片恢复、配置边界、认证后 peer 建立与端到端收发；FlowMQ 的
-`tests/test_fmq.c`、`io/socket/tests/test_socket.c` 覆盖上层配置转发与 transport 组合。
+`src/turbo_kcp_fec.c`。CoroNet 的 `tests/test_kcp.c` 覆盖错误 PSK、篡改、重放、
+parity corruption、丢片恢复、配置边界、认证后 peer 建立与端到端收发；FlowMQ 的
+`patterns/tests/test_flowmq_coronet_transport.c` 覆盖 KCP transport 选择。

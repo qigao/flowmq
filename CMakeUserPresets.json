@@ -11,19 +11,16 @@
                 "PROJECT_ROOT": "C:/projects/cpp",
                 "PKG_ROOT": "$env{PROJECT_ROOT}/external/pkgs",
                 "VCPKG_ROOT": "C:/tools/vcpkg",
+                "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
+                "TURBOUTILS_ROOT": "$env{PKG_ROOT}/turboutils",
+                "TURBOPARSER_ROOT": "$env{PKG_ROOT}/turboparser",
+                "TURBONET_ROOT": "$env{PKG_ROOT}/turbonet",
+                "TURBODB_ROOT": "$env{PKG_ROOT}/turbodb",
+                "FLOWMQ_ROOT": "$env{PKG_ROOT}/flowmq",
                 "USER_ROOT": "C:/Users/lockg",
                 "PROGRAM_FILES_X86_ROOT": "C:/Program Files (x86)",
                 "WINDOWS_ROOT": "C:/Windows",
-                "NINJA_ROOT": "$env{USER_ROOT}/scoop/shims",
-                "VS_ROOT": "$env{PROGRAM_FILES_X86_ROOT}/Microsoft Visual Studio/2022/BuildTools",
-                "MSVC_VERSION": "14.44.35207",
-                "MSVC_ROOT": "$env{VS_ROOT}/VC/Tools/MSVC/$env{MSVC_VERSION}",
-                "MSVC_AUXILIARY_ROOT": "$env{VS_ROOT}/VC/Auxiliary/VS",
-                "WINDOWS_SDK_ROOT": "$env{PROGRAM_FILES_X86_ROOT}/Windows Kits/10",
-                "WINDOWS_SDK_VERSION": "10.0.26100.0",
-                "INCLUDE": "$env{MSVC_ROOT}/include;$env{MSVC_AUXILIARY_ROOT}/include;$env{WINDOWS_SDK_ROOT}/Include/$env{WINDOWS_SDK_VERSION}/ucrt;$env{WINDOWS_SDK_ROOT}/Include/$env{WINDOWS_SDK_VERSION}/um;$env{WINDOWS_SDK_ROOT}/Include/$env{WINDOWS_SDK_VERSION}/shared;$env{WINDOWS_SDK_ROOT}/Include/$env{WINDOWS_SDK_VERSION}/winrt;$env{WINDOWS_SDK_ROOT}/Include/$env{WINDOWS_SDK_VERSION}/cppwinrt",
-                "LIB": "$env{MSVC_ROOT}/lib/x64;$env{WINDOWS_SDK_ROOT}/Lib/$env{WINDOWS_SDK_VERSION}/ucrt/x64;$env{WINDOWS_SDK_ROOT}/Lib/$env{WINDOWS_SDK_VERSION}/um/x64",
-                "LIBPATH": "$env{MSVC_ROOT}/lib/x64;$env{MSVC_ROOT}/lib/x86/store/references;$env{WINDOWS_SDK_ROOT}/UnionMetadata/$env{WINDOWS_SDK_VERSION};$env{WINDOWS_SDK_ROOT}/References/$env{WINDOWS_SDK_VERSION};$env{WINDOWS_ROOT}/Microsoft.NET/Framework64/v4.0.30319"
+                "NINJA_ROOT": "$env{USER_ROOT}/scoop/shims"
             }
         },
         {
@@ -33,11 +30,12 @@
             "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
             "cacheVariables": { 
                 "CMAKE_MAKE_PROGRAM": "$env{NINJA_ROOT}/ninja.exe",
-                "TURBO_UTILS_ROOT": "$env{PKG_ROOT}/turboutils",
-                "TURBO_PARSER_ROOT": "$env{PKG_ROOT}/turboparser",
-                "TURBO_NET_ROOT": "$env{PKG_ROOT}/turbonet",
-                "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/flowmq",
-                "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
+                "TURBO_UTILS_ROOT": "$env{TURBOUTILS_ROOT}",
+                "TURBO_PARSER_ROOT": "$env{TURBOPARSER_ROOT}",
+                "TURBO_NET_ROOT": "$env{TURBONET_ROOT}",
+                "TURBODB_ROOT": "$env{TURBODB_ROOT}",
+                "CMAKE_INSTALL_PREFIX": "$env{FLOWMQ_ROOT}",
+                "VCPKG_INSTALLED_DIR": "$env{VCPKG_INSTALLED_DIR}",
                 "VCPKG_TARGET_TRIPLET": "x64-windows",
                 "VCPKG_MANIFEST_MODE": "ON"
             },
@@ -49,18 +47,25 @@
             "hidden": true,
             "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
             "cacheVariables": {
-                "TURBO_UTILS_ROOT": "$env{PKG_ROOT}/turboutils",
-                "TURBO_PARSER_ROOT": "$env{PKG_ROOT}/turboparser",
-                "TURBO_NET_ROOT": "$env{PKG_ROOT}/turbonet",
-                "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/flowmq",
+                "TURBO_UTILS_ROOT": "$env{TURBOUTILS_ROOT}",
+                "TURBO_PARSER_ROOT": "$env{TURBOPARSER_ROOT}",
+                "TURBO_NET_ROOT": "$env{TURBONET_ROOT}",
+                "TURBODB_ROOT": "$env{TURBODB_ROOT}",
+                "CMAKE_INSTALL_PREFIX": "$env{FLOWMQ_ROOT}",
                 "CMAKE_MAKE_PROGRAM": "/usr/bin/ninja",
-                "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
+                "VCPKG_INSTALLED_DIR": "$env{VCPKG_INSTALLED_DIR}",
                 "VCPKG_TARGET_TRIPLET": "x64-linux",
                 "VCPKG_MANIFEST_MODE": "ON"
             },
             "environment": {
                 "PKG_ROOT": "/opt",
-                "VCPKG_ROOT": "/opt/vcpkg"
+                "VCPKG_ROOT": "/opt/vcpkg",
+                "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
+                "TURBOUTILS_ROOT": "$env{PKG_ROOT}/turboutils",
+                "TURBOPARSER_ROOT": "$env{PKG_ROOT}/turboparser",
+                "TURBONET_ROOT": "$env{PKG_ROOT}/turbonet",
+                "TURBODB_ROOT": "$env{PKG_ROOT}/turbodb",
+                "FLOWMQ_ROOT": "$env{PKG_ROOT}/flowmq"
             }
         },
         {
@@ -77,20 +82,30 @@
             "name": "win-dev-user",
             "cacheVariables": {
                 "ENABLE_ASAN": "ON",
-                "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/x64-windows/debug"
+                "CMAKE_PREFIX_PATH": "$env{TURBOUTILS_ROOT};$env{TURBOPARSER_ROOT};$env{TURBONET_ROOT};$env{TURBODB_ROOT};$env{VCPKG_INSTALLED_DIR}/x64-windows/debug"
             },
             "environment": {
-                "PATH": "${sourceDir}/vcpkg_installed/x64-windows/debug/bin${pathListSep}$penv{PATH}"
+                "TURBOUTILS_ROOT": "$env{PKG_ROOT}/turboutils-debug",
+                "TURBOPARSER_ROOT": "$env{PKG_ROOT}/turboparser-debug",
+                "TURBONET_ROOT": "$env{PKG_ROOT}/turbonet-debug",
+                "TURBODB_ROOT": "$env{PKG_ROOT}/turbodb-debug",
+                "FLOWMQ_ROOT": "$env{PKG_ROOT}/flowmq-debug",
+                "PATH": "${sourceDir}/build/Msvc/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{TURBOUTILS_ROOT}/bin${pathListSep}$env{TURBOPARSER_ROOT}/bin${pathListSep}$env{TURBONET_ROOT}/bin${pathListSep}$env{TURBODB_ROOT}/bin${pathListSep}$penv{PATH}"
             },
             "inherits": ["base-win-dev-user", "win-paths"]
         },
         {
             "name": "win-release-user",
             "cacheVariables": {
-                "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/x64-windows"
+                "CMAKE_PREFIX_PATH": "$env{TURBOUTILS_ROOT};$env{TURBOPARSER_ROOT};$env{TURBONET_ROOT};$env{TURBODB_ROOT};$env{VCPKG_INSTALLED_DIR}/x64-windows"
             },
             "environment": {
-                "PATH": "${sourceDir}/vcpkg_installed/x64-windows/bin${pathListSep}$penv{PATH}"
+                "TURBOUTILS_ROOT": "$env{PKG_ROOT}/turboutils",
+                "TURBOPARSER_ROOT": "$env{PKG_ROOT}/turboparser",
+                "TURBONET_ROOT": "$env{PKG_ROOT}/turbonet",
+                "TURBODB_ROOT": "$env{PKG_ROOT}/turbodb",
+                "FLOWMQ_ROOT": "$env{PKG_ROOT}/flowmq",
+                "PATH": "${sourceDir}/build/Msvc-Release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{TURBOUTILS_ROOT}/bin${pathListSep}$env{TURBOPARSER_ROOT}/bin${pathListSep}$env{TURBONET_ROOT}/bin${pathListSep}$env{TURBODB_ROOT}/bin${pathListSep}$penv{PATH}"
             },
             "inherits": ["base-win-release-user", "win-paths"]
         },
@@ -98,14 +113,25 @@
             "name": "linux-dev-user",
             "cacheVariables": {
                 "ENABLE_ASAN": "ON",
-                "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/x64-linux/debug"
+                "CMAKE_PREFIX_PATH": "$env{TURBOUTILS_ROOT};$env{TURBOPARSER_ROOT};$env{TURBONET_ROOT};$env{TURBODB_ROOT};$env{VCPKG_INSTALLED_DIR}/x64-linux/debug"
+            },
+            "environment": {
+                "TURBOUTILS_ROOT": "$env{PKG_ROOT}/turboutils-debug",
+                "TURBOPARSER_ROOT": "$env{PKG_ROOT}/turboparser-debug",
+                "TURBONET_ROOT": "$env{PKG_ROOT}/turbonet-debug",
+                "TURBODB_ROOT": "$env{PKG_ROOT}/turbodb-debug",
+                "FLOWMQ_ROOT": "$env{PKG_ROOT}/flowmq-debug",
+                "LD_LIBRARY_PATH": "${sourceDir}/build/linux-gcc-debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{TURBOUTILS_ROOT}/lib${pathListSep}$env{TURBOPARSER_ROOT}/lib${pathListSep}$env{TURBONET_ROOT}/lib${pathListSep}$env{TURBODB_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
             },
             "inherits": ["base-linux-dev-user", "linux-paths"]
         },
         {
             "name": "linux-release-user",
             "cacheVariables": {
-                "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/x64-linux"
+                "CMAKE_PREFIX_PATH": "$env{TURBOUTILS_ROOT};$env{TURBOPARSER_ROOT};$env{TURBONET_ROOT};$env{TURBODB_ROOT};$env{VCPKG_INSTALLED_DIR}/x64-linux"
+            },
+            "environment": {
+                "LD_LIBRARY_PATH": "${sourceDir}/build/linux-gcc-release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{TURBOUTILS_ROOT}/lib${pathListSep}$env{TURBOPARSER_ROOT}/lib${pathListSep}$env{TURBONET_ROOT}/lib${pathListSep}$env{TURBODB_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
             },
             "inherits": ["release-linux-ninja", "linux-paths"]
         },
@@ -113,7 +139,7 @@
             "name": "linux-sdk-package",
             "binaryDir": "${sourceDir}/build/linux-gcc-sdk-package",
             "cacheVariables": {
-                "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/x64-linux",
+                "CMAKE_PREFIX_PATH": "$env{TURBOUTILS_ROOT};$env{TURBOPARSER_ROOT};$env{TURBONET_ROOT};$env{TURBODB_ROOT};$env{VCPKG_INSTALLED_DIR}/x64-linux",
                 "ENABLE_ASAN": "OFF",
                 "BUILD_TESTS": "OFF",
                 "BUILD_EXAMPLES": "OFF"
