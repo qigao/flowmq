@@ -33,14 +33,44 @@ endif()
 include(Sanitizers)
 include(CmakeUtils)
 
-find_package(TurboUtils CONFIG REQUIRED PATHS "${TURBO_UTILS_ROOT}")
-find_package(TurboParser CONFIG REQUIRED PATHS "${TURBO_PARSER_ROOT}")
-find_package(TurboNet CONFIG REQUIRED PATHS "${TURBO_NET_ROOT}")
-find_package(TurboDB CONFIG REQUIRED PATHS "${TURBODB_ROOT}")
+foreach(_flowmq_dependency_root IN ITEMS TURBOUTILS_ROOT TURBOPARSER_ROOT
+                                         TURBONET_ROOT TURBODB_ROOT)
+  if(NOT DEFINED ENV{${_flowmq_dependency_root}}
+     OR "$ENV{${_flowmq_dependency_root}}" STREQUAL "")
+    message(FATAL_ERROR
+            "Required dependency root is not defined: ${_flowmq_dependency_root}")
+  endif()
+  if(NOT IS_DIRECTORY "$ENV{${_flowmq_dependency_root}}")
+    message(FATAL_ERROR
+            "${_flowmq_dependency_root} is not a directory: "
+            "$ENV{${_flowmq_dependency_root}}")
+  endif()
+endforeach()
+unset(_flowmq_dependency_root)
+
+find_package(
+  TurboUtils CONFIG REQUIRED
+  PATHS "$ENV{TURBOUTILS_ROOT}"
+  NO_DEFAULT_PATH)
+find_package(
+  TurboParser CONFIG REQUIRED
+  PATHS "$ENV{TURBOPARSER_ROOT}"
+  NO_DEFAULT_PATH)
+find_package(
+  TurboNet CONFIG REQUIRED
+  PATHS "$ENV{TURBONET_ROOT}"
+  NO_DEFAULT_PATH)
+find_package(
+  TurboDB CONFIG REQUIRED
+  PATHS "$ENV{TURBODB_ROOT}"
+  NO_DEFAULT_PATH)
 find_package(OpenSSL CONFIG REQUIRED)
 
+unset(FLOWMQ_TBE_COMPILER_EXECUTABLE)
+unset(FLOWMQ_TBE_COMPILER_EXECUTABLE CACHE)
 find_program(FLOWMQ_TBE_COMPILER_EXECUTABLE NAMES tbe_compiler
-             HINTS "${TURBO_PARSER_ROOT}/bin")
+             PATHS "$ENV{TURBOPARSER_ROOT}/bin"
+             NO_DEFAULT_PATH)
 if(NOT FLOWMQ_TBE_COMPILER_EXECUTABLE)
   message(FATAL_ERROR
     "FlowMQ media-provider contract requires the TurboParser tbe_compiler")

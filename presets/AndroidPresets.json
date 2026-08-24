@@ -29,8 +29,6 @@
             "inherits": "ISWindows",
             "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
             "cacheVariables": {
-                "CMAKE_MAKE_PROGRAM": "$env{NINJA_ROOT}/ninja.exe",
-                "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/flowmq-android",
                 "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "$env{ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake",
                 "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed"
             }
