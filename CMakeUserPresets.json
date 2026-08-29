@@ -64,8 +64,7 @@
             "environment": {
                 "TURBOUTILS_ROOT": "$env{PKG_ROOT}/turboutils-android/debug",
                 "TURBOPARSER_ROOT": "$env{PKG_ROOT}/turboparser-android/debug",
-                "TURBONET_ROOT": "$env{PKG_ROOT}/turbonet-android/debug",
-                "TURBODB_ROOT": "$env{PKG_ROOT}/turbodb-android/debug"
+                "TURBONET_ROOT": "$env{PKG_ROOT}/turbonet-android/debug"
             }
         },
         {
@@ -77,8 +76,7 @@
             "environment": {
                 "TURBOUTILS_ROOT": "$env{PKG_ROOT}/turboutils-android/release",
                 "TURBOPARSER_ROOT": "$env{PKG_ROOT}/turboparser-android/release",
-                "TURBONET_ROOT": "$env{PKG_ROOT}/turbonet-android/release",
-                "TURBODB_ROOT": "$env{PKG_ROOT}/turbodb-android/release"
+                "TURBONET_ROOT": "$env{PKG_ROOT}/turbonet-android/release"
             }
         },
         {
@@ -92,8 +90,7 @@
                 "TURBOUTILS_ROOT": "$env{PKG_ROOT}/turboutils/debug",
                 "TURBOPARSER_ROOT": "$env{PKG_ROOT}/turboparser/debug",
                 "TURBONET_ROOT": "$env{PKG_ROOT}/turbonet/debug",
-                "TURBODB_ROOT": "$env{PKG_ROOT}/turbodb/debug",
-                "PATH": "${sourceDir}/build/Msvc/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{TURBOUTILS_ROOT}/bin${pathListSep}$env{TURBOPARSER_ROOT}/bin${pathListSep}$env{TURBONET_ROOT}/bin${pathListSep}$env{TURBODB_ROOT}/bin${pathListSep}$penv{PATH}"
+                "PATH": "${sourceDir}/build/Msvc/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{TURBOUTILS_ROOT}/bin${pathListSep}$env{TURBOPARSER_ROOT}/bin${pathListSep}$env{TURBONET_ROOT}/bin${pathListSep}$penv{PATH}"
             },
             "inherits": ["base-win-dev-user", "win-paths"]
         },
@@ -107,8 +104,7 @@
                 "TURBOUTILS_ROOT": "$env{PKG_ROOT}/turboutils/release",
                 "TURBOPARSER_ROOT": "$env{PKG_ROOT}/turboparser/release",
                 "TURBONET_ROOT": "$env{PKG_ROOT}/turbonet/release",
-                "TURBODB_ROOT": "$env{PKG_ROOT}/turbodb/release",
-                "PATH": "${sourceDir}/build/Msvc-Release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{TURBOUTILS_ROOT}/bin${pathListSep}$env{TURBOPARSER_ROOT}/bin${pathListSep}$env{TURBONET_ROOT}/bin${pathListSep}$env{TURBODB_ROOT}/bin${pathListSep}$penv{PATH}"
+                "PATH": "${sourceDir}/build/Msvc-Release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{TURBOUTILS_ROOT}/bin${pathListSep}$env{TURBOPARSER_ROOT}/bin${pathListSep}$env{TURBONET_ROOT}/bin${pathListSep}$penv{PATH}"
             },
             "inherits": ["base-win-release-user", "win-paths"]
         },
@@ -123,8 +119,7 @@
                 "TURBOUTILS_ROOT": "$env{PKG_ROOT}/turboutils/debug",
                 "TURBOPARSER_ROOT": "$env{PKG_ROOT}/turboparser/debug",
                 "TURBONET_ROOT": "$env{PKG_ROOT}/turbonet/debug",
-                "TURBODB_ROOT": "$env{PKG_ROOT}/turbodb/debug",
-                "LD_LIBRARY_PATH": "${sourceDir}/build/linux-gcc-debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{TURBOUTILS_ROOT}/lib${pathListSep}$env{TURBOPARSER_ROOT}/lib${pathListSep}$env{TURBONET_ROOT}/lib${pathListSep}$env{TURBODB_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
+                "LD_LIBRARY_PATH": "${sourceDir}/build/linux-gcc-debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{TURBOUTILS_ROOT}/lib${pathListSep}$env{TURBOPARSER_ROOT}/lib${pathListSep}$env{TURBONET_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
             },
             "inherits": ["base-linux-dev-user", "linux-paths"]
         },
@@ -138,8 +133,7 @@
                 "TURBOUTILS_ROOT": "$env{PKG_ROOT}/turboutils/release",
                 "TURBOPARSER_ROOT": "$env{PKG_ROOT}/turboparser/release",
                 "TURBONET_ROOT": "$env{PKG_ROOT}/turbonet/release",
-                "TURBODB_ROOT": "$env{PKG_ROOT}/turbodb/release",
-                "LD_LIBRARY_PATH": "${sourceDir}/build/linux-gcc-release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{TURBOUTILS_ROOT}/lib${pathListSep}$env{TURBOPARSER_ROOT}/lib${pathListSep}$env{TURBONET_ROOT}/lib${pathListSep}$env{TURBODB_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
+                "LD_LIBRARY_PATH": "${sourceDir}/build/linux-gcc-release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{TURBOUTILS_ROOT}/lib${pathListSep}$env{TURBOPARSER_ROOT}/lib${pathListSep}$env{TURBONET_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
             },
             "inherits": ["release-linux-ninja", "linux-paths"]
         },
@@ -156,8 +150,7 @@
             "environment": {
                 "TURBOUTILS_ROOT": "$env{PKG_ROOT}/turboutils/release",
                 "TURBOPARSER_ROOT": "$env{PKG_ROOT}/turboparser/release",
-                "TURBONET_ROOT": "$env{PKG_ROOT}/turbonet/release",
-                "TURBODB_ROOT": "$env{PKG_ROOT}/turbodb/release"
+                "TURBONET_ROOT": "$env{PKG_ROOT}/turbonet/release"
             },
             "inherits": ["release-linux-ninja", "linux-paths"]
         },

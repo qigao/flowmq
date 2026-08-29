@@ -34,7 +34,7 @@ include(Sanitizers)
 include(CmakeUtils)
 
 foreach(_flowmq_dependency_root IN ITEMS TURBOUTILS_ROOT TURBOPARSER_ROOT
-                                         TURBONET_ROOT TURBODB_ROOT)
+                                         TURBONET_ROOT)
   if(NOT DEFINED ENV{${_flowmq_dependency_root}}
      OR "$ENV{${_flowmq_dependency_root}}" STREQUAL "")
     message(FATAL_ERROR
@@ -59,10 +59,6 @@ find_package(
 find_package(
   TurboNet CONFIG REQUIRED
   PATHS "$ENV{TURBONET_ROOT}"
-  NO_DEFAULT_PATH)
-find_package(
-  TurboDB CONFIG REQUIRED COMPONENTS ORM
-  PATHS "$ENV{TURBODB_ROOT}"
   NO_DEFAULT_PATH)
 find_package(OpenSSL CONFIG REQUIRED)
 
@@ -133,7 +129,7 @@ target_include_directories(
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/patterns/src)
 target_link_libraries(flowmq
                       PUBLIC TurboUtils::Core TurboParser::Parser TurboParser::DataBind
-                      PRIVATE TurboUtils::STL TurboNet::CoroNet TurboDB::ORM OpenSSL::SSL)
+                      PRIVATE TurboUtils::STL TurboNet::CoroNet OpenSSL::SSL)
 if(TARGET flowmq_media_provider_codegen)
   add_dependencies(flowmq flowmq_media_provider_codegen)
 endif()
