@@ -4,14 +4,14 @@
 /** @file flowmq.h Public standalone FlowMQ API. */
 
 #include "flowmq_core.h"
-#include "flowmq_connect_endpoint.h"
-#include "flowmq_coronet.h"
-#include "flowmq_protocol.h"
-#include "flowmq_protocol_esb.h"
-#include "flowmq_router_endpoint.h"
-#include "flowmq_send_admission.h"
-#include "flowmq_tls_identity_map.h"
+#include "flowmq_esb.h"
 #include "flowmq_media_provider.h"
 #include "flowmq_media_provider_v1.h"
+#include "flowmq_protocol.h"
+#include "flowmq_protocol_catalog.h"
+#include "flowmq_security.h"
+#include "flowmq_socket.h"
+#include "flowmq_tls_identity_map.h"
+#include "flowmq_transport.h"
 
 #endif /* FLOWMQ_H */

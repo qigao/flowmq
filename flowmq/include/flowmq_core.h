@@ -12,7 +12,7 @@ extern "C" {
 /**
  * Validate one built-in FlowMQ transport pattern.
  * @param pattern Numeric FMQ pattern value.
- * @return TURBO_OK when supported, otherwise TURBO_EINVAL.
+ * @return SALTS_OK when supported, otherwise SALTS_EINVAL.
  */
 FLOWMQ_C_API int flowmq_core_pattern_validate(flowmq_protocol_pattern_t pattern);
 

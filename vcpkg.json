@@ -2,7 +2,11 @@
   "name": "flowmq",
   "version-semver": "1.0.0",
   "dependencies": [
-    "boringssl"
+    "boringssl",
+    {
+      "name": "zeromq",
+      "default-features": false
+    }
   ],
   "builtin-baseline": "b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01"
 }

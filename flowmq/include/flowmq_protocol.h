@@ -1,0 +1,205 @@
+#ifndef FLOWMQ_PROTOCOL_H
+#define FLOWMQ_PROTOCOL_H
+
+#include "flowmq_export.h"
+#include "flowmq_protocol_catalog.h"
+
+#include "platform.h"
+#include "salts_error.h"
+#include "salts_str.h"
+
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define FLOWMQ_PROTOCOL_API_VERSION 4u
+#define FLOWMQ_PROTOCOL_WIRE_VERSION FLOWMQ_PROTOCOL_FMQ_VERSION
+#define FLOWMQ_PROTOCOL_HEADER_SIZE 32u
+#define FLOWMQ_PROTOCOL_SETTINGS_PAYLOAD_SIZE 32u
+#define FLOWMQ_PROTOCOL_FLOW_UPDATE_PAYLOAD_SIZE 24u
+#define FLOWMQ_PROTOCOL_CAP_FLOW_CREDIT 0x00000001u
+#define FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE (64u * 1024u)
+#define FLOWMQ_PROTOCOL_MAX_IDENTITY_SIZE 255u
+#define FLOWMQ_PROTOCOL_MAX_TOPIC_SIZE 1024u
+#define FLOWMQ_PROTOCOL_PACKET_FIRST 0x01u
+#define FLOWMQ_PROTOCOL_PACKET_LAST 0x02u
+#define FLOWMQ_PROTOCOL_MESSAGE_MORE 0x04u
+#define FLOWMQ_PROTOCOL_INCOMPLETE 1
+
+/** Strict FMQ/6 connection settings sent once after HELLO in each direction. */
+typedef struct flowmq_protocol_settings_s {
+  uint32_t capabilities;
+  uint32_t max_frame_size;
+  uint64_t session_generation;
+  uint64_t initial_max_data;
+  uint32_t flow_update_quantum;
+  uint32_t flow_update_interval_ms;
+} flowmq_protocol_settings_t;
+
+/** Cumulative receiver credit; values never decrease within one generation. */
+typedef struct flowmq_protocol_flow_update_s {
+  uint64_t session_generation;
+  uint64_t consumed_data;
+  uint64_t max_data;
+} flowmq_protocol_flow_update_t;
+
+/** Encode a validated SETTINGS value into its fixed-size big-endian payload. */
+FLOWMQ_C_API int
+flowmq_protocol_settings_encode(const flowmq_protocol_settings_t *settings,
+                                unsigned char payload[FLOWMQ_PROTOCOL_SETTINGS_PAYLOAD_SIZE]);
+/** Decode and validate an exact fixed-size SETTINGS payload. */
+FLOWMQ_C_API int flowmq_protocol_settings_decode(vstr payload,
+                                                 flowmq_protocol_settings_t *settings);
+/** Encode a validated FLOW_UPDATE value into its fixed-size big-endian payload. */
+FLOWMQ_C_API int
+flowmq_protocol_flow_update_encode(const flowmq_protocol_flow_update_t *update,
+                                   unsigned char payload[FLOWMQ_PROTOCOL_FLOW_UPDATE_PAYLOAD_SIZE]);
+/** Decode and validate an exact fixed-size FLOW_UPDATE payload. */
+FLOWMQ_C_API int flowmq_protocol_flow_update_decode(vstr payload,
+                                                    flowmq_protocol_flow_update_t *update);
+
+/**
+ * Decoded FMQ/6 frame. Identity, topic, and single-packet payload are borrowed
+ * from the input buffer. Multi-packet payload is owned by this value and must
+ * be released with flowmq_protocol_frame_cleanup().
+ */
+typedef struct flowmq_protocol_frame_s {
+  flowmq_protocol_frame_kind_t kind;
+  flowmq_protocol_pattern_t pattern;
+  uint64_t message_id;
+  /** Non-zero when another application message part follows atomically. */
+  int more;
+  vstr identity;
+  vstr topic;
+  vstr payload;
+  tstr owned_payload;
+} flowmq_protocol_frame_t;
+
+/** One borrowed byte range in an encoded frame. */
+typedef struct flowmq_protocol_segment_s {
+  const void *data;
+  size_t size;
+} flowmq_protocol_segment_t;
+
+/**
+ * Scatter/gather encoded frame. Framing bytes and the segment array are owned
+ * by this value; payload segments borrow flowmq_protocol_frame_t::payload.
+ * Keep the payload backing alive until the send operation has completed.
+ */
+typedef struct flowmq_protocol_segmented_frame_s {
+  size_t size;
+  flowmq_protocol_segment_t *segments;
+  size_t segment_count;
+  size_t encoded_size;
+  void *storage;
+} flowmq_protocol_segmented_frame_t;
+
+#define FLOWMQ_PROTOCOL_SEGMENTED_FRAME_INIT                                                       \
+  {sizeof(flowmq_protocol_segmented_frame_t), NULL, 0u, 0u, NULL}
+
+typedef enum flowmq_protocol_heartbeat_action_e {
+  FLOWMQ_PROTOCOL_HEARTBEAT_WAIT = 0,
+  FLOWMQ_PROTOCOL_HEARTBEAT_SEND_PING,
+  FLOWMQ_PROTOCOL_HEARTBEAT_EXPIRED,
+  FLOWMQ_PROTOCOL_HEARTBEAT_RECV_EXPIRED
+} flowmq_protocol_heartbeat_action_t;
+
+typedef struct flowmq_protocol_heartbeat_deadlines_s {
+  uint64_t interval_ns;
+  uint64_t timeout_ns;
+  uint64_t recv_timeout_ns;
+  uint64_t next_ping_ns;
+  uint64_t heartbeat_deadline_ns;
+  uint64_t recv_deadline_ns;
+} flowmq_protocol_heartbeat_deadlines_t;
+
+/**
+ * Initialize heartbeat and receive deadlines from one monotonic timestamp.
+ * Zero heartbeat timeout disables send-side expiry. Zero receive timeout
+ * disables only the receive deadline.
+ */
+FLOWMQ_C_API void
+flowmq_protocol_heartbeat_deadlines_init(flowmq_protocol_heartbeat_deadlines_t *state,
+                                         uint64_t now_ns, uint64_t interval_ms, uint64_t timeout_ms,
+                                         uint64_t recv_timeout_ms);
+/** Cancel an outstanding PING timeout and advance receive/next-PING deadlines. */
+FLOWMQ_C_API void
+flowmq_protocol_heartbeat_deadlines_on_receive(flowmq_protocol_heartbeat_deadlines_t *state,
+                                               uint64_t now_ns);
+/** Arm the heartbeat timeout and advance the next-PING deadline after sending PING. */
+FLOWMQ_C_API void
+flowmq_protocol_heartbeat_deadlines_on_ping(flowmq_protocol_heartbeat_deadlines_t *state,
+                                            uint64_t now_ns);
+/**
+ * Select the next heartbeat action.
+ * Writes the next absolute wait deadline only when returning
+ * FLOWMQ_PROTOCOL_HEARTBEAT_WAIT. Invalid state is treated as receive expiry.
+ */
+FLOWMQ_C_API flowmq_protocol_heartbeat_action_t
+flowmq_protocol_heartbeat_deadlines_next(const flowmq_protocol_heartbeat_deadlines_t *state,
+                                         uint64_t now_ns, uint64_t *wait_deadline_ns);
+
+/**
+ * Encode one complete frame. On success, caller owns *out and releases it with
+ * tstr_free(). Returns SALTS_OK, SALTS_EINVAL, SALTS_EPROTO,
+ * SALTS_EMSGSIZE, SALTS_ERANGE, or SALTS_ENOMEM.
+ */
+FLOWMQ_C_API int flowmq_protocol_encode_frame(const flowmq_protocol_frame_t *frame,
+                                              size_t max_frame_size, tstr *out);
+
+/**
+ * Encode one complete frame as scatter/gather segments without copying its
+ * payload. `out` must be initialized with
+ * FLOWMQ_PROTOCOL_SEGMENTED_FRAME_INIT. On success, release framing storage
+ * with flowmq_protocol_segmented_frame_cleanup(). Returns the same validation
+ * and size errors as flowmq_protocol_encode_frame(), plus SALTS_ENOMEM.
+ */
+FLOWMQ_C_API int flowmq_protocol_encode_frame_segmented(const flowmq_protocol_frame_t *frame,
+                                                        size_t max_frame_size,
+                                                        flowmq_protocol_segmented_frame_t *out);
+
+/** Release segmented framing storage and reset the value. NULL is accepted. */
+FLOWMQ_C_API void flowmq_protocol_segmented_frame_cleanup(flowmq_protocol_segmented_frame_t *frame);
+
+/**
+ * Decode the first complete frame. Returns FLOWMQ_PROTOCOL_INCOMPLETE without
+ * consuming input when more bytes are required. On success, consumed reports
+ * the first frame length and out must be cleaned with
+ * flowmq_protocol_frame_cleanup(). Other failures use the same validation,
+ * size, and allocation errors as encode.
+ */
+FLOWMQ_C_API int flowmq_protocol_decode_frame(const char *data, size_t data_len,
+                                              size_t max_frame_size, flowmq_protocol_frame_t *out,
+                                              size_t *consumed);
+
+/**
+ * Borrow the first packet topic directly from encoded bytes. The view remains
+ * valid while data is alive and unchanged. Returns SALTS_OK,
+ * FLOWMQ_PROTOCOL_INCOMPLETE, or a concrete validation/size error.
+ */
+FLOWMQ_C_API int flowmq_protocol_encoded_topic(const char *data, size_t data_len,
+                                               size_t max_frame_size, vstr *topic);
+/** Release any reassembled payload and reset the frame. NULL is accepted. */
+FLOWMQ_C_API void flowmq_protocol_frame_cleanup(flowmq_protocol_frame_t *frame);
+
+/**
+ * Return the maximum encoded byte count for max_frame_size. Returns SALTS_OK,
+ * SALTS_EINVAL, or SALTS_ERANGE.
+ */
+FLOWMQ_C_API int flowmq_protocol_encoded_size_limit(size_t max_frame_size, size_t *limit);
+
+/**
+ * Validate frame and return its exact encoded byte count. Returns the same
+ * errors as flowmq_protocol_encode_frame(), except allocation cannot fail.
+ */
+FLOWMQ_C_API int flowmq_protocol_encoded_size(const flowmq_protocol_frame_t *frame,
+                                              size_t max_frame_size, size_t *size);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* FLOWMQ_PROTOCOL_H */

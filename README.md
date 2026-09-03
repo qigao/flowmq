@@ -1,165 +1,146 @@
 # FlowMQ
 
-FlowMQ 是独立的 C 消息模式库。复杂业务拓扑由上层适配器组合，FlowMQ 本身拥有 wire、
-pattern/session 状态和 CoroNet endpoint 生命周期。
+FlowMQ 是 C11 的 pattern-oriented messaging library。它提供 FMQ/6 wire codec、pattern/session
+状态、应用层能力，以及基于 Salts CNet 的 TCP/TLS socket runtime。
 
-## Targets
+当前 transport 范围是明确且封闭的：
 
-| Target | 说明 |
+- `FLOWMQ_TRANSPORT_TCP`：有序 TCP 字节流。
+- `FLOWMQ_TRANSPORT_TLS`：经证书与主机名校验的 TLS 字节流。
+- UDP、KCP、Pipe、WebSocket 与 WSS 不属于当前 API，也没有静默 fallback。
+
+## CMake targets
+
+| Target | 用途 |
 | --- | --- |
-| `FlowMQ::Protocol` | build-tree static target；FMQ v3 codec，不安装 |
-| `FlowMQ::Core` | build-tree static target；pattern/session 状态，不安装 |
-| `FlowMQ::Transport` | build-tree static target；graph-neutral endpoint，当前由 CoroNet 实现，不安装 |
-| `FlowMQ::FlowMQ` | 唯一安装 target；统一输出 `flowmq.dll` |
+| `FlowMQ::Protocol` | build-tree FMQ/6、FMS/3、FES/1 codec 与全局协议目录 |
+| `FlowMQ::Core` | build-tree pattern/session 与应用核心 |
+| `FlowMQ::Transport` | build-tree ZeroMQ-style socket 与 CNet TCP/TLS runtime |
+| `FlowMQ::FlowMQ` | 唯一安装 target；合并上述公开能力 |
 
-```cmake
-find_package(FlowMQ CONFIG REQUIRED)
-target_link_libraries(my_app PRIVATE FlowMQ::FlowMQ)
-```
+安装包的公开依赖是 `Salts::Core` 与 SaltsUtils 的 `Salts::TbeSchema`；
+`Salts::CNet`、`Salts::CSTL` 和 `Salts::CMeta` 是实现私有依赖。FMP/1 使用
+header-only TBE wire view/builder，不依赖 JSON typed codec。
+
+## Caller-driven transport
+
+旧的 callback endpoint API 已删除。新的公开边界只保留 ZeroMQ 风格的
+`context/socket + bind/connect + send/recv + poll`，入口是 `flowmq_socket.h`。
+
+CNet 仍由 socket owner 线程直接推进，不创建 worker/progress thread，也不把同一个 socket
+包装成 MPSC、Actor 或 Reactive stream。TCP 与 verified TLS 使用同一 peer、decoder、FSM
+和 message queue 路径；TLS 只在连接适配层增加证书与主机名验证。
+
+`FLOWMQ_RECONNECT_IVL=18` 与 `FLOWMQ_RECONNECT_IVL_MAX=21` 采用 ZeroMQ 的编号和
+连接级退避语义：IVL 默认 100ms，`-1` 禁止重连，`0` 表示下一轮 owner progress 立即
+尝试；IVL_MAX 默认 `0`，表示固定 IVL，设置为不小于 IVL 的正值后按上限做指数退避。
+实际间隔会随机化以降低重连风暴。断线只调度 endpoint，真正的 TCP/TLS connect、
+HELLO/SETTINGS 与订阅重放仍由应用后续调用 `send/recv/poll` 推进，不创建 timer thread。
+
+`FLOWMQ_SNDHWM`/`FLOWMQ_RCVHWM` 使用 `int` 消息数，扩展选项
+`FLOWMQ_SNDHWM_BYTES`/`FLOWMQ_RCVHWM_BYTES` 使用 `size_t` payload 字节数。四项都必须在
+首次 bind/connect 前设置且不能为零；普通发送达到 HWM 返回 `SALTS_ENOBUFS`，PUB/XPUB
+按 peer 丢弃无法接纳的 publication。
+
+`FLOWMQ_FLOW_UPDATE_QUANTUM` 使用 `size_t`，默认由 receive byte HWM 推导；
+`FLOWMQ_FLOW_UPDATE_IVL` 使用正 `int` 毫秒值，默认 10 ms。二者必须在首次 bind/connect 前
+设置。DATA 同时受本地 HWM 与对端累计 credit 约束；控制帧不计 credit。
+
+`FLOWMQ_HEARTBEAT_IVL`/`FLOWMQ_HEARTBEAT_TIMEOUT` 使用非负 `int` 毫秒值，也必须在首次
+bind/connect 前设置。IVL 默认为 `0`（禁用）；启用 IVL 且未显式设置 TIMEOUT 时，TIMEOUT
+等于 IVL。心跳与断线检测没有后台线程，只在 owner 调用 `send`、`recv` 或 `poll` 时推进。
+FMQ/6 PING 不携带对端 TTL，因此当前没有伪装提供 `FLOWMQ_HEARTBEAT_TTL`。
+FMQ/6 在 HELLO 后强制 SETTINGS，并以 receiver-driven cumulative credit 协调 DATA；
+TCP/TLS 不发送同流 FEC repair symbol。credit 与 heartbeat 都由调用线程推进。
+
+重连创建全新的 peer session：generation、credit、decoder 与 multipart 状态不会跨连接
+继承；旧 peer 尚未完成的 outbound 数据也不会自动重播。需要业务级确认或重试时，应在
+DATA payload 层携带 correlation/idempotency 信息。
+
+multipart 接收后可用 `flowmq_getsockopt(socket, FLOWMQ_RCVMORE, ...)` 判断是否还有下一
+part。该查询返回最近一次成功 `flowmq_recv()` 的 `MORE` 状态，不推进网络或 pattern FSM。
+
+ROUTER 的 routing identity 与 ZeroMQ 一样表示当前 live peer，不是可持久化的 session
+token；同 identity 重连后的 delayed reply 会指向新 session。单条 outbound multipart
+内部会绑定 connection generation，peer 断线后取消，不能把剩余 parts 交给 replacement。
 
 ```c
-#include "flowmq.h"
+#include <flowmq_socket.h>
+#include <salts_error.h>
 
-int compatible =
-    flowmq_core_patterns_compatible(FLOWMQ_PROTOCOL_REQ, FLOWMQ_PROTOCOL_REP);
-```
+#include <stdio.h>
+#include <string.h>
 
-独立 endpoint 使用类型化配置，不需要 Graph 或配置文件：
+enum { PROGRESS_LIMIT = 10000 };
 
-```c
-flowmq_connect_endpoint_config_t config;
-flowmq_connect_endpoint_t *endpoint = NULL;
+int main(void) {
+  static const char payload[] = "hello";
+  char endpoint[128] = {0};
+  char received[16] = {0};
+  size_t endpoint_size = 0;
+  size_t received_size = 0;
+  size_t ready = 0;
+  int send_status = SALTS_EBUSY;
+  int recv_status = SALTS_EBUSY;
+  int result = 1;
+  flowmq_ctx_t *ctx = flowmq_ctx_new();
+  flowmq_socket_t *receiver = NULL;
+  flowmq_socket_t *sender = NULL;
+  flowmq_pollitem_t items[2];
 
-flowmq_connect_endpoint_config_init(&config);
-config.pattern = FLOWMQ_PROTOCOL_SUB;
-config.host = "127.0.0.1";
-config.port = 7001;
-config.path = "";
-config.topic = "orders.";
-config.identity = "order-reader";
-config.drive_context = 1;
-config.own_context = 1;
+  if (ctx == NULL) goto cleanup;
+  receiver = flowmq_socket(ctx, FLOWMQ_PAIR);
+  sender = flowmq_socket(ctx, FLOWMQ_PAIR);
+  if (receiver == NULL || sender == NULL) goto cleanup;
+  if (flowmq_bind(receiver, "tcp://127.0.0.1:0") != SALTS_OK) goto cleanup;
+  if (flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
+                           &endpoint_size) != SALTS_OK)
+    goto cleanup;
+  if (flowmq_connect(sender, endpoint) != SALTS_OK) goto cleanup;
 
-if (flowmq_connect_endpoint_create(&config, &endpoint) == TURBO_OK) {
-  flowmq_connect_endpoint_destroy(endpoint);
+  items[0] = (flowmq_pollitem_t){.socket = sender};
+  items[1] = (flowmq_pollitem_t){.socket = receiver};
+  for (size_t i = 0; i < PROGRESS_LIMIT && recv_status == SALTS_EBUSY; ++i) {
+    if (flowmq_poll(items, 2, 0, &ready) != SALTS_OK) goto cleanup;
+    if (send_status == SALTS_EBUSY)
+      send_status = flowmq_send(sender, payload, sizeof(payload) - 1,
+                                FLOWMQ_DONTWAIT);
+    if (send_status != SALTS_OK && send_status != SALTS_EBUSY) goto cleanup;
+    if (send_status == SALTS_OK)
+      recv_status = flowmq_recv(receiver, received, sizeof(received),
+                                &received_size, FLOWMQ_DONTWAIT);
+  }
+  if (recv_status != SALTS_OK || received_size != sizeof(payload) - 1 ||
+      memcmp(received, payload, received_size) != 0)
+    goto cleanup;
+  puts(received);
+  result = 0;
+
+cleanup:
+  if (sender != NULL && flowmq_close(sender) != SALTS_OK) result = 1;
+  if (receiver != NULL && flowmq_close(receiver) != SALTS_OK) result = 1;
+  if (ctx != NULL && flowmq_ctx_term(ctx) != SALTS_OK) result = 1;
+  return result;
 }
 ```
 
-ROUTER 使用独立 BIND owner；DEALER 仍使用同一个 CONNECT owner：
+## 构建与验证
 
-```c
-flowmq_router_endpoint_config_t router_config;
-flowmq_router_endpoint_t *router = NULL;
-
-flowmq_router_endpoint_config_init(&router_config);
-router_config.host = "0.0.0.0";
-router_config.port = 7001;
-router_config.path = "";
-router_config.topic = "raft";
-router_config.identity = "raft-node-a";
-router_config.max_connections = 32;
-router_config.drive_context = 1;
-router_config.own_context = 1;
-
-if (flowmq_router_endpoint_create(&router_config, &router) == TURBO_OK) {
-  /* flowmq_router_endpoint_start(router, timeout_ns); */
-  flowmq_router_endpoint_destroy(router);
-}
-```
-
-`ROUTER` callback 收到的 `flowmq_router_route_t` 不含 peer 指针，可以复制后延迟使用；peer 断线或
-endpoint restart 后，旧 token 返回 `TURBO_ENOTCONN`。低层 `send()` 仍须在 endpoint 的 CoroNet
-context 上执行；普通业务线程使用 `flowmq_connect_endpoint_send_copy()` 或
-`flowmq_router_endpoint_send_copy()`。copied admission 同时受 item/byte 两个硬上限约束，满额返回
-`TURBO_ENOSPC`，成功后每条消息恰好调用一次 local send completion。该 completion 不是远端 durable
-receipt。
-
-`FlowMQ::FlowMQ` 同时安装 `flowmq_media_provider_v1.h` 和 canonical
-`share/flowmq/schema/flowmq_media_provider_v1.schema`。Iris 与 TurboMedia 必须使用这些生成类型交换
-`ProviderCommandV1`、durable receipt/completion、event/ack、query/observation 和 call bootstrap；不能
-在两侧分别手写 JSON struct。超过 JSON 精确整数范围的 fence/revision/sequence 使用 decimal string。
-每个 binary payload 的前 5 字节固定为 `schema_version:uint32 + message_kind:uint8`；消费者先调用
-`flowmq_media_provider_peek_kind()` 路由，再调用对应 generated decoder。schema 内所有固定宽度字段位于
-可变字符串之前，保证 generated binary codec 有确定 wire location；未知 version/kind 明确拒绝。
-`ProviderCompletionV1` 必须由 `ProviderCompletionAckV1` 结束 durable delivery；只有 Iris 已原子提交
-command terminal state/result event 后才能返回 `CompletionCommitted` 与该 result event 的
-session-local `committed_sequence`，FlowMQ send completion 不能替代该 ack。`ProviderEventAckV1` 使用相同
-的 sequence 语义。completion 自带稳定 `event_id`，不得用 transport `message_id` 代替业务事件幂等键。
-
-ROUTER 可配置 `verify_peer_identity`，在 DEALER HELLO 进入 route registry 前，将 CoroNet 验证过的客户端
-证书 SHA-256 与 claimed identity 交给宿主绑定。配置该回调时必须同时配置强制 mTLS，否则 endpoint
-create fail fast；不能仅凭客户端自报 identity 路由 provider command。
-
-## Architecture and deployment
-
-```mermaid
-flowchart LR
-  Raft[TurboRaft peer replication] --> Dealer[FlowMQ DEALER / CONNECT]
-  Dealer -->|FMQ v3 over TCP/TLS/WS/WSS| Router[FlowMQ ROUTER / BIND]
-  Router --> RaftPeer[Remote TurboRaft]
-  App[Other application] --> Public[FlowMQ::FlowMQ]
-  Dealer --> Public
-  Router --> Public
-  Public --> Core[Protocol + pattern/session core]
-  Public --> CoroNet[CoroNet transport backend]
-  Public --> Utils[TurboUtils::Core]
-  Public --> Parser[TurboParser::Parser]
-```
-
-```mermaid
-flowchart TB
-  subgraph NodeA[Raft node A process]
-    ALog[Raft log owner]
-    ADealer[DEALER connect endpoints]
-    ARouter[ROUTER bind endpoint]
-    ALog --> ADealer
-    ARouter --> ALog
-  end
-  subgraph NodeB[Raft node B process]
-    BLog[Raft log owner]
-    BDealer[DEALER connect endpoints]
-    BRouter[ROUTER bind endpoint]
-    BLog --> BDealer
-    BRouter --> BLog
-  end
-  ADealer -->|TLS or WSS| BRouter
-  BDealer -->|TLS or WSS| ARouter
-```
-
-选择 `FLOWMQ_TRANSPORT_WSS` 即自动走 WSS listener/connect；不会在运行时从明文 WS 静默升级。
-TLS/WSS 的 ROUTER 必须显式提供 server certificate/key；mTLS 还必须提供 CA。每个节点通常暴露一个
-ROUTER listener，并为每个远端 peer 持有一个稳定 identity 的 DEALER connection。
-
-## Build and test
-
-```text
+```powershell
 cmake --preset win-dev-user
-cmake --build --preset win-dev-user --target flowmq_transport flowmq_core flowmq_protocol
-ctest --preset win-dev-user -L flowmq --output-on-failure
+cmake --build --preset win-dev-user
+ctest --preset win-dev-user --output-on-failure
 ```
 
-安装包只导出 `FlowMQ::FlowMQ`、`flowmq.dll`、必需的 import library 和公开头文件；三个组件静态库
-只服务于仓库内测试与分层开发，不进入默认 Release build 或安装包。Windows preset 默认安装到
-`C:/projects/cpp/external/pkgs/flowmq`。其 CMake package 会自动查找并公开传递
-`TurboUtils::Core`、`TurboParser::Parser` 与 `TurboParser::DataBind`；消费者无需重复写入链接行。
+新数据路径 benchmark：
 
-## Ownership boundary
+```powershell
+cmake --fresh --preset win-release-user -DFLOWMQ_BUILD_ZMQ_BENCHMARK=ON
+cmake --build --preset win-release-user --target bench_flowmq_socket
+```
 
-- `flowmq_protocol_frame_t` 的单 packet payload、identity 与 topic 是输入 buffer 的 borrowed view；
-  multi-packet payload 由 frame 拥有并通过 `flowmq_protocol_frame_cleanup()` 释放。
-- `flowmq_connect_endpoint_t` 独占 socket；配置字符串在 create 时复制，callback context 保持 borrowed。
-  frame view 只在回调期间有效。`stop()` 先停止 admission，再 interrupt 等待、等待 managed coroutine
-  退出，最后才允许 destroy socket/context。
-- `flowmq_router_endpoint_t` 独占 listener 与 peer registry。`max_connections` 同时预留逻辑 route
-  容量并设置 CoroNet pre-handshake admission limit；满额连接在进入 FlowMQ handler 前关闭。
-  shutdown 先关闭 admission，再取消 accepted tasks，等待 `coro_socket_server_is_stopped()`，最后销毁
-  listener/context。
-- 外部 `coro_context_t` 默认 borrowed；只有 `own_context != 0` 才转移销毁责任。`send()` 必须运行
-  在 endpoint context 上，输入只借用到调用返回。
-- copied send admission 是 MPSC→单 endpoint-context consumer。成功时 endpoint 拥有 frame 副本；失败
-  时不接收所有权且不调用 completion。`stop()` 原子关闭 admission、排空已接受 callback，再停止
-  socket/context；队列 current/high-water、满额拒绝和 completion/failure 可读取。
-- 外部适配器只能消费已安装的 `FlowMQ::FlowMQ`，不能反向拥有 endpoint 的 socket、session 或
-  peer registry。
+ZeroMQ 由 `vcpkg.json` 安装；公平对比必须使用 Release preset，使 FlowMQ 与
+libzmq 都链接 Release 产物。
 
-架构与所有权边界见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+详细所有权和关闭顺序见 [架构说明](docs/ARCHITECTURE.md)，wire 契约见
+[FMQ/6 协议](docs/FMQ_WIRE_PROTOCOL.md)。

@@ -1,20 +1,24 @@
 # FlowMQ implementation
 
-本目录只承载独立 `FlowMQ::FlowMQ` 的 protocol、runtime 与公开头文件。仓库根目录是唯一 CMake
+本目录承载独立 `FlowMQ::FlowMQ` 的 protocol、runtime 与公开头文件；仓库根目录是唯一 CMake
 入口。
 
-当前发布面：
-
-- `flowmq/protocol`：FMQ v3 codec、fragmentation、security envelope、heartbeat deadline。
-- `patterns`：pattern/session 状态、bounded stream decoder、CONNECT endpoint 和
-  ROUTER/BIND endpoint。
 - `flowmq/include`：独立 C API；聚合头为 `flowmq.h`。
+- `flowmq/src/protocol`：全局协议目录、FMQ/6、FMS/3、FES/1 codec 与 bounded stream decoder。
+- `flowmq/src/core`：pattern FSM、subscription、credit/HWM 与 reconnect policy。
+- `flowmq/src/runtime`：context/socket/peer 状态与 caller-driven progress。
+- `flowmq/src/transport`：CNet TCP/TLS 薄适配。
+- `flowmq/src/security`：TLS principal/identity policy。
+- `flowmq/extensions/media_provider`：FMP/1 schema、header-only wire binding 与 view validator。
 - 唯一安装 target：`FlowMQ::FlowMQ`。
-- 公开链接依赖：`TurboUtils::Core`、`TurboParser::Parser`。`TurboUtils::STL`、CoroNet 与 TLS backend 是构建时私有依赖。
+- 公开链接依赖：`Salts::Core`、`Salts::TbeSchema`。
+- 私有实现依赖：`Salts::CSTL`、`Salts::CMeta`、`Salts::CNet` 与 TLS backend。
 
-`flowmq_router_endpoint_t` 当前提供完整的 `ROUTER(BIND) ↔ DEALER(CONNECT)` 路径。ROUTER 拥有
-listener、peer registry、identity 唯一性与 generation-fenced route；DEALER 由
-`flowmq_connect_endpoint_t` 拥有连接与 reconnect。`TCP/TLS/WS/WSS` 由相同 API 选择。
-
-构建、使用示例和部署图见 [根 README](../README.md)，详细所有权与数据路径见
+旧 callback endpoint 已删除。新的公开网络边界是 ZeroMQ 风格 socket facade；CNet 由调用
+`send/recv/poll` 的 owner 线程直接推进连接、重连和 deadline，不创建 worker。构建、使用和部署入口见
+[根 README](../README.md)，所有权与数据路径见
 [ARCHITECTURE.md](../docs/ARCHITECTURE.md)。
+
+FES/1、FMP/1 与 FMS/3 中有一部分仅提供 codec、本地状态或 wire contract，并不等于
+socket runtime 已接入；segmented encoder 与 reconnect 已由 socket runtime 调用。准确边界见
+[PROTOCOL_SPEC.md](../docs/PROTOCOL_SPEC.md)。
