@@ -18,6 +18,24 @@ FMQ/6 codec + Rocida CNet
 `FlowMQ::Transport` 私有依赖 `Rocida::CNet`。当前 transport 只有 TCP/TLS，未实现
 transport 会在配置边界 fail fast。
 
+物理目录与上述 target 保持一致：
+
+```text
+flowmq/include/                         installed flat C API
+flowmq/src/protocol/                    FMQ/FMS/FES codec 与 stream decoder
+flowmq/src/core/pattern/                ZeroMQ pattern、FSM 与 subscription state
+flowmq/src/core/session/                credit/HWM 与 reconnect policy
+flowmq/src/runtime/                     context/socket/peer owner 与 caller progress
+flowmq/src/transport/cnet/              CNet TCP/TLS 薄适配
+flowmq/src/security/                    TLS principal/identity policy
+flowmq/extensions/media_provider/       FMP/1 schema 与 typed adapter
+flowmq/tests/、flowmq/benchmarks/       按相同责任分组的验证入口
+```
+
+原顶层 `patterns/` 混合了 ZeroMQ socket pattern、transport 和未接入 runtime 的 ESB helper，
+现已取消。Core 只保留 socket/runtime 实际使用的 pattern 与 session 状态；Saga、通用 priority
+queue、scatter/gather、stream partition 和 circuit breaker 不再编入主库。
+
 ## 执行模型
 
 CNet 是调用者驱动的单-owner协程池，不是线程池。FlowMQ 不创建 progress thread，

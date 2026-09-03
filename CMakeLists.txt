@@ -70,8 +70,6 @@ if(MSVC)
 endif()
 
 add_subdirectory(flowmq)
-add_subdirectory(patterns)
-add_subdirectory(application)
 
 if(BUILD_EXAMPLES)
   add_subdirectory(examples)
@@ -86,7 +84,8 @@ add_library(flowmq SHARED
             ${FLOWMQ_MEDIA_PROVIDER_GENERATED_SOURCE}
             ${FLOWMQ_MEDIA_PROVIDER_SOURCE}
             ${FLOWMQ_PROTOCOL_HEADERS}
-            ${FLOWMQ_RUNTIME_PUBLIC_HEADERS}
+            ${FLOWMQ_CORE_HEADERS}
+            ${FLOWMQ_TRANSPORT_HEADERS}
             ${FLOWMQ_MEDIA_PROVIDER_GENERATED_HEADER}
             ${CMAKE_CURRENT_SOURCE_DIR}/flowmq/include/flowmq_media_provider.h
             ${CMAKE_CURRENT_SOURCE_DIR}/flowmq/include/flowmq.h)
@@ -104,12 +103,14 @@ if(WIN32)
 endif()
 target_include_directories(
   flowmq
-  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/flowmq/protocol/include>
-         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/flowmq/include>
+  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/flowmq/include>
          $<BUILD_INTERFACE:${FLOWMQ_MEDIA_PROVIDER_GENERATED_DIR}>
          $<INSTALL_INTERFACE:include>
-  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/patterns/src
-          ${CMAKE_CURRENT_SOURCE_DIR}/flowmq/protocol/src)
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/flowmq/src/protocol
+          ${CMAKE_CURRENT_SOURCE_DIR}/flowmq/src/protocol/stream
+          ${CMAKE_CURRENT_SOURCE_DIR}/flowmq/src/core/pattern
+          ${CMAKE_CURRENT_SOURCE_DIR}/flowmq/src/core/session
+          ${CMAKE_CURRENT_SOURCE_DIR}/flowmq/src/transport/cnet)
 target_link_libraries(flowmq
                       PUBLIC Rocida::Core TurboParser::Parser TurboParser::DataBind
                       PRIVATE Rocida::STL Rocida::CMeta Rocida::CNet)
@@ -125,7 +126,8 @@ install(
   ARCHIVE DESTINATION lib COMPONENT FlowMQDevelopment
   INCLUDES DESTINATION include)
 install(FILES ${FLOWMQ_PROTOCOL_HEADERS}
-              ${FLOWMQ_RUNTIME_PUBLIC_HEADERS}
+              ${FLOWMQ_CORE_HEADERS}
+              ${FLOWMQ_TRANSPORT_HEADERS}
               "${FLOWMQ_MEDIA_PROVIDER_GENERATED_HEADER}"
               "${CMAKE_CURRENT_SOURCE_DIR}/flowmq/include/flowmq_media_provider.h"
               "${CMAKE_CURRENT_SOURCE_DIR}/flowmq/include/flowmq.h"

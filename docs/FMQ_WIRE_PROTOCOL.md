@@ -255,12 +255,12 @@ peer 且尚未发送的 frame 会随 peer 状态释放，不会改投。
 
 ## 8. Implementation evidence
 
-规范实现位于 `flowmq/protocol/include/flowmq_protocol.h`、
-`flowmq/protocol/src/flowmq_protocol.c`、`patterns/src/flowmq_flow_control.c` 和
-`patterns/src/flowmq_socket.c`。对应测试覆盖 encode/decode、
+规范实现位于 `flowmq/include/flowmq_protocol.h`、
+`flowmq/src/protocol/flowmq_protocol.c`、`flowmq/src/core/session/flowmq_flow_control.c` 和
+`flowmq/src/runtime/flowmq_socket.c`。对应测试覆盖 encode/decode、
 fragmentation、security envelope、unknown version、malformed control frame、
 pattern pairing、heartbeat deadline、累计 credit、generation fencing、quantum/deadline
 更新、ROUTER identity 排除、TCP/TLS loopback/reconnect、XSUB subscription replay 和
 pattern HWM，入口为
-`flowmq/protocol/tests/test_flowmq_protocol.c`、`patterns/tests/test_flowmq_flow_control.c`
-与 `patterns/tests/test_flowmq_socket.c`。
+`flowmq/tests/protocol/test_flowmq_protocol.c`、`flowmq/tests/core/test_flowmq_flow_control.c`
+与 `flowmq/tests/runtime/test_flowmq_socket.c`。
