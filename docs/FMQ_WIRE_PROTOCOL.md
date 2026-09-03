@@ -162,11 +162,11 @@ identity 绑定。任何证书或 identity binding 失败都必须关闭连接�
 
 REQ 状态为 `READY -> WAIT_REPLY -> READY`。REP 状态为
 `WAIT_REQUEST -> SEND_REPLY -> WAIT_REQUEST`。绑定当前 transaction 的 peer 断线时，
-socket 取消 transaction；下一个受影响的 send/receive 一次性返回 `TURBO_ENOTCONN`，
+socket 取消 transaction；下一个受影响的 send/receive 一次性返回 `SALTS_ENOTCONN`，
 `flowmq_poll()` 在错误被消费前报告 `FLOWMQ_POLLERR`。新 session 完成 HELLO 后可继续，
 旧 generation reply 不得完成新 request。状态迁移只在完整 multipart 的最后一个 part
 成功 admission/receive 时提交。应用在错误 FSM phase 调用 send/receive，或在 multipart
-中途切换方向，立即返回 `TURBO_EPROTO`，不得作为 would-block 重试。
+中途切换方向，立即返回 `SALTS_EPROTO`，不得作为 would-block 重试。
 
 ROUTER routing envelope 与 ZeroMQ 一样只公开 peer claimed identity，它是当前 live
 session 的查找键，不是带 generation 的 opaque token。identity part 选中 peer 后，同一
@@ -239,8 +239,8 @@ repair symbol。此类冗余不能绕过 TCP head-of-line blocking，只会消�
 和累计 credit。PUB/XPUB 在发送开始时冻结匹配 peer 集合；最终 part admission 时移除
 已经饱和的 peer，没有 `FAIL`、`DROP_OLDEST` 或 `DISCONNECT` 等可配置 slow-peer
 策略，也没有 READ/WRITE ACL。PUSH 直接从当前可写 PULL 中 round-robin 选择；不存在
-可重放的 global pending queue，全体 peer 不可写时返回 `TURBO_EBUSY` 或
-`TURBO_ENOBUFS`。
+可重放的 global pending queue，全体 peer 不可写时返回 `SALTS_EBUSY` 或
+`SALTS_ENOBUFS`。
 
 每个 transport write 当前只提交一个连续 encoded frame，没有 iovec batch。成功 send
 只表示 frame 已进入所选 peer 的本地有界队列，不表示远端接收或业务完成。peer 协议错误、

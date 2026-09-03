@@ -1,6 +1,6 @@
 #include "flowmq_stream_decoder.h"
 #include "tinytest.h"
-#include "turbo_error.h"
+#include "salts_error.h"
 
 #include <string.h>
 
@@ -20,22 +20,22 @@ spec("flowmq_stream_decoder") {
     input.message_id = 17u;
     input.topic = vstr_from_cstr("orders.created");
     input.payload = vstr_from_cstr("accepted");
-    check_equal(flowmq_protocol_encode_frame(&input, 1024u, &encoded), TURBO_OK);
-    check_equal(flowmq_stream_decoder_prepare(&stream, 1024u), TURBO_OK);
+    check_equal(flowmq_protocol_encode_frame(&input, 1024u, &encoded), SALTS_OK);
+    check_equal(flowmq_stream_decoder_prepare(&stream, 1024u), SALTS_OK);
 
     split = FLOWMQ_PROTOCOL_HEADER_SIZE - 1u;
-    check_equal(flowmq_stream_decoder_append(&stream, encoded, split), TURBO_OK);
+    check_equal(flowmq_stream_decoder_append(&stream, encoded, split), SALTS_OK);
     check_equal(flowmq_stream_decoder_next(&stream, &output, &consumed),
                  FLOWMQ_PROTOCOL_INCOMPLETE);
     check_equal(flowmq_stream_decoder_append(&stream, encoded + split, tstr_len(encoded) - split),
-                 TURBO_OK);
-    check_equal(flowmq_stream_decoder_next(&stream, &output, &consumed), TURBO_OK);
+                 SALTS_OK);
+    check_equal(flowmq_stream_decoder_next(&stream, &output, &consumed), SALTS_OK);
     check_equal(output.message_id, 17u);
     check_equal(output.topic.len, 14u);
     check_equal(output.topic.data, "orders.created", 14u);
     check_equal(output.payload.len, 8u);
     check_equal(output.payload.data, "accepted", 8u);
-    check_equal(flowmq_stream_decoder_consume(&stream, consumed), TURBO_OK);
+    check_equal(flowmq_stream_decoder_consume(&stream, consumed), SALTS_OK);
 
     flowmq_protocol_frame_cleanup(&output);
     flowmq_stream_decoder_destroy(&stream);
@@ -46,12 +46,12 @@ spec("flowmq_stream_decoder") {
     flowmq_stream_decoder_t stream;
     memset(&stream, 0, sizeof(stream));
 
-    check_equal(flowmq_stream_decoder_prepare(&stream, 128u), TURBO_OK);
-    check_equal(flowmq_stream_decoder_prepare(&stream, 128u), TURBO_OK);
-    check_equal(flowmq_stream_decoder_prepare(&stream, 256u), TURBO_EALREADY);
+    check_equal(flowmq_stream_decoder_prepare(&stream, 128u), SALTS_OK);
+    check_equal(flowmq_stream_decoder_prepare(&stream, 128u), SALTS_OK);
+    check_equal(flowmq_stream_decoder_prepare(&stream, 256u), SALTS_EALREADY);
     check_equal(
         flowmq_stream_decoder_append(&stream, NULL, flowmq_stream_decoder_available(&stream) + 1u),
-        TURBO_EINVAL);
+        SALTS_EINVAL);
 
     flowmq_stream_decoder_destroy(&stream);
   }

@@ -1,6 +1,6 @@
 #include "flowmq_esb.h"
 
-#include "turbo_error.h"
+#include "salts_error.h"
 
 #include <limits.h>
 #include <string.h>
@@ -73,7 +73,7 @@ static int flowmq_esb_metadata_shape(const flowmq_esb_message_t *message, uint32
   const size_t u8_field = FLOWMQ_ESB_TLV_HEADER_SIZE + sizeof(uint8_t);
   const size_t u32_field = FLOWMQ_ESB_TLV_HEADER_SIZE + sizeof(uint32_t);
   const size_t u64_field = FLOWMQ_ESB_TLV_HEADER_SIZE + sizeof(uint64_t);
-  if (!message || !allowed_fields || !metadata_size) return TURBO_EINVAL;
+  if (!message || !allowed_fields || !metadata_size) return SALTS_EINVAL;
   *allowed_fields = 0u;
   *metadata_size = 0u;
   switch (message->kind) {
@@ -117,52 +117,52 @@ static int flowmq_esb_metadata_shape(const flowmq_esb_message_t *message, uint32
     *metadata_size = u8_field + u32_field;
     break;
   default:
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flowmq_esb_validate(const flowmq_esb_message_t *message, size_t *metadata_size) {
   uint32_t allowed_fields;
   uint32_t present_fields;
   int rc;
-  if (!message || !metadata_size) return TURBO_EINVAL;
+  if (!message || !metadata_size) return SALTS_EINVAL;
   if ((message->consumer_group.len != 0u && !message->consumer_group.data) ||
       (message->payload.len != 0u && !message->payload.data)) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   if (message->consumer_group.len > FLOWMQ_ESB_MAX_CONSUMER_GROUP_SIZE ||
       message->payload.len > UINT32_MAX) {
-    return TURBO_EMSGSIZE;
+    return SALTS_EMSGSIZE;
   }
   if (message->expected_responses > FLOWMQ_ESB_MAX_FANOUT_COUNT ||
       message->saga_step >= FLOWMQ_ESB_MAX_SAGA_STEPS ||
       message->partition_id >= FLOWMQ_ESB_MAX_STREAM_PARTITIONS) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   if (message->aggregation_policy > FLOWMQ_ESB_GATHER_QUORUM ||
       message->saga_state > FLOWMQ_ESB_SAGA_PARTIALLY_COMPENSATED ||
       message->circuit_state > FLOWMQ_ESB_CIRCUIT_HALF_OPEN) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   rc = flowmq_esb_metadata_shape(message, &allowed_fields, metadata_size);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   present_fields = flowmq_esb_present_fields(message);
-  if ((present_fields & ~allowed_fields) != 0u) return TURBO_EPROTO;
+  if ((present_fields & ~allowed_fields) != 0u) return SALTS_EPROTO;
   if (message->kind == FLOWMQ_ESB_SCATTER_REQUEST && message->expected_responses == 0u) {
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
   if ((message->kind == FLOWMQ_ESB_SAGA_EXECUTE || message->kind == FLOWMQ_ESB_SAGA_COMMIT ||
        message->kind == FLOWMQ_ESB_SAGA_COMPENSATE || message->kind == FLOWMQ_ESB_SAGA_ABORT) &&
       message->saga_id == 0u) {
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
   if ((message->kind == FLOWMQ_ESB_STREAM_SUBSCRIBE || message->kind == FLOWMQ_ESB_STREAM_COMMIT ||
        message->kind == FLOWMQ_ESB_STREAM_REBALANCE) &&
       message->consumer_group.len == 0u) {
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int flowmq_esb_encoded_size(const flowmq_esb_message_t *message, size_t max_message_size,
@@ -170,19 +170,19 @@ int flowmq_esb_encoded_size(const flowmq_esb_message_t *message, size_t max_mess
   size_t metadata_size;
   size_t total;
   int rc;
-  if (!encoded_size || max_message_size == 0u) return TURBO_EINVAL;
+  if (!encoded_size || max_message_size == 0u) return SALTS_EINVAL;
   *encoded_size = 0u;
   rc = flowmq_esb_validate(message, &metadata_size);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   if (FLOWMQ_ESB_HEADER_SIZE > SIZE_MAX - metadata_size ||
       FLOWMQ_ESB_HEADER_SIZE + metadata_size > SIZE_MAX - message->payload.len) {
-    return TURBO_ERANGE;
+    return SALTS_ERANGE;
   }
   total = FLOWMQ_ESB_HEADER_SIZE + metadata_size + message->payload.len;
-  if (total > max_message_size) return TURBO_EMSGSIZE;
-  if (metadata_size > UINT32_MAX) return TURBO_ERANGE;
+  if (total > max_message_size) return SALTS_EMSGSIZE;
+  if (metadata_size > UINT32_MAX) return SALTS_ERANGE;
   *encoded_size = total;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static void flowmq_esb_encode_field_header(unsigned char **cursor, flowmq_esb_field_t field,
@@ -269,13 +269,13 @@ int flowmq_esb_encode(const flowmq_esb_message_t *message, size_t max_message_si
   size_t encoded_size;
   unsigned char *cursor;
   int rc;
-  if (!encoded || *encoded) return TURBO_EINVAL;
+  if (!encoded || *encoded) return SALTS_EINVAL;
   rc = flowmq_esb_encoded_size(message, max_message_size, &encoded_size);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = flowmq_esb_validate(message, &metadata_size);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   *encoded = tstr_new_len(NULL, encoded_size);
-  if (!*encoded) return TURBO_ENOMEM;
+  if (!*encoded) return SALTS_ENOMEM;
   cursor = (unsigned char *)*encoded;
   memcpy(cursor, FLOWMQ_ESB_MAGIC, sizeof(FLOWMQ_ESB_MAGIC));
   cursor[4] = (unsigned char)message->kind;
@@ -292,24 +292,24 @@ int flowmq_esb_encode(const flowmq_esb_message_t *message, size_t max_message_si
   }
   if ((size_t)(cursor - (unsigned char *)*encoded) != encoded_size) {
     tstr_freep(encoded);
-    return TURBO_ERANGE;
+    return SALTS_ERANGE;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flowmq_esb_decode_field(const unsigned char **cursor, const unsigned char *end,
                                    flowmq_esb_field_t expected, uint32_t expected_size,
                                    const unsigned char **value) {
   uint32_t size;
-  if ((size_t)(end - *cursor) < FLOWMQ_ESB_TLV_HEADER_SIZE) return TURBO_EPROTO;
-  if ((*cursor)[0] != (unsigned char)expected) return TURBO_EPROTO;
+  if ((size_t)(end - *cursor) < FLOWMQ_ESB_TLV_HEADER_SIZE) return SALTS_EPROTO;
+  if ((*cursor)[0] != (unsigned char)expected) return SALTS_EPROTO;
   size = flowmq_esb_read_u32(*cursor + 1u);
   if (size != expected_size || (size_t)(end - *cursor) < FLOWMQ_ESB_TLV_HEADER_SIZE + size) {
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
   *value = *cursor + FLOWMQ_ESB_TLV_HEADER_SIZE;
   *cursor += FLOWMQ_ESB_TLV_HEADER_SIZE + size;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flowmq_esb_decode_metadata(flowmq_esb_message_t *message, const unsigned char *data,
@@ -321,7 +321,7 @@ static int flowmq_esb_decode_metadata(flowmq_esb_message_t *message, const unsig
 #define FLOWMQ_ESB_DECODE_FIXED(field, width)                                                      \
   do {                                                                                             \
     rc = flowmq_esb_decode_field(&cursor, end, field, width, &value);                              \
-    if (rc != TURBO_OK) return rc;                                                                 \
+    if (rc != SALTS_OK) return rc;                                                                 \
   } while (0)
   switch (message->kind) {
   case FLOWMQ_ESB_SCATTER_REQUEST:
@@ -363,14 +363,14 @@ static int flowmq_esb_decode_metadata(flowmq_esb_message_t *message, const unsig
   case FLOWMQ_ESB_STREAM_REBALANCE:
     if ((size_t)(end - cursor) < FLOWMQ_ESB_TLV_HEADER_SIZE ||
         cursor[0] != FLOWMQ_ESB_FIELD_CONSUMER_GROUP) {
-      return TURBO_EPROTO;
+      return SALTS_EPROTO;
     }
     group_size = flowmq_esb_read_u32(cursor + 1u);
     if (group_size == 0u || group_size > FLOWMQ_ESB_MAX_CONSUMER_GROUP_SIZE) {
-      return TURBO_EPROTO;
+      return SALTS_EPROTO;
     }
     rc = flowmq_esb_decode_field(&cursor, end, FLOWMQ_ESB_FIELD_CONSUMER_GROUP, group_size, &value);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
     message->consumer_group = vstr_from_buf((const char *)value, group_size);
     break;
   case FLOWMQ_ESB_PRIORITY_PUBLISH:
@@ -384,10 +384,10 @@ static int flowmq_esb_decode_metadata(flowmq_esb_message_t *message, const unsig
     message->failure_count = flowmq_esb_read_u32(value);
     break;
   default:
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
 #undef FLOWMQ_ESB_DECODE_FIXED
-  return cursor == end ? TURBO_OK : TURBO_EPROTO;
+  return cursor == end ? SALTS_OK : SALTS_EPROTO;
 }
 
 int flowmq_esb_decode(vstr encoded, size_t max_message_size, flowmq_esb_message_t *message) {
@@ -399,35 +399,35 @@ int flowmq_esb_decode(vstr encoded, size_t max_message_size, flowmq_esb_message_
   size_t validated_metadata_size;
   int rc;
   if (!message || (encoded.len != 0u && !encoded.data) || max_message_size == 0u) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   memset(message, 0, sizeof(*message));
-  if (encoded.len > max_message_size) return TURBO_EMSGSIZE;
-  if (encoded.len < FLOWMQ_ESB_HEADER_SIZE) return TURBO_EPROTO;
+  if (encoded.len > max_message_size) return SALTS_EMSGSIZE;
+  if (encoded.len < FLOWMQ_ESB_HEADER_SIZE) return SALTS_EPROTO;
   if (memcmp(header, FLOWMQ_ESB_MAGIC, sizeof(FLOWMQ_ESB_MAGIC)) != 0 || header[5] != 0u ||
       header[6] != 0u || header[7] != 0u) {
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
   metadata_size = flowmq_esb_read_u32(header + 8u);
   payload_size = flowmq_esb_read_u32(header + 12u);
   if (FLOWMQ_ESB_HEADER_SIZE > SIZE_MAX - metadata_size ||
       FLOWMQ_ESB_HEADER_SIZE + metadata_size > SIZE_MAX - payload_size) {
-    return TURBO_ERANGE;
+    return SALTS_ERANGE;
   }
   total = FLOWMQ_ESB_HEADER_SIZE + metadata_size + payload_size;
-  if (total != encoded.len) return TURBO_EPROTO;
+  if (total != encoded.len) return SALTS_EPROTO;
   message->kind = (flowmq_esb_message_kind_t)header[4];
   metadata = header + FLOWMQ_ESB_HEADER_SIZE;
   rc = flowmq_esb_decode_metadata(message, metadata, metadata + metadata_size);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     memset(message, 0, sizeof(*message));
     return rc;
   }
   message->payload = vstr_from_buf((const char *)(metadata + metadata_size), payload_size);
   rc = flowmq_esb_validate(message, &validated_metadata_size);
-  if (rc != TURBO_OK || validated_metadata_size != metadata_size) {
+  if (rc != SALTS_OK || validated_metadata_size != metadata_size) {
     memset(message, 0, sizeof(*message));
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }

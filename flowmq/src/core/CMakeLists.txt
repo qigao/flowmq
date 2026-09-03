@@ -28,8 +28,8 @@ target_include_directories(
           ${CMAKE_CURRENT_SOURCE_DIR}/session)
 target_link_libraries(
   flowmq_core
-  PUBLIC FlowMQ::Protocol Rocida::Core
-  PRIVATE Rocida::STL)
+  PUBLIC FlowMQ::Protocol Salts::Core
+  PRIVATE Salts::CSTL)
 
 set(FLOWMQ_CORE_SOURCES ${FLOWMQ_CORE_SOURCES} PARENT_SCOPE)
 set(FLOWMQ_CORE_HEADERS ${FLOWMQ_CORE_HEADERS} PARENT_SCOPE)

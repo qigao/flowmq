@@ -49,7 +49,7 @@ typedef struct flowmq_tls_identity_map_config_s {
  * One certificate may map to only one identity; multiple certificates may map
  * to the same identity for explicit rotation overlap.
  *
- * @return TURBO_OK, TURBO_EINVAL, TURBO_ERANGE, or TURBO_ENOMEM.
+ * @return SALTS_OK, SALTS_EINVAL, SALTS_ERANGE, or SALTS_ENOMEM.
  */
 FLOWMQ_C_API int flowmq_tls_identity_map_create(
     const flowmq_tls_identity_map_config_t *config,
@@ -60,7 +60,7 @@ FLOWMQ_C_API int flowmq_tls_identity_map_create(
  * All inputs are borrowed for the call. The immutable map may be shared by
  * callers only while its owner guarantees destroy cannot run concurrently.
  *
- * @return TURBO_OK, TURBO_EINVAL for malformed input, or TURBO_EPERM when the
+ * @return SALTS_OK, SALTS_EINVAL for malformed input, or SALTS_EPERM when the
  * tuple is not authorized.
  */
 FLOWMQ_C_API int flowmq_tls_identity_map_verify(

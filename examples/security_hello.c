@@ -1,8 +1,8 @@
 #include "flowmq_protocol.h"
 #include "flowmq_security.h"
 
-#include "turbo_error.h"
-#include "turbo_str.h"
+#include "salts_error.h"
+#include "salts_str.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -23,8 +23,8 @@ int main(void) {
   input.channel_binding = vstr_from_buf(channel_binding, sizeof(channel_binding));
 
   rc = flowmq_security_encode(&input, &encoded);
-  if (rc == TURBO_OK) rc = flowmq_security_decode(tstr_to_v(encoded), &output);
-  if (rc != TURBO_OK) {
+  if (rc == SALTS_OK) rc = flowmq_security_decode(tstr_to_v(encoded), &output);
+  if (rc != SALTS_OK) {
     fprintf(stderr, "FlowMQ security HELLO round-trip failed: %d\n", rc);
     tstr_free(encoded);
     return 1;

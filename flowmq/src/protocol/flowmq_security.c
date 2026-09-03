@@ -1,6 +1,6 @@
 #include "flowmq_security.h"
 
-#include "turbo_error.h"
+#include "salts_error.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -22,46 +22,46 @@ static uint32_t flowmq_security_read_u32(const unsigned char *data) {
 }
 
 static int flowmq_security_validate(const flowmq_security_t *security) {
-  if (!security) return TURBO_EINVAL;
+  if (!security) return SALTS_EINVAL;
   if ((security->identity.len > 0u && !security->identity.data) ||
       (security->method.len > 0u && !security->method.data) ||
       (security->secret.len > 0u && !security->secret.data) ||
       (security->channel_binding.len > 0u && !security->channel_binding.data)) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   if (security->identity.len > FLOWMQ_SECURITY_MAX_IDENTITY_SIZE ||
       security->method.len > FLOWMQ_SECURITY_MAX_AUTH_METHOD_SIZE ||
       security->secret.len > FLOWMQ_SECURITY_MAX_AUTH_SECRET_SIZE) {
-    return TURBO_EMSGSIZE;
+    return SALTS_EMSGSIZE;
   }
   if ((security->identity.len != 0u &&
        memchr(security->identity.data, '\0', security->identity.len) != NULL) ||
       (security->method.len != 0u &&
        memchr(security->method.data, '\0', security->method.len) != NULL)) {
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
   switch (security->mode) {
   case FLOWMQ_SECURITY_NONE:
     return security->identity.len == 0u && security->method.len == 0u &&
                    security->secret.len == 0u && security->channel_binding.len == 0u
-               ? TURBO_OK
-               : TURBO_EPROTO;
+               ? SALTS_OK
+               : SALTS_EPROTO;
   case FLOWMQ_SECURITY_AUTH:
     return security->identity.len != 0u && security->method.len != 0u &&
                    security->secret.len != 0u &&
                    (security->channel_binding.len == 0u ||
                     security->channel_binding.len == FLOWMQ_SECURITY_CHANNEL_BINDING_SIZE)
-               ? TURBO_OK
-               : TURBO_EPROTO;
+               ? SALTS_OK
+               : SALTS_EPROTO;
   case FLOWMQ_SECURITY_ACCEPTED:
     return security->identity.len == 0u && security->method.len == 0u &&
                    security->secret.len == 0u &&
                    (security->channel_binding.len == 0u ||
                     security->channel_binding.len == FLOWMQ_SECURITY_CHANNEL_BINDING_SIZE)
-               ? TURBO_OK
-               : TURBO_EPROTO;
+               ? SALTS_OK
+               : SALTS_EPROTO;
   default:
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
 }
 
@@ -70,17 +70,17 @@ int flowmq_security_encode(const flowmq_security_t *security, tstr *payload) {
   size_t offset;
   unsigned char *header;
   int rc;
-  if (!payload || *payload) return TURBO_EINVAL;
+  if (!payload || *payload) return SALTS_EINVAL;
   rc = flowmq_security_validate(security);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   if (security->mode == FLOWMQ_SECURITY_NONE) {
     *payload = tstr_new_len(NULL, 0u);
-    return *payload ? TURBO_OK : TURBO_ENOMEM;
+    return *payload ? SALTS_OK : SALTS_ENOMEM;
   }
   total = FLOWMQ_SECURITY_HEADER_SIZE + security->identity.len + security->method.len +
           security->channel_binding.len + security->secret.len;
   *payload = tstr_new_len(NULL, total);
-  if (!*payload) return TURBO_ENOMEM;
+  if (!*payload) return SALTS_ENOMEM;
   header = (unsigned char *)*payload;
   memcpy(header, FLOWMQ_SECURITY_MAGIC, sizeof(FLOWMQ_SECURITY_MAGIC));
   header[4] = (unsigned char)security->mode;
@@ -104,7 +104,7 @@ int flowmq_security_encode(const flowmq_security_t *security, tstr *payload) {
   if (security->secret.len != 0u) {
     memcpy(*payload + offset, security->secret.data, security->secret.len);
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int flowmq_security_decode(vstr payload, flowmq_security_t *security) {
@@ -117,27 +117,27 @@ int flowmq_security_decode(vstr payload, flowmq_security_t *security) {
   size_t total;
   size_t offset;
   int rc;
-  if (!security || (payload.len > 0u && !payload.data)) return TURBO_EINVAL;
+  if (!security || (payload.len > 0u && !payload.data)) return SALTS_EINVAL;
   memset(security, 0, sizeof(*security));
-  if (payload.len == 0u) return TURBO_OK;
+  if (payload.len == 0u) return SALTS_OK;
   if (payload.len < FLOWMQ_SECURITY_HEADER_SIZE ||
       memcmp(header, FLOWMQ_SECURITY_MAGIC, sizeof(FLOWMQ_SECURITY_MAGIC)) != 0) {
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
   security->mode = (flowmq_security_mode_t)header[4];
-  if (security->mode == FLOWMQ_SECURITY_NONE) return TURBO_EPROTO;
+  if (security->mode == FLOWMQ_SECURITY_NONE) return SALTS_EPROTO;
   identity_len = header[5];
   method_len = header[6];
   binding_len = header[7];
   secret_len = flowmq_security_read_u32(header + 8u);
   if (identity_len > SIZE_MAX - method_len || identity_len + method_len > SIZE_MAX - binding_len ||
       identity_len + method_len + binding_len > SIZE_MAX - secret_len) {
-    return TURBO_ERANGE;
+    return SALTS_ERANGE;
   }
   fields_size = identity_len + method_len + binding_len + secret_len;
-  if (FLOWMQ_SECURITY_HEADER_SIZE > SIZE_MAX - fields_size) return TURBO_ERANGE;
+  if (FLOWMQ_SECURITY_HEADER_SIZE > SIZE_MAX - fields_size) return SALTS_ERANGE;
   total = FLOWMQ_SECURITY_HEADER_SIZE + fields_size;
-  if (total != payload.len) return TURBO_EPROTO;
+  if (total != payload.len) return SALTS_EPROTO;
   offset = FLOWMQ_SECURITY_HEADER_SIZE;
   security->identity = vstr_from_buf(payload.data + offset, identity_len);
   offset += identity_len;
@@ -147,6 +147,6 @@ int flowmq_security_decode(vstr payload, flowmq_security_t *security) {
   offset += binding_len;
   security->secret = vstr_from_buf(payload.data + offset, secret_len);
   rc = flowmq_security_validate(security);
-  if (rc != TURBO_OK) memset(security, 0, sizeof(*security));
+  if (rc != SALTS_OK) memset(security, 0, sizeof(*security));
   return rc;
 }

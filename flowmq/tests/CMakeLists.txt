@@ -1,34 +1,34 @@
 cmake_add_test(
   test_flowmq_protocol
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/protocol/test_flowmq_protocol.c
-  LIBS FlowMQ::Protocol Rocida::TinyTest
+  LIBS FlowMQ::Protocol Salts::TinyTest
   INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/protocol
   FOLDER "flowmq/tests/protocol")
 
 cmake_add_test(
   test_flowmq_esb
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/protocol/test_flowmq_esb.c
-  LIBS FlowMQ::Protocol Rocida::TinyTest
+  LIBS FlowMQ::Protocol Salts::TinyTest
   FOLDER "flowmq/tests/protocol")
 
 cmake_add_test(
   test_flowmq_stream_decoder
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/protocol/test_flowmq_stream_decoder.c
-  LIBS FlowMQ::Protocol Rocida::TinyTest
+  LIBS FlowMQ::Protocol Salts::TinyTest
   INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/protocol/stream
   FOLDER "flowmq/tests/protocol")
 
 cmake_add_test(
   test_flowmq_core
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/core/test_flowmq_core.c
-  LIBS FlowMQ::Core Rocida::TinyTest
+  LIBS FlowMQ::Core Salts::TinyTest
   FOLDER "flowmq/tests/core")
 
 foreach(test_name IN ITEMS pattern pattern_state flow_control reconnect subscription_set)
   cmake_add_test(
     test_flowmq_${test_name}
     SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/core/test_flowmq_${test_name}.c
-    LIBS FlowMQ::Core Rocida::TinyTest
+    LIBS FlowMQ::Core Salts::TinyTest
     INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/core/pattern
              ${PROJECT_SOURCE_DIR}/flowmq/src/core/session
     FOLDER "flowmq/tests/core")
@@ -37,26 +37,26 @@ endforeach()
 cmake_add_test(
   test_flowmq_tls_identity_map
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/security/test_flowmq_tls_identity_map.c
-  LIBS FlowMQ::Core Rocida::TinyTest
+  LIBS FlowMQ::Core Salts::TinyTest
   FOLDER "flowmq/tests/security")
 
 cmake_add_test(
   test_flowmq_transport
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/transport/test_flowmq_transport.c
-  LIBS FlowMQ::Transport Rocida::TinyTest
+  LIBS FlowMQ::Transport Salts::TinyTest
   FOLDER "flowmq/tests/transport")
 
 cmake_add_test(
   test_flowmq_socket
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/test_flowmq_socket.c
-  LIBS FlowMQ::Transport Rocida::TinyTest
+  LIBS FlowMQ::Transport Salts::TinyTest
   FOLDER "flowmq/tests/runtime")
 
 cmake_add_test(
   test_flowmq_media_provider_schema
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/media_provider/test_flowmq_media_provider_schema.c
           ${FLOWMQ_MEDIA_PROVIDER_GENERATED_HEADER}
-  LIBS FlowMQ::FlowMQ Rocida::TinyTest
+  LIBS FlowMQ::FlowMQ Salts::TinyTest
   INCLUDES ${FLOWMQ_MEDIA_PROVIDER_GENERATED_DIR}
   FOLDER "flowmq/tests/media_provider")
 

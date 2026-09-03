@@ -1,7 +1,7 @@
 #include "flowmq_protocol.h"
 
-#include "turbo_error.h"
-#include "turbo_str.h"
+#include "salts_error.h"
+#include "salts_str.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -24,7 +24,7 @@ int main(void) {
 
   rc = flowmq_protocol_encode_frame_segmented(&frame, EXAMPLE_MAX_FRAME_SIZE,
                                                &encoded);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     fprintf(stderr, "FlowMQ segmented encode failed: %d\n", rc);
     return 1;
   }

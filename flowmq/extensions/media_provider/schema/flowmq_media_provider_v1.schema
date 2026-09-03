@@ -227,7 +227,9 @@ message ProviderObservationV1 {
   uint32 schema_version;
   ProviderMessageKind message_kind;
   ProviderQueryStatus status;
-  bool has_more;
+  // Logical boolean encoded as 0 or 1. Header-only SaltsUtils TBE contracts
+  // intentionally use only standalone fixed-width C types.
+  uint8 has_more;
   string message_id;
   string correlation_id;
   string causation_id;
@@ -275,7 +277,8 @@ message ProviderCallOfferV1 {
 message ProviderSessionBoundV1 {
   uint32 schema_version;
   ProviderMessageKind message_kind;
-  bool accepted;
+  // Logical boolean encoded as 0 or 1; the validator rejects other values.
+  uint8 accepted;
   string message_id;
   string correlation_id;
   string causation_id;

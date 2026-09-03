@@ -1,15 +1,15 @@
 #include "flowmq_transport.h"
 #include "tinytest.h"
-#include "turbo_error.h"
+#include "salts_error.h"
 
 #include <string.h>
 
 spec("flowmq_transport") {
   it("admits only the TCP and TLS phase-one transports") {
-    check_equal(flowmq_transport_validate(FLOWMQ_TRANSPORT_TCP), TURBO_OK);
-    check_equal(flowmq_transport_validate(FLOWMQ_TRANSPORT_TLS), TURBO_OK);
-    check_equal(flowmq_transport_validate((flowmq_transport_t)0), TURBO_EINVAL);
-    check_equal(flowmq_transport_validate((flowmq_transport_t)3), TURBO_EINVAL);
+    check_equal(flowmq_transport_validate(FLOWMQ_TRANSPORT_TCP), SALTS_OK);
+    check_equal(flowmq_transport_validate(FLOWMQ_TRANSPORT_TLS), SALTS_OK);
+    check_equal(flowmq_transport_validate((flowmq_transport_t)0), SALTS_EINVAL);
+    check_equal(flowmq_transport_validate((flowmq_transport_t)3), SALTS_EINVAL);
   }
 
   it("resolves operation timeouts from one explicit default") {
@@ -37,8 +37,8 @@ spec("flowmq_transport") {
     check_equal(io.event_capacity & (io.event_capacity - 1u), (size_t)0u);
     check_true(io.receive_buffer_bytes != 0u);
     check_true(io.tls_io_buffer_bytes >= 17u * 1024u);
-    check_equal(flowmq_io_config_validate(&io), TURBO_OK);
+    check_equal(flowmq_io_config_validate(&io), SALTS_OK);
     io.command_capacity = 3u;
-    check_equal(flowmq_io_config_validate(&io), TURBO_EINVAL);
+    check_equal(flowmq_io_config_validate(&io), SALTS_EINVAL);
   }
 }

@@ -4,7 +4,7 @@
 #include "flowmq_export.h"
 #include "flowmq_protocol_catalog.h"
 
-#include "turbo_str.h"
+#include "salts_str.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -106,7 +106,7 @@ typedef struct flowmq_esb_message_s {
  * @param message Borrowed application metadata and payload.
  * @param max_message_size Non-zero caller limit for the complete envelope.
  * @param encoded_size Exact byte count on success; reset to zero on entry.
- * @return TURBO_OK, TURBO_EINVAL, TURBO_EPROTO, TURBO_EMSGSIZE, or TURBO_ERANGE.
+ * @return SALTS_OK, SALTS_EINVAL, SALTS_EPROTO, SALTS_EMSGSIZE, or SALTS_ERANGE.
  */
 FLOWMQ_C_API int flowmq_esb_encoded_size(const flowmq_esb_message_t *message,
                                          size_t max_message_size, size_t *encoded_size);
@@ -116,7 +116,7 @@ FLOWMQ_C_API int flowmq_esb_encoded_size(const flowmq_esb_message_t *message,
  * @param message Borrowed application metadata and payload.
  * @param max_message_size Non-zero caller limit for the complete envelope.
  * @param encoded Output initialized to NULL; caller releases success output with tstr_free().
- * @return TURBO_OK plus the validation errors above, or TURBO_ENOMEM.
+ * @return SALTS_OK plus the validation errors above, or SALTS_ENOMEM.
  */
 FLOWMQ_C_API int flowmq_esb_encode(const flowmq_esb_message_t *message, size_t max_message_size,
                                    tstr *encoded);
@@ -126,7 +126,7 @@ FLOWMQ_C_API int flowmq_esb_encode(const flowmq_esb_message_t *message, size_t m
  * @param encoded Complete envelope bytes kept alive while output views are used.
  * @param max_message_size Non-zero caller limit for the complete envelope.
  * @param message Output reset to zero before decoding and on malformed input.
- * @return TURBO_OK, TURBO_EINVAL, TURBO_EPROTO, TURBO_EMSGSIZE, or TURBO_ERANGE.
+ * @return SALTS_OK, SALTS_EINVAL, SALTS_EPROTO, SALTS_EMSGSIZE, or SALTS_ERANGE.
  */
 FLOWMQ_C_API int flowmq_esb_decode(vstr encoded, size_t max_message_size,
                                    flowmq_esb_message_t *message);

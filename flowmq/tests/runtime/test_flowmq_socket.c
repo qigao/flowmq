@@ -1,8 +1,8 @@
 #include "flowmq_socket.h"
 #include "flowmq_tls_test_material.h"
 #include "tinytest.h"
-#include "turbo_error.h"
-#include <turbo/clock.h>
+#include "salts_error.h"
+#include <salts/clock.h>
 
 #include <stddef.h>
 #include <stdlib.h>
@@ -46,10 +46,10 @@ spec("flowmq_socket lifecycle and pattern surface") {
       sockets[i] = flowmq_socket(ctx, types[i]);
       check_not_null(sockets[i]);
     }
-    check_equal(flowmq_ctx_term(ctx), TURBO_EBUSY);
+    check_equal(flowmq_ctx_term(ctx), SALTS_EBUSY);
     for (size_t i = 0u; i < sizeof(types) / sizeof(types[0]); ++i)
-      check_equal(flowmq_close(sockets[i]), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+      check_equal(flowmq_close(sockets[i]), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("rejects unsupported directions before considering peer readiness") {
@@ -62,17 +62,17 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_socket_t *pull = flowmq_socket(ctx, FLOWMQ_PULL);
 
     check_equal(flowmq_recv(pub, &byte, sizeof(byte), &received, FLOWMQ_DONTWAIT),
-                TURBO_ENOTSUP);
-    check_equal(flowmq_send(sub, &byte, sizeof(byte), FLOWMQ_DONTWAIT), TURBO_ENOTSUP);
+                SALTS_ENOTSUP);
+    check_equal(flowmq_send(sub, &byte, sizeof(byte), FLOWMQ_DONTWAIT), SALTS_ENOTSUP);
     check_equal(flowmq_recv(push, &byte, sizeof(byte), &received, FLOWMQ_DONTWAIT),
-                TURBO_ENOTSUP);
-    check_equal(flowmq_send(pull, &byte, sizeof(byte), FLOWMQ_DONTWAIT), TURBO_ENOTSUP);
+                SALTS_ENOTSUP);
+    check_equal(flowmq_send(pull, &byte, sizeof(byte), FLOWMQ_DONTWAIT), SALTS_ENOTSUP);
 
-    check_equal(flowmq_close(pub), TURBO_OK);
-    check_equal(flowmq_close(sub), TURBO_OK);
-    check_equal(flowmq_close(push), TURBO_OK);
-    check_equal(flowmq_close(pull), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(pub), SALTS_OK);
+    check_equal(flowmq_close(sub), SALTS_OK);
+    check_equal(flowmq_close(push), SALTS_OK);
+    check_equal(flowmq_close(pull), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("reports poll readiness only when the pattern FSM can perform the operation") {
@@ -86,16 +86,16 @@ spec("flowmq_socket lifecycle and pattern surface") {
         {.socket = rep, .events = FLOWMQ_POLLOUT}};
     size_t ready = 0u;
 
-    check_equal(flowmq_poll(items, 3u, 0u, &ready), TURBO_OK);
+    check_equal(flowmq_poll(items, 3u, 0u, &ready), SALTS_OK);
     check_equal(ready, 0u);
     check_equal(items[0].revents, 0);
     check_equal(items[1].revents, 0);
     check_equal(items[2].revents, 0);
 
-    check_equal(flowmq_close(rep), TURBO_OK);
-    check_equal(flowmq_close(pull), TURBO_OK);
-    check_equal(flowmq_close(sub), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(rep), SALTS_OK);
+    check_equal(flowmq_close(pull), SALTS_OK);
+    check_equal(flowmq_close(sub), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("does not commit a request when no peer accepted it") {
@@ -104,12 +104,12 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_socket_t *req = flowmq_socket(ctx, FLOWMQ_REQ);
 
     check_equal(flowmq_send(req, payload, sizeof(payload) - 1u, FLOWMQ_DONTWAIT),
-                TURBO_EBUSY);
+                SALTS_EBUSY);
     check_equal(flowmq_send(req, payload, sizeof(payload) - 1u, FLOWMQ_DONTWAIT),
-                TURBO_EBUSY);
+                SALTS_EBUSY);
 
-    check_equal(flowmq_close(req), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(req), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("allows a PAIR socket to own only one peer") {
@@ -121,21 +121,21 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_socket_t *first = flowmq_socket(ctx, FLOWMQ_PAIR);
     flowmq_socket_t *second = flowmq_socket(ctx, FLOWMQ_PAIR);
 
-    check_equal(flowmq_bind(first, "tcp://127.0.0.1:0"), TURBO_OK);
+    check_equal(flowmq_bind(first, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(first, first_endpoint,
                                      sizeof(first_endpoint), &endpoint_size),
-                TURBO_OK);
-    check_equal(flowmq_bind(second, "tcp://127.0.0.1:0"), TURBO_OK);
+                SALTS_OK);
+    check_equal(flowmq_bind(second, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(second, second_endpoint,
                                      sizeof(second_endpoint), &endpoint_size),
-                TURBO_OK);
-    check_equal(flowmq_connect(sender, first_endpoint), TURBO_OK);
-    check_equal(flowmq_connect(sender, second_endpoint), TURBO_EBUSY);
+                SALTS_OK);
+    check_equal(flowmq_connect(sender, first_endpoint), SALTS_OK);
+    check_equal(flowmq_connect(sender, second_endpoint), SALTS_EBUSY);
 
-    check_equal(flowmq_close(second), TURBO_OK);
-    check_equal(flowmq_close(first), TURBO_OK);
-    check_equal(flowmq_close(sender), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(second), SALTS_OK);
+    check_equal(flowmq_close(first), SALTS_OK);
+    check_equal(flowmq_close(sender), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("preserves a multi-packet payload after send returns") {
@@ -148,39 +148,39 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_ctx_t *ctx = flowmq_ctx_new();
     flowmq_socket_t *sender = flowmq_socket(ctx, FLOWMQ_PAIR);
     flowmq_socket_t *receiver = flowmq_socket(ctx, FLOWMQ_PAIR);
-    int status = TURBO_EBUSY;
+    int status = SALTS_EBUSY;
 
     for (size_t i = 0u; i < sizeof(payload); ++i)
       payload[i] = (unsigned char)((i * 31u + 7u) & 0xffu);
     memcpy(expected, payload, sizeof(payload));
-    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), TURBO_OK);
+    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
-                                     &endpoint_size), TURBO_OK);
-    check_equal(flowmq_connect(sender, endpoint), TURBO_OK);
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(sender, endpoint), SALTS_OK);
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(sender, receiver), TURBO_OK);
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
       status = flowmq_send(sender, payload, sizeof(payload), FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     memset(payload, 0xa5, sizeof(payload));
 
-    status = TURBO_EBUSY;
+    status = SALTS_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(sender, receiver), TURBO_OK);
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
       status = flowmq_recv(receiver, received, sizeof(received), &received_size,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(received_size, sizeof(expected));
     check_equal(memcmp(received, expected, sizeof(expected)), 0);
 
-    check_equal(flowmq_close(sender), TURBO_OK);
-    check_equal(flowmq_close(receiver), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(sender), SALTS_OK);
+    check_equal(flowmq_close(receiver), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("preserves queued frame boundaries and order") {
@@ -192,50 +192,50 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_ctx_t *ctx = flowmq_ctx_new();
     flowmq_socket_t *sender = flowmq_socket(ctx, FLOWMQ_PAIR);
     flowmq_socket_t *receiver = flowmq_socket(ctx, FLOWMQ_PAIR);
-    int status = TURBO_EBUSY;
+    int status = SALTS_EBUSY;
 
     for (size_t message = 0u; message < FLOWMQ_TEST_QUEUED_MESSAGES;
          ++message) {
       memset(payloads[message], (int)(message + 1u),
              sizeof(payloads[message]));
     }
-    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), TURBO_OK);
+    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
-                                     &endpoint_size), TURBO_OK);
-    check_equal(flowmq_connect(sender, endpoint), TURBO_OK);
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(sender, endpoint), SALTS_OK);
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(sender, receiver), TURBO_OK);
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
       status = flowmq_send(sender, payloads[0], sizeof(payloads[0]),
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     for (size_t message = 1u; message < FLOWMQ_TEST_QUEUED_MESSAGES;
          ++message) {
       check_equal(flowmq_send(sender, payloads[message],
                               sizeof(payloads[message]), FLOWMQ_DONTWAIT),
-                  TURBO_OK);
+                  SALTS_OK);
     }
 
     for (size_t message = 0u; message < FLOWMQ_TEST_QUEUED_MESSAGES;
          ++message) {
-      status = TURBO_EBUSY;
+      status = SALTS_EBUSY;
       for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                          status == TURBO_EBUSY;
+                          status == SALTS_EBUSY;
            ++i) {
-        check_equal(progress_pair(sender, receiver), TURBO_OK);
+        check_equal(progress_pair(sender, receiver), SALTS_OK);
         status = flowmq_recv(receiver, received, sizeof(received),
                              &received_size, FLOWMQ_DONTWAIT);
       }
-      check_equal(status, TURBO_OK);
+      check_equal(status, SALTS_OK);
       check_equal(received_size, sizeof(payloads[message]));
       check_equal(memcmp(received, payloads[message], received_size), 0);
     }
 
-    check_equal(flowmq_close(sender), TURBO_OK);
-    check_equal(flowmq_close(receiver), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(sender), SALTS_OK);
+    check_equal(flowmq_close(receiver), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("isolates an incompatible peer without poisoning a ROUTER socket") {
@@ -249,46 +249,46 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_socket_t *router = flowmq_socket(ctx, FLOWMQ_ROUTER);
     flowmq_socket_t *dealer = flowmq_socket(ctx, FLOWMQ_DEALER);
     flowmq_socket_t *incompatible = flowmq_socket(ctx, FLOWMQ_PAIR);
-    int status = TURBO_EBUSY;
+    int status = SALTS_EBUSY;
 
     check_equal(flowmq_setsockopt(dealer, FLOWMQ_IDENTITY, identity,
-                                  sizeof(identity) - 1u), TURBO_OK);
-    check_equal(flowmq_bind(router, "tcp://127.0.0.1:0"), TURBO_OK);
+                                  sizeof(identity) - 1u), SALTS_OK);
+    check_equal(flowmq_bind(router, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(router, endpoint, sizeof(endpoint),
-                                     &endpoint_size), TURBO_OK);
-    check_equal(flowmq_connect(dealer, endpoint), TURBO_OK);
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(dealer, endpoint), SALTS_OK);
     for (size_t i = 0u; i < 100u; ++i)
-      check_equal(progress_pair(dealer, router), TURBO_OK);
-    check_equal(flowmq_connect(incompatible, endpoint), TURBO_OK);
+      check_equal(progress_pair(dealer, router), SALTS_OK);
+    check_equal(flowmq_connect(incompatible, endpoint), SALTS_OK);
     for (size_t i = 0u; i < 100u; ++i)
-      check_equal(progress_three(incompatible, dealer, router), TURBO_OK);
+      check_equal(progress_three(incompatible, dealer, router), SALTS_OK);
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_three(incompatible, dealer, router), TURBO_OK);
+      check_equal(progress_three(incompatible, dealer, router), SALTS_OK);
       status = flowmq_send(dealer, payload, sizeof(payload) - 1u,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
-    status = TURBO_EBUSY;
+    check_equal(status, SALTS_OK);
+    status = SALTS_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_three(incompatible, dealer, router), TURBO_OK);
+      check_equal(progress_three(incompatible, dealer, router), SALTS_OK);
       status = flowmq_recv(router, received, sizeof(received), &received_size,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(received_size, sizeof(identity) - 1u);
     check_equal(flowmq_recv(router, received, sizeof(received), &received_size,
-                            FLOWMQ_DONTWAIT), TURBO_OK);
+                            FLOWMQ_DONTWAIT), SALTS_OK);
     check_equal(received_size, sizeof(payload) - 1u);
     check_equal(memcmp(received, payload, received_size), 0);
 
-    check_equal(flowmq_close(incompatible), TURBO_OK);
-    check_equal(flowmq_close(dealer), TURBO_OK);
-    check_equal(flowmq_close(router), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(incompatible), SALTS_OK);
+    check_equal(flowmq_close(dealer), SALTS_OK);
+    check_equal(flowmq_close(router), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("does not route a REP reply to a replacement peer in a reused slot") {
@@ -303,89 +303,89 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_socket_t *server = flowmq_socket(ctx, FLOWMQ_REP);
     flowmq_socket_t *first = flowmq_socket(ctx, FLOWMQ_REQ);
     flowmq_socket_t *replacement = flowmq_socket(ctx, FLOWMQ_DEALER);
-    int status = TURBO_EBUSY;
+    int status = SALTS_EBUSY;
 
-    check_equal(flowmq_bind(server, "tcp://127.0.0.1:0"), TURBO_OK);
+    check_equal(flowmq_bind(server, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(server, endpoint, sizeof(endpoint),
-                                     &endpoint_size), TURBO_OK);
-    check_equal(flowmq_connect(first, endpoint), TURBO_OK);
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(first, endpoint), SALTS_OK);
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(first, server), TURBO_OK);
+      check_equal(progress_pair(first, server), SALTS_OK);
       status = flowmq_send(first, request, sizeof(request) - 1u,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
-    status = TURBO_EBUSY;
+    check_equal(status, SALTS_OK);
+    status = SALTS_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(first, server), TURBO_OK);
+      check_equal(progress_pair(first, server), SALTS_OK);
       status = flowmq_recv(server, received, sizeof(received), &received_size,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
-    check_equal(flowmq_close(first), TURBO_OK);
+    check_equal(status, SALTS_OK);
+    check_equal(flowmq_close(first), SALTS_OK);
     for (size_t i = 0u; i < 200u; ++i) {
       flowmq_pollitem_t item = {.socket = server};
       size_t ready = 0u;
-      check_equal(flowmq_poll(&item, 1u, 0u, &ready), TURBO_OK);
+      check_equal(flowmq_poll(&item, 1u, 0u, &ready), SALTS_OK);
     }
     {
       flowmq_pollitem_t cancelled = {
           .socket = server, .events = FLOWMQ_POLLOUT};
       size_t ready = 0u;
-      check_equal(flowmq_poll(&cancelled, 1u, 0u, &ready), TURBO_OK);
+      check_equal(flowmq_poll(&cancelled, 1u, 0u, &ready), SALTS_OK);
       check_equal(ready, 1u);
       check_equal(cancelled.revents, FLOWMQ_POLLERR);
     }
 
-    check_equal(flowmq_connect(replacement, endpoint), TURBO_OK);
-    status = TURBO_EBUSY;
+    check_equal(flowmq_connect(replacement, endpoint), SALTS_OK);
+    status = SALTS_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(replacement, server), TURBO_OK);
+      check_equal(progress_pair(replacement, server), SALTS_OK);
       status = flowmq_send(replacement, replacement_request,
                            sizeof(replacement_request) - 1u, FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(flowmq_send(server, reply, sizeof(reply) - 1u, 0),
-                TURBO_ENOTCONN);
+                SALTS_ENOTCONN);
     {
       flowmq_pollitem_t consumed = {.socket = server};
       size_t ready = 0u;
-      check_equal(flowmq_poll(&consumed, 1u, 0u, &ready), TURBO_OK);
+      check_equal(flowmq_poll(&consumed, 1u, 0u, &ready), SALTS_OK);
       check_equal(ready, 0u);
       check_equal(consumed.revents, 0);
     }
-    status = TURBO_EBUSY;
+    status = SALTS_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(replacement, server), TURBO_OK);
+      check_equal(progress_pair(replacement, server), SALTS_OK);
       status = flowmq_recv(server, received, sizeof(received), &received_size,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(received_size, sizeof(replacement_request) - 1u);
     check_equal(flowmq_send(server, reply, sizeof(reply) - 1u,
-                            FLOWMQ_DONTWAIT), TURBO_OK);
-    status = TURBO_EBUSY;
+                            FLOWMQ_DONTWAIT), SALTS_OK);
+    status = SALTS_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(replacement, server), TURBO_OK);
+      check_equal(progress_pair(replacement, server), SALTS_OK);
       status = flowmq_recv(replacement, received, sizeof(received),
                            &received_size, FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(received_size, sizeof(reply) - 1u);
 
-    check_equal(flowmq_close(replacement), TURBO_OK);
-    check_equal(flowmq_close(server), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(replacement), SALTS_OK);
+    check_equal(flowmq_close(server), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("cancels a multipart REP route before a peer slot is reused") {
@@ -402,77 +402,77 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_socket_t *server = flowmq_socket(ctx, FLOWMQ_REP);
     flowmq_socket_t *first = flowmq_socket(ctx, FLOWMQ_REQ);
     flowmq_socket_t *replacement = flowmq_socket(ctx, FLOWMQ_DEALER);
-    int status = TURBO_EBUSY;
+    int status = SALTS_EBUSY;
 
-    check_equal(flowmq_bind(server, "tcp://127.0.0.1:0"), TURBO_OK);
+    check_equal(flowmq_bind(server, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(server, endpoint, sizeof(endpoint),
-                                     &endpoint_size), TURBO_OK);
-    check_equal(flowmq_connect(first, endpoint), TURBO_OK);
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(first, endpoint), SALTS_OK);
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(first, server), TURBO_OK);
+      check_equal(progress_pair(first, server), SALTS_OK);
       status = flowmq_send(first, request, sizeof(request) - 1u,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
-    status = TURBO_EBUSY;
+    check_equal(status, SALTS_OK);
+    status = SALTS_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(first, server), TURBO_OK);
+      check_equal(progress_pair(first, server), SALTS_OK);
       status = flowmq_recv(server, received, sizeof(received), &received_size,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(flowmq_send(server, old_first, sizeof(old_first) - 1u,
-                            FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), TURBO_OK);
-    check_equal(flowmq_close(first), TURBO_OK);
+                            FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), SALTS_OK);
+    check_equal(flowmq_close(first), SALTS_OK);
     for (size_t i = 0u; i < 200u; ++i) {
       flowmq_pollitem_t item = {.socket = server};
       size_t ready = 0u;
-      check_equal(flowmq_poll(&item, 1u, 0u, &ready), TURBO_OK);
+      check_equal(flowmq_poll(&item, 1u, 0u, &ready), SALTS_OK);
     }
 
-    check_equal(flowmq_connect(replacement, endpoint), TURBO_OK);
-    status = TURBO_EBUSY;
+    check_equal(flowmq_connect(replacement, endpoint), SALTS_OK);
+    status = SALTS_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(replacement, server), TURBO_OK);
+      check_equal(progress_pair(replacement, server), SALTS_OK);
       status = flowmq_send(replacement, replacement_request,
                            sizeof(replacement_request) - 1u, FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(flowmq_send(server, old_final, sizeof(old_final) - 1u, 0),
-                TURBO_ENOTCONN);
-    status = TURBO_EBUSY;
+                SALTS_ENOTCONN);
+    status = SALTS_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(replacement, server), TURBO_OK);
+      check_equal(progress_pair(replacement, server), SALTS_OK);
       status = flowmq_recv(server, received, sizeof(received), &received_size,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(received_size, sizeof(replacement_request) - 1u);
     check_equal(flowmq_send(server, replacement_reply,
                             sizeof(replacement_reply) - 1u, FLOWMQ_DONTWAIT),
-                TURBO_OK);
-    status = TURBO_EBUSY;
+                SALTS_OK);
+    status = SALTS_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(replacement, server), TURBO_OK);
+      check_equal(progress_pair(replacement, server), SALTS_OK);
       status = flowmq_recv(replacement, received, sizeof(received),
                            &received_size, FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(received_size, sizeof(replacement_reply) - 1u);
 
-    check_equal(flowmq_close(replacement), TURBO_OK);
-    check_equal(flowmq_close(server), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(replacement), SALTS_OK);
+    check_equal(flowmq_close(server), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("resets a REQ transaction after its bound peer disconnects") {
@@ -488,77 +488,77 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_socket_t *client = flowmq_socket(ctx, FLOWMQ_REQ);
     flowmq_socket_t *first = flowmq_socket(ctx, FLOWMQ_REP);
     flowmq_socket_t *next = flowmq_socket(ctx, FLOWMQ_REP);
-    int status = TURBO_EBUSY;
+    int status = SALTS_EBUSY;
 
-    check_equal(flowmq_bind(first, "tcp://127.0.0.1:0"), TURBO_OK);
+    check_equal(flowmq_bind(first, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(first, first_endpoint,
                                      sizeof(first_endpoint), &endpoint_size),
-                TURBO_OK);
-    check_equal(flowmq_connect(client, first_endpoint), TURBO_OK);
+                SALTS_OK);
+    check_equal(flowmq_connect(client, first_endpoint), SALTS_OK);
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(client, first), TURBO_OK);
+      check_equal(progress_pair(client, first), SALTS_OK);
       status = flowmq_send(client, first_request, sizeof(first_request) - 1u,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
-    check_equal(flowmq_close(first), TURBO_OK);
+    check_equal(status, SALTS_OK);
+    check_equal(flowmq_close(first), SALTS_OK);
     for (size_t i = 0u; i < 200u; ++i) {
       flowmq_pollitem_t item = {.socket = client};
       size_t ready = 0u;
-      check_equal(flowmq_poll(&item, 1u, 0u, &ready), TURBO_OK);
+      check_equal(flowmq_poll(&item, 1u, 0u, &ready), SALTS_OK);
     }
     {
       flowmq_pollitem_t cancelled = {
           .socket = client, .events = FLOWMQ_POLLIN};
       size_t ready = 0u;
-      check_equal(flowmq_poll(&cancelled, 1u, 0u, &ready), TURBO_OK);
+      check_equal(flowmq_poll(&cancelled, 1u, 0u, &ready), SALTS_OK);
       check_equal(ready, 1u);
       check_equal(cancelled.revents, FLOWMQ_POLLERR);
     }
     check_equal(flowmq_recv(client, received, sizeof(received), &received_size,
-                            0), TURBO_ENOTCONN);
+                            0), SALTS_ENOTCONN);
 
-    check_equal(flowmq_bind(next, "tcp://127.0.0.1:0"), TURBO_OK);
+    check_equal(flowmq_bind(next, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(next, next_endpoint, sizeof(next_endpoint),
-                                     &endpoint_size), TURBO_OK);
-    check_equal(flowmq_connect(client, next_endpoint), TURBO_OK);
-    status = TURBO_EBUSY;
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(client, next_endpoint), SALTS_OK);
+    status = SALTS_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(client, next), TURBO_OK);
+      check_equal(progress_pair(client, next), SALTS_OK);
       status = flowmq_send(client, next_request, sizeof(next_request) - 1u,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
-    status = TURBO_EBUSY;
+    check_equal(status, SALTS_OK);
+    status = SALTS_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(client, next), TURBO_OK);
+      check_equal(progress_pair(client, next), SALTS_OK);
       status = flowmq_recv(next, received, sizeof(received), &received_size,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(received_size, sizeof(next_request) - 1u);
     check_equal(flowmq_send(next, reply, sizeof(reply) - 1u,
-                            FLOWMQ_DONTWAIT), TURBO_OK);
-    status = TURBO_EBUSY;
+                            FLOWMQ_DONTWAIT), SALTS_OK);
+    status = SALTS_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(client, next), TURBO_OK);
+      check_equal(progress_pair(client, next), SALTS_OK);
       status = flowmq_recv(client, received, sizeof(received), &received_size,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(received_size, sizeof(reply) - 1u);
 
-    check_equal(flowmq_close(next), TURBO_OK);
-    check_equal(flowmq_close(client), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(next), SALTS_OK);
+    check_equal(flowmq_close(client), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("waits for the requested timeout when multiple sockets stay idle") {
@@ -568,15 +568,15 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_pollitem_t items[] = {{.socket = first, .events = FLOWMQ_POLLIN},
                                  {.socket = second, .events = FLOWMQ_POLLIN}};
     size_t ready = 0u;
-    uint64_t started_ms = turbo_monotonic_ms();
+    uint64_t started_ms = salts_monotonic_ms();
 
-    check_equal(flowmq_poll(items, 2u, 20u, &ready), TURBO_OK);
+    check_equal(flowmq_poll(items, 2u, 20u, &ready), SALTS_OK);
     check_equal(ready, 0u);
-    check_greater_equal(turbo_monotonic_ms() - started_ms, UINT64_C(15));
+    check_greater_equal(salts_monotonic_ms() - started_ms, UINT64_C(15));
 
-    check_equal(flowmq_close(first), TURBO_OK);
-    check_equal(flowmq_close(second), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(first), SALTS_OK);
+    check_equal(flowmq_close(second), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("keeps an idle connection open without a receive deadline") {
@@ -591,38 +591,38 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_socket_t *sender = flowmq_socket(ctx, FLOWMQ_PAIR);
     flowmq_pollitem_t idle_items[] = {
         {.socket = sender}, {.socket = receiver}};
-    int status = TURBO_EBUSY;
+    int status = SALTS_EBUSY;
 
-    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), TURBO_OK);
+    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
-                                     &endpoint_size), TURBO_OK);
-    check_equal(flowmq_connect(sender, endpoint), TURBO_OK);
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(sender, endpoint), SALTS_OK);
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(sender, receiver), TURBO_OK);
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
       status = flowmq_send(sender, payload, sizeof(payload) - 1u,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
-    status = TURBO_EBUSY;
+    check_equal(status, SALTS_OK);
+    status = SALTS_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(sender, receiver), TURBO_OK);
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
       status = flowmq_recv(receiver, received, sizeof(received),
                            &received_size, FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
 
-    check_equal(flowmq_poll(idle_items, 2u, 1100u, &ready), TURBO_OK);
+    check_equal(flowmq_poll(idle_items, 2u, 1100u, &ready), SALTS_OK);
     check_equal(ready, 0u);
     check_equal(flowmq_send(sender, payload, sizeof(payload) - 1u,
-                            FLOWMQ_DONTWAIT), TURBO_OK);
+                            FLOWMQ_DONTWAIT), SALTS_OK);
 
-    check_equal(flowmq_close(sender), TURBO_OK);
-    check_equal(flowmq_close(receiver), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(sender), SALTS_OK);
+    check_equal(flowmq_close(receiver), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("validates caller-driven control options before runtime startup") {
@@ -637,37 +637,37 @@ spec("flowmq_socket lifecycle and pattern surface") {
 
     check_equal(flowmq_setsockopt(socket, FLOWMQ_HEARTBEAT_IVL,
                                  &interval_ms, sizeof(interval_ms)),
-                TURBO_OK);
+                SALTS_OK);
     check_equal(flowmq_setsockopt(socket, FLOWMQ_HEARTBEAT_TIMEOUT,
                                  &timeout_ms, sizeof(timeout_ms)),
-                TURBO_OK);
+                SALTS_OK);
     check_equal(flowmq_setsockopt(socket, FLOWMQ_HEARTBEAT_IVL,
                                  &negative_ms, sizeof(negative_ms)),
-                TURBO_EINVAL);
+                SALTS_EINVAL);
     check_equal(flowmq_setsockopt(socket, FLOWMQ_HEARTBEAT_TIMEOUT,
                                  &negative_ms, sizeof(negative_ms)),
-                TURBO_EINVAL);
+                SALTS_EINVAL);
     check_equal(flowmq_setsockopt(socket, FLOWMQ_HEARTBEAT_IVL,
                                  NULL, sizeof(interval_ms)),
-                TURBO_EINVAL);
+                SALTS_EINVAL);
     check_equal(flowmq_setsockopt(socket, FLOWMQ_FLOW_UPDATE_IVL,
-                                 &interval_ms, sizeof(interval_ms)), TURBO_OK);
+                                 &interval_ms, sizeof(interval_ms)), SALTS_OK);
     check_equal(flowmq_setsockopt(socket, FLOWMQ_FLOW_UPDATE_IVL,
-                                 &zero_ms, sizeof(zero_ms)), TURBO_EINVAL);
+                                 &zero_ms, sizeof(zero_ms)), SALTS_EINVAL);
     check_equal(flowmq_setsockopt(socket, FLOWMQ_FLOW_UPDATE_QUANTUM,
-                                 &flow_quantum, sizeof(flow_quantum)), TURBO_OK);
+                                 &flow_quantum, sizeof(flow_quantum)), SALTS_OK);
     check_equal(flowmq_setsockopt(socket, FLOWMQ_FLOW_UPDATE_QUANTUM,
                                  &zero_quantum, sizeof(zero_quantum)),
-                TURBO_EINVAL);
-    check_equal(flowmq_bind(socket, "tcp://127.0.0.1:0"), TURBO_OK);
+                SALTS_EINVAL);
+    check_equal(flowmq_bind(socket, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_setsockopt(socket, FLOWMQ_HEARTBEAT_IVL,
                                  &interval_ms, sizeof(interval_ms)),
-                 TURBO_EBUSY);
+                 SALTS_EBUSY);
     check_equal(flowmq_setsockopt(socket, FLOWMQ_FLOW_UPDATE_IVL,
-                                 &interval_ms, sizeof(interval_ms)), TURBO_EBUSY);
+                                 &interval_ms, sizeof(interval_ms)), SALTS_EBUSY);
 
-    check_equal(flowmq_close(socket), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(socket), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("exposes ZeroMQ-compatible reconnect policy defaults and validation") {
@@ -681,31 +681,31 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_socket_t *socket = flowmq_socket(ctx, FLOWMQ_PAIR);
 
     check_equal(flowmq_getsockopt(socket, FLOWMQ_RECONNECT_IVL, &value,
-                                 &value_size), TURBO_OK);
+                                 &value_size), SALTS_OK);
     check_equal(value, 100);
     value_size = sizeof(value);
     check_equal(flowmq_getsockopt(socket, FLOWMQ_RECONNECT_IVL_MAX, &value,
-                                 &value_size), TURBO_OK);
+                                 &value_size), SALTS_OK);
     check_equal(value, 0);
 
     check_equal(flowmq_setsockopt(socket, FLOWMQ_RECONNECT_IVL, &interval_ms,
-                                 sizeof(interval_ms)), TURBO_OK);
+                                 sizeof(interval_ms)), SALTS_OK);
     check_equal(flowmq_setsockopt(socket, FLOWMQ_RECONNECT_IVL_MAX, &maximum_ms,
-                                 sizeof(maximum_ms)), TURBO_OK);
+                                 sizeof(maximum_ms)), SALTS_OK);
     check_equal(flowmq_setsockopt(socket, FLOWMQ_RECONNECT_IVL, &disabled,
-                                 sizeof(disabled)), TURBO_OK);
+                                 sizeof(disabled)), SALTS_OK);
     check_equal(flowmq_setsockopt(socket, FLOWMQ_RECONNECT_IVL, &invalid,
-                                 sizeof(invalid)), TURBO_EINVAL);
+                                 sizeof(invalid)), SALTS_EINVAL);
     check_equal(flowmq_setsockopt(socket, FLOWMQ_RECONNECT_IVL_MAX, &disabled,
-                                 sizeof(disabled)), TURBO_EINVAL);
+                                 sizeof(disabled)), SALTS_EINVAL);
 
     value_size = sizeof(value);
     check_equal(flowmq_getsockopt(socket, FLOWMQ_RECONNECT_IVL, &value,
-                                 &value_size), TURBO_OK);
+                                 &value_size), SALTS_OK);
     check_equal(value, -1);
 
-    check_equal(flowmq_close(socket), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(socket), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("reconnects a caller-driven TCP endpoint after the listener restarts") {
@@ -725,50 +725,50 @@ spec("flowmq_socket lifecycle and pattern surface") {
 
     check_equal(flowmq_setsockopt(client, FLOWMQ_RECONNECT_IVL,
                                  &reconnect_ms, sizeof(reconnect_ms)),
-                TURBO_OK);
+                SALTS_OK);
     check_equal(flowmq_setsockopt(client, FLOWMQ_RECONNECT_IVL_MAX,
                                  &reconnect_ms, sizeof(reconnect_ms)),
-                TURBO_OK);
-    check_equal(flowmq_bind(server, "tcp://127.0.0.1:0"), TURBO_OK);
+                SALTS_OK);
+    check_equal(flowmq_bind(server, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(server, endpoint, sizeof(endpoint),
-                                     &endpoint_size), TURBO_OK);
-    check_equal(flowmq_connect(client, endpoint), TURBO_OK);
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(client, endpoint), SALTS_OK);
 
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && !received_before;
          ++i) {
-      check_equal(progress_pair(client, server), TURBO_OK);
+      check_equal(progress_pair(client, server), SALTS_OK);
       if (!sent_before &&
           flowmq_send(client, before, sizeof(before) - 1u,
-                      FLOWMQ_DONTWAIT) == TURBO_OK)
+                      FLOWMQ_DONTWAIT) == SALTS_OK)
         sent_before = 1;
       if (sent_before &&
           flowmq_recv(server, received, sizeof(received), &received_size,
-                      FLOWMQ_DONTWAIT) == TURBO_OK)
+                      FLOWMQ_DONTWAIT) == SALTS_OK)
         received_before = 1;
     }
     check_true(received_before);
     check_equal(received_size, sizeof(before) - 1u);
     check_equal(memcmp(received, before, sizeof(before) - 1u), 0);
-    check_equal(flowmq_close(server), TURBO_OK);
+    check_equal(flowmq_close(server), SALTS_OK);
 
     server = flowmq_socket(ctx, FLOWMQ_PAIR);
     check_not_null(server);
-    check_equal(flowmq_bind(server, endpoint), TURBO_OK);
+    check_equal(flowmq_bind(server, endpoint), SALTS_OK);
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && !received_after;
          ++i) {
-      check_equal(progress_pair(client, server), TURBO_OK);
+      check_equal(progress_pair(client, server), SALTS_OK);
       (void)flowmq_send(client, after, sizeof(after) - 1u, FLOWMQ_DONTWAIT);
       if (flowmq_recv(server, received, sizeof(received), &received_size,
-                      FLOWMQ_DONTWAIT) == TURBO_OK)
+                      FLOWMQ_DONTWAIT) == SALTS_OK)
         received_after = 1;
     }
     check_true(received_after);
     check_equal(received_size, sizeof(after) - 1u);
     check_equal(memcmp(received, after, sizeof(after) - 1u), 0);
 
-    check_equal(flowmq_close(client), TURBO_OK);
-    check_equal(flowmq_close(server), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(client), SALTS_OK);
+    check_equal(flowmq_close(server), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("does not reconnect an endpoint when its interval is disabled") {
@@ -785,40 +785,40 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_pollitem_t items[] = {{.socket = client}, {.socket = server}};
 
     check_equal(flowmq_setsockopt(client, FLOWMQ_RECONNECT_IVL, &disabled,
-                                 sizeof(disabled)), TURBO_OK);
-    check_equal(flowmq_bind(server, "tcp://127.0.0.1:0"), TURBO_OK);
+                                 sizeof(disabled)), SALTS_OK);
+    check_equal(flowmq_bind(server, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(server, endpoint, sizeof(endpoint),
-                                     &endpoint_size), TURBO_OK);
-    check_equal(flowmq_connect(client, endpoint), TURBO_OK);
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(client, endpoint), SALTS_OK);
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT; ++i) {
-      check_equal(progress_pair(client, server), TURBO_OK);
+      check_equal(progress_pair(client, server), SALTS_OK);
       if (flowmq_send(client, payload, sizeof(payload) - 1u,
-                      FLOWMQ_DONTWAIT) == TURBO_OK)
+                      FLOWMQ_DONTWAIT) == SALTS_OK)
         break;
     }
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT; ++i) {
-      check_equal(progress_pair(client, server), TURBO_OK);
+      check_equal(progress_pair(client, server), SALTS_OK);
       if (flowmq_recv(server, received, sizeof(received), &received_size,
-                      FLOWMQ_DONTWAIT) == TURBO_OK)
+                      FLOWMQ_DONTWAIT) == SALTS_OK)
         break;
     }
     check_equal(received_size, sizeof(payload) - 1u);
-    check_equal(flowmq_close(server), TURBO_OK);
+    check_equal(flowmq_close(server), SALTS_OK);
 
     server = flowmq_socket(ctx, FLOWMQ_PAIR);
     check_not_null(server);
-    check_equal(flowmq_bind(server, endpoint), TURBO_OK);
+    check_equal(flowmq_bind(server, endpoint), SALTS_OK);
     items[1].socket = server;
-    check_equal(flowmq_poll(items, 2u, 50u, &ready), TURBO_OK);
+    check_equal(flowmq_poll(items, 2u, 50u, &ready), SALTS_OK);
     check_equal(flowmq_send(client, payload, sizeof(payload) - 1u,
-                            FLOWMQ_DONTWAIT), TURBO_EBUSY);
-    check_equal(flowmq_poll(items, 2u, 20u, &ready), TURBO_OK);
+                            FLOWMQ_DONTWAIT), SALTS_EBUSY);
+    check_equal(flowmq_poll(items, 2u, 20u, &ready), SALTS_OK);
     check_equal(flowmq_recv(server, received, sizeof(received), &received_size,
-                            FLOWMQ_DONTWAIT), TURBO_EBUSY);
+                            FLOWMQ_DONTWAIT), SALTS_EBUSY);
 
-    check_equal(flowmq_close(client), TURBO_OK);
-    check_equal(flowmq_close(server), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(client), SALTS_OK);
+    check_equal(flowmq_close(server), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("keeps a heartbeat-enabled connection open while both peers progress") {
@@ -836,48 +836,48 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_pollitem_t connected_items[] = {
         {.socket = sender, .events = FLOWMQ_POLLOUT}, {.socket = receiver}};
     flowmq_pollitem_t idle_items[] = {{.socket = sender}, {.socket = receiver}};
-    int status = TURBO_EBUSY;
+    int status = SALTS_EBUSY;
 
     check_equal(flowmq_setsockopt(sender, FLOWMQ_HEARTBEAT_IVL,
                                  &interval_ms, sizeof(interval_ms)),
-                TURBO_OK);
+                SALTS_OK);
     check_equal(flowmq_setsockopt(sender, FLOWMQ_HEARTBEAT_TIMEOUT,
                                  &timeout_ms, sizeof(timeout_ms)),
-                TURBO_OK);
-    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), TURBO_OK);
+                SALTS_OK);
+    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
                                      &endpoint_size),
-                TURBO_OK);
-    check_equal(flowmq_connect(sender, endpoint), TURBO_OK);
-    check_equal(flowmq_poll(connected_items, 2u, 100u, &ready), TURBO_OK);
+                SALTS_OK);
+    check_equal(flowmq_connect(sender, endpoint), SALTS_OK);
+    check_equal(flowmq_poll(connected_items, 2u, 100u, &ready), SALTS_OK);
     check_equal(ready, 1u);
     check_equal(flowmq_poll(idle_items, 2u,
                             FLOWMQ_TEST_HEARTBEAT_ALIVE_OBSERVE_MS, &ready),
-                TURBO_OK);
+                SALTS_OK);
     check_equal(ready, 0u);
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(sender, receiver), TURBO_OK);
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
       status = flowmq_send(sender, payload, sizeof(payload) - 1u,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
-    status = TURBO_EBUSY;
+    check_equal(status, SALTS_OK);
+    status = SALTS_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(sender, receiver), TURBO_OK);
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
       status = flowmq_recv(receiver, received, sizeof(received), &received_size,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(received_size, sizeof(payload) - 1u);
     check_equal(memcmp(received, payload, received_size), 0);
 
-    check_equal(flowmq_close(sender), TURBO_OK);
-    check_equal(flowmq_close(receiver), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(sender), SALTS_OK);
+    check_equal(flowmq_close(receiver), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("uses the heartbeat interval as the default timeout") {
@@ -892,35 +892,35 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_pollitem_t connected_items[] = {
         {.socket = sender, .events = FLOWMQ_POLLOUT}, {.socket = receiver}};
     flowmq_pollitem_t sender_item = {.socket = sender};
-    int status = TURBO_EBUSY;
+    int status = SALTS_EBUSY;
 
     check_equal(flowmq_setsockopt(sender, FLOWMQ_HEARTBEAT_IVL,
                                  &interval_ms, sizeof(interval_ms)),
-                TURBO_OK);
-    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), TURBO_OK);
+                SALTS_OK);
+    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
                                      &endpoint_size),
-                TURBO_OK);
-    check_equal(flowmq_connect(sender, endpoint), TURBO_OK);
-    check_equal(flowmq_poll(connected_items, 2u, 100u, &ready), TURBO_OK);
+                SALTS_OK);
+    check_equal(flowmq_connect(sender, endpoint), SALTS_OK);
+    check_equal(flowmq_poll(connected_items, 2u, 100u, &ready), SALTS_OK);
     check_equal(ready, 1u);
 
     check_equal(flowmq_poll(&sender_item, 1u,
                             FLOWMQ_TEST_HEARTBEAT_DEAD_OBSERVE_MS, &ready),
-                TURBO_OK);
+                SALTS_OK);
     check_equal(ready, 0u);
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(flowmq_poll(&sender_item, 1u, 0u, &ready), TURBO_OK);
+      check_equal(flowmq_poll(&sender_item, 1u, 0u, &ready), SALTS_OK);
       status = flowmq_send(sender, payload, sizeof(payload) - 1u,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_EBUSY);
+    check_equal(status, SALTS_EBUSY);
 
-    check_equal(flowmq_close(sender), TURBO_OK);
-    check_equal(flowmq_close(receiver), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(sender), SALTS_OK);
+    check_equal(flowmq_close(receiver), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("keeps progressing multiple sockets until one requested event is ready") {
@@ -933,17 +933,17 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_pollitem_t items[] = {
         {.socket = sender, .events = FLOWMQ_POLLOUT}, {.socket = receiver}};
 
-    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), TURBO_OK);
+    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
-                                     &endpoint_size), TURBO_OK);
-    check_equal(flowmq_connect(sender, endpoint), TURBO_OK);
-    check_equal(flowmq_poll(items, 2u, 100u, &ready), TURBO_OK);
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(sender, endpoint), SALTS_OK);
+    check_equal(flowmq_poll(items, 2u, 100u, &ready), SALTS_OK);
     check_equal(ready, 1u);
     check_equal(items[0].revents, FLOWMQ_POLLOUT);
 
-    check_equal(flowmq_close(sender), TURBO_OK);
-    check_equal(flowmq_close(receiver), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(sender), SALTS_OK);
+    check_equal(flowmq_close(receiver), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("exchanges owned messages over caller-driven loopback TCP") {
@@ -956,50 +956,50 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_ctx_t *ctx = flowmq_ctx_new();
     flowmq_socket_t *server = flowmq_socket(ctx, FLOWMQ_PAIR);
     flowmq_socket_t *client = flowmq_socket(ctx, FLOWMQ_PAIR);
-    int status = TURBO_EBUSY;
+    int status = SALTS_EBUSY;
 
-    check_equal(flowmq_bind(server, "tcp://127.0.0.1:0"), TURBO_OK);
+    check_equal(flowmq_bind(server, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(server, endpoint, sizeof(endpoint), &endpoint_size),
-                TURBO_OK);
+                SALTS_OK);
     check_true(endpoint_size != 0u);
-    check_equal(flowmq_connect(client, endpoint), TURBO_OK);
+    check_equal(flowmq_connect(client, endpoint), SALTS_OK);
 
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY; ++i) {
-      check_equal(progress_pair(client, server), TURBO_OK);
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(client, server), SALTS_OK);
       status = flowmq_send(client, request, sizeof(request) - 1u, FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
 
-    status = TURBO_EBUSY;
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY; ++i) {
-      check_equal(progress_pair(client, server), TURBO_OK);
+    status = SALTS_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(client, server), SALTS_OK);
       status = flowmq_recv(server, received, sizeof(received), &received_size,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(received_size, sizeof(request) - 1u);
     check_equal(memcmp(received, request, received_size), 0);
 
-    status = TURBO_EBUSY;
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY; ++i) {
-      check_equal(progress_pair(client, server), TURBO_OK);
+    status = SALTS_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(client, server), SALTS_OK);
       status = flowmq_send(server, reply, sizeof(reply) - 1u, FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
 
-    status = TURBO_EBUSY;
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY; ++i) {
-      check_equal(progress_pair(client, server), TURBO_OK);
+    status = SALTS_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(client, server), SALTS_OK);
       status = flowmq_recv(client, received, sizeof(received), &received_size,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(received_size, sizeof(reply) - 1u);
     check_equal(memcmp(received, reply, received_size), 0);
 
-    check_equal(flowmq_close(client), TURBO_OK);
-    check_equal(flowmq_close(server), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(client), SALTS_OK);
+    check_equal(flowmq_close(server), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("uses verified TLS for initial and reconnected sessions") {
@@ -1015,7 +1015,7 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_socket_t *server = flowmq_socket(ctx, FLOWMQ_PAIR);
     flowmq_socket_t *client = flowmq_socket(ctx, FLOWMQ_PAIR);
     int reconnect_ms = 1;
-    int status = TURBO_EBUSY;
+    int status = SALTS_EBUSY;
 
     check_not_null(cert_path);
     check_not_null(key_path);
@@ -1024,63 +1024,63 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(tt_write_file(key_path, FLOWMQ_TLS_TEST_KEY,
                               sizeof(FLOWMQ_TLS_TEST_KEY) - 1u), 0);
     check_equal(flowmq_setsockopt(server, FLOWMQ_TLS_CERT_FILE, cert_path,
-                                 strlen(cert_path)), TURBO_OK);
+                                 strlen(cert_path)), SALTS_OK);
     check_equal(flowmq_setsockopt(server, FLOWMQ_TLS_KEY_FILE, key_path,
-                                 strlen(key_path)), TURBO_OK);
+                                 strlen(key_path)), SALTS_OK);
     check_equal(flowmq_setsockopt(client, FLOWMQ_TLS_CA_FILE, cert_path,
-                                 strlen(cert_path)), TURBO_OK);
+                                 strlen(cert_path)), SALTS_OK);
     check_equal(flowmq_setsockopt(client, FLOWMQ_TLS_SERVER_NAME, "localhost",
-                                 strlen("localhost")), TURBO_OK);
+                                 strlen("localhost")), SALTS_OK);
     check_equal(flowmq_setsockopt(client, FLOWMQ_RECONNECT_IVL,
                                  &reconnect_ms, sizeof(reconnect_ms)),
-                TURBO_OK);
+                SALTS_OK);
     check_equal(flowmq_setsockopt(client, FLOWMQ_RECONNECT_IVL_MAX,
                                  &reconnect_ms, sizeof(reconnect_ms)),
-                TURBO_OK);
-    check_equal(flowmq_bind(server, "tls://127.0.0.1:0"), TURBO_OK);
+                SALTS_OK);
+    check_equal(flowmq_bind(server, "tls://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(server, endpoint, sizeof(endpoint), &endpoint_size),
-                TURBO_OK);
-    check_equal(flowmq_connect(client, endpoint), TURBO_OK);
+                SALTS_OK);
+    check_equal(flowmq_connect(client, endpoint), SALTS_OK);
 
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY; ++i) {
-      check_equal(progress_pair(client, server), TURBO_OK);
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(client, server), SALTS_OK);
       status = flowmq_send(client, payload, sizeof(payload) - 1u, FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
-    status = TURBO_EBUSY;
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY; ++i) {
-      check_equal(progress_pair(client, server), TURBO_OK);
+    check_equal(status, SALTS_OK);
+    status = SALTS_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(client, server), SALTS_OK);
       status = flowmq_recv(server, received, sizeof(received), &received_size,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(received_size, sizeof(payload) - 1u);
     check_equal(memcmp(received, payload, received_size), 0);
 
-    check_equal(flowmq_close(server), TURBO_OK);
+    check_equal(flowmq_close(server), SALTS_OK);
     server = flowmq_socket(ctx, FLOWMQ_PAIR);
     check_not_null(server);
     check_equal(flowmq_setsockopt(server, FLOWMQ_TLS_CERT_FILE, cert_path,
-                                 strlen(cert_path)), TURBO_OK);
+                                 strlen(cert_path)), SALTS_OK);
     check_equal(flowmq_setsockopt(server, FLOWMQ_TLS_KEY_FILE, key_path,
-                                 strlen(key_path)), TURBO_OK);
-    check_equal(flowmq_bind(server, endpoint), TURBO_OK);
-    status = TURBO_EBUSY;
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status != TURBO_OK;
+                                 strlen(key_path)), SALTS_OK);
+    check_equal(flowmq_bind(server, endpoint), SALTS_OK);
+    status = SALTS_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status != SALTS_OK;
          ++i) {
-      check_equal(progress_pair(client, server), TURBO_OK);
+      check_equal(progress_pair(client, server), SALTS_OK);
       (void)flowmq_send(client, reconnected_payload,
                         sizeof(reconnected_payload) - 1u, FLOWMQ_DONTWAIT);
       status = flowmq_recv(server, received, sizeof(received), &received_size,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(received_size, sizeof(reconnected_payload) - 1u);
     check_equal(memcmp(received, reconnected_payload, received_size), 0);
 
-    check_equal(flowmq_close(client), TURBO_OK);
-    check_equal(flowmq_close(server), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(client), SALTS_OK);
+    check_equal(flowmq_close(server), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
     check_equal(tt_remove_file(cert_path), 0);
     check_equal(tt_remove_file(key_path), 0);
     free(cert_path);
@@ -1092,14 +1092,14 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_ctx_t *ctx = flowmq_ctx_new();
     flowmq_socket_t *server = flowmq_socket(ctx, FLOWMQ_PAIR);
 
-    check_equal(flowmq_bind(server, "tls://127.0.0.1:0"), TURBO_EINVAL);
+    check_equal(flowmq_bind(server, "tls://127.0.0.1:0"), SALTS_EINVAL);
     check_equal(flowmq_setsockopt(server, FLOWMQ_TLS_CERT_FILE, path,
-                                 sizeof(path) - 1u), TURBO_OK);
+                                 sizeof(path) - 1u), SALTS_OK);
     check_equal(flowmq_setsockopt(server, FLOWMQ_TLS_KEY_FILE, path,
-                                 sizeof(path) - 1u), TURBO_OK);
+                                 sizeof(path) - 1u), SALTS_OK);
 
-    check_equal(flowmq_close(server), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(server), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("uses a routing-id envelope for ROUTER and DEALER") {
@@ -1113,55 +1113,55 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_ctx_t *ctx = flowmq_ctx_new();
     flowmq_socket_t *router = flowmq_socket(ctx, FLOWMQ_ROUTER);
     flowmq_socket_t *dealer = flowmq_socket(ctx, FLOWMQ_DEALER);
-    int status = TURBO_EBUSY;
+    int status = SALTS_EBUSY;
 
     check_equal(flowmq_setsockopt(dealer, FLOWMQ_IDENTITY, identity,
-                                 sizeof(identity) - 1u), TURBO_OK);
-    check_equal(flowmq_bind(router, "tcp://127.0.0.1:0"), TURBO_OK);
+                                 sizeof(identity) - 1u), SALTS_OK);
+    check_equal(flowmq_bind(router, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(router, endpoint, sizeof(endpoint), &endpoint_size),
-                TURBO_OK);
-    check_equal(flowmq_connect(dealer, endpoint), TURBO_OK);
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY; ++i) {
-      check_equal(progress_pair(dealer, router), TURBO_OK);
+                SALTS_OK);
+    check_equal(flowmq_connect(dealer, endpoint), SALTS_OK);
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(dealer, router), SALTS_OK);
       status = flowmq_send(dealer, request, sizeof(request) - 1u, FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
 
-    status = TURBO_EBUSY;
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY; ++i) {
-      check_equal(progress_pair(dealer, router), TURBO_OK);
+    status = SALTS_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(dealer, router), SALTS_OK);
       status = flowmq_recv(router, received, sizeof(received), &received_size,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(received_size, sizeof(identity) - 1u);
     check_equal(memcmp(received, identity, received_size), 0);
     check_equal(flowmq_recv(router, received, sizeof(received), &received_size,
-                            FLOWMQ_DONTWAIT), TURBO_OK);
+                            FLOWMQ_DONTWAIT), SALTS_OK);
     check_equal(received_size, sizeof(request) - 1u);
     check_equal(memcmp(received, request, received_size), 0);
 
     check_equal(flowmq_send(router, identity, sizeof(identity) - 1u,
-                            FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), TURBO_OK);
-    status = TURBO_EBUSY;
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY; ++i) {
-      check_equal(progress_pair(dealer, router), TURBO_OK);
+                            FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), SALTS_OK);
+    status = SALTS_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(dealer, router), SALTS_OK);
       status = flowmq_send(router, reply, sizeof(reply) - 1u, FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
-    status = TURBO_EBUSY;
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY; ++i) {
-      check_equal(progress_pair(dealer, router), TURBO_OK);
+    check_equal(status, SALTS_OK);
+    status = SALTS_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(dealer, router), SALTS_OK);
       status = flowmq_recv(dealer, received, sizeof(received), &received_size,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(received_size, sizeof(reply) - 1u);
     check_equal(memcmp(received, reply, received_size), 0);
 
-    check_equal(flowmq_close(dealer), TURBO_OK);
-    check_equal(flowmq_close(router), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(dealer), SALTS_OK);
+    check_equal(flowmq_close(router), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("rejects a duplicate ROUTER peer identity without replacing the first peer") {
@@ -1175,50 +1175,50 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_socket_t *router = flowmq_socket(ctx, FLOWMQ_ROUTER);
     flowmq_socket_t *first = flowmq_socket(ctx, FLOWMQ_DEALER);
     flowmq_socket_t *duplicate = flowmq_socket(ctx, FLOWMQ_DEALER);
-    int status = TURBO_EBUSY;
+    int status = SALTS_EBUSY;
 
     check_equal(flowmq_setsockopt(first, FLOWMQ_IDENTITY, identity,
-                                  sizeof(identity) - 1u), TURBO_OK);
+                                  sizeof(identity) - 1u), SALTS_OK);
     check_equal(flowmq_setsockopt(duplicate, FLOWMQ_IDENTITY, identity,
-                                  sizeof(identity) - 1u), TURBO_OK);
-    check_equal(flowmq_bind(router, "tcp://127.0.0.1:0"), TURBO_OK);
+                                  sizeof(identity) - 1u), SALTS_OK);
+    check_equal(flowmq_bind(router, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(router, endpoint, sizeof(endpoint),
-                                     &endpoint_size), TURBO_OK);
-    check_equal(flowmq_connect(first, endpoint), TURBO_OK);
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(first, endpoint), SALTS_OK);
     for (size_t i = 0u; i < 100u; ++i)
-      check_equal(progress_pair(first, router), TURBO_OK);
-    check_equal(flowmq_connect(duplicate, endpoint), TURBO_OK);
+      check_equal(progress_pair(first, router), SALTS_OK);
+    check_equal(flowmq_connect(duplicate, endpoint), SALTS_OK);
     for (size_t i = 0u; i < 200u; ++i)
-      check_equal(progress_three(first, duplicate, router), TURBO_OK);
+      check_equal(progress_three(first, duplicate, router), SALTS_OK);
     check_equal(flowmq_send(duplicate, payload, sizeof(payload) - 1u,
-                            FLOWMQ_DONTWAIT), TURBO_EBUSY);
+                            FLOWMQ_DONTWAIT), SALTS_EBUSY);
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_three(first, duplicate, router), TURBO_OK);
+      check_equal(progress_three(first, duplicate, router), SALTS_OK);
       status = flowmq_send(first, payload, sizeof(payload) - 1u,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
-    status = TURBO_EBUSY;
+    check_equal(status, SALTS_OK);
+    status = SALTS_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_three(first, duplicate, router), TURBO_OK);
+      check_equal(progress_three(first, duplicate, router), SALTS_OK);
       status = flowmq_recv(router, received, sizeof(received), &received_size,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(received_size, sizeof(identity) - 1u);
     check_equal(flowmq_recv(router, received, sizeof(received), &received_size,
-                            FLOWMQ_DONTWAIT), TURBO_OK);
+                            FLOWMQ_DONTWAIT), SALTS_OK);
     check_equal(received_size, sizeof(payload) - 1u);
     check_equal(memcmp(received, payload, received_size), 0);
 
-    check_equal(flowmq_close(duplicate), TURBO_OK);
-    check_equal(flowmq_close(first), TURBO_OK);
-    check_equal(flowmq_close(router), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(duplicate), SALTS_OK);
+    check_equal(flowmq_close(first), SALTS_OK);
+    check_equal(flowmq_close(router), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("cancels a ROUTER multipart route when its peer session disconnects") {
@@ -1235,85 +1235,85 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_socket_t *router = flowmq_socket(ctx, FLOWMQ_ROUTER);
     flowmq_socket_t *first = flowmq_socket(ctx, FLOWMQ_DEALER);
     flowmq_socket_t *replacement = flowmq_socket(ctx, FLOWMQ_DEALER);
-    int status = TURBO_EBUSY;
+    int status = SALTS_EBUSY;
 
     check_equal(flowmq_setsockopt(first, FLOWMQ_IDENTITY, identity,
-                                  sizeof(identity) - 1u), TURBO_OK);
+                                  sizeof(identity) - 1u), SALTS_OK);
     check_equal(flowmq_setsockopt(replacement, FLOWMQ_IDENTITY, identity,
-                                  sizeof(identity) - 1u), TURBO_OK);
-    check_equal(flowmq_bind(router, "tcp://127.0.0.1:0"), TURBO_OK);
+                                  sizeof(identity) - 1u), SALTS_OK);
+    check_equal(flowmq_bind(router, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(router, endpoint, sizeof(endpoint),
-                                     &endpoint_size), TURBO_OK);
-    check_equal(flowmq_connect(first, endpoint), TURBO_OK);
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(first, endpoint), SALTS_OK);
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(first, router), TURBO_OK);
+      check_equal(progress_pair(first, router), SALTS_OK);
       status = flowmq_send(first, first_request, sizeof(first_request) - 1u,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
-    status = TURBO_EBUSY;
+    check_equal(status, SALTS_OK);
+    status = SALTS_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(first, router), TURBO_OK);
+      check_equal(progress_pair(first, router), SALTS_OK);
       status = flowmq_recv(router, received, sizeof(received), &received_size,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(flowmq_recv(router, received, sizeof(received), &received_size,
-                            FLOWMQ_DONTWAIT), TURBO_OK);
+                            FLOWMQ_DONTWAIT), SALTS_OK);
     check_equal(flowmq_send(router, identity, sizeof(identity) - 1u,
-                            FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), TURBO_OK);
-    check_equal(flowmq_close(first), TURBO_OK);
+                            FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), SALTS_OK);
+    check_equal(flowmq_close(first), SALTS_OK);
     for (size_t i = 0u; i < 200u; ++i) {
       flowmq_pollitem_t item = {.socket = router};
       size_t ready = 0u;
-      check_equal(flowmq_poll(&item, 1u, 0u, &ready), TURBO_OK);
+      check_equal(flowmq_poll(&item, 1u, 0u, &ready), SALTS_OK);
     }
 
-    check_equal(flowmq_connect(replacement, endpoint), TURBO_OK);
-    status = TURBO_EBUSY;
+    check_equal(flowmq_connect(replacement, endpoint), SALTS_OK);
+    status = SALTS_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(replacement, router), TURBO_OK);
+      check_equal(progress_pair(replacement, router), SALTS_OK);
       status = flowmq_send(replacement, next_request,
                            sizeof(next_request) - 1u, FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(flowmq_send(router, old_reply, sizeof(old_reply) - 1u, 0),
-                TURBO_ENOTCONN);
-    status = TURBO_EBUSY;
+                SALTS_ENOTCONN);
+    status = SALTS_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(replacement, router), TURBO_OK);
+      check_equal(progress_pair(replacement, router), SALTS_OK);
       status = flowmq_recv(router, received, sizeof(received), &received_size,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(flowmq_recv(router, received, sizeof(received), &received_size,
-                            FLOWMQ_DONTWAIT), TURBO_OK);
+                            FLOWMQ_DONTWAIT), SALTS_OK);
     check_equal(flowmq_send(router, identity, sizeof(identity) - 1u,
-                            FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), TURBO_OK);
+                            FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), SALTS_OK);
     check_equal(flowmq_send(router, next_reply, sizeof(next_reply) - 1u,
-                            FLOWMQ_DONTWAIT), TURBO_OK);
-    status = TURBO_EBUSY;
+                            FLOWMQ_DONTWAIT), SALTS_OK);
+    status = SALTS_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(replacement, router), TURBO_OK);
+      check_equal(progress_pair(replacement, router), SALTS_OK);
       status = flowmq_recv(replacement, received, sizeof(received),
                            &received_size, FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(received_size, sizeof(next_reply) - 1u);
 
-    check_equal(flowmq_close(replacement), TURBO_OK);
-    check_equal(flowmq_close(router), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(replacement), SALTS_OK);
+    check_equal(flowmq_close(router), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("filters PUB data by SUB prefix") {
@@ -1329,35 +1329,35 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_socket_t *sub = flowmq_socket(ctx, FLOWMQ_SUB);
 
     check_equal(flowmq_setsockopt(sub, FLOWMQ_SUBSCRIBE, subscription,
-                                 sizeof(subscription) - 1u), TURBO_OK);
-    check_equal(flowmq_bind(pub, "tcp://127.0.0.1:0"), TURBO_OK);
+                                 sizeof(subscription) - 1u), SALTS_OK);
+    check_equal(flowmq_bind(pub, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(pub, endpoint, sizeof(endpoint), &endpoint_size),
-                TURBO_OK);
-    check_equal(flowmq_connect(sub, endpoint), TURBO_OK);
+                SALTS_OK);
+    check_equal(flowmq_connect(sub, endpoint), SALTS_OK);
     for (size_t i = 0u; i < 100u; ++i)
-      check_equal(progress_pair(sub, pub), TURBO_OK);
+      check_equal(progress_pair(sub, pub), SALTS_OK);
 
     check_equal(flowmq_send(pub, rejected, sizeof(rejected) - 1u,
-                            FLOWMQ_DONTWAIT), TURBO_OK);
+                            FLOWMQ_DONTWAIT), SALTS_OK);
     for (size_t i = 0u; i < 100u; ++i)
-      check_equal(progress_pair(sub, pub), TURBO_OK);
+      check_equal(progress_pair(sub, pub), SALTS_OK);
     check_equal(flowmq_recv(sub, received, sizeof(received), &received_size,
-                            FLOWMQ_DONTWAIT), TURBO_EBUSY);
+                            FLOWMQ_DONTWAIT), SALTS_EBUSY);
 
     check_equal(flowmq_send(pub, accepted, sizeof(accepted) - 1u,
-                            FLOWMQ_DONTWAIT), TURBO_OK);
+                            FLOWMQ_DONTWAIT), SALTS_OK);
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT; ++i) {
-      check_equal(progress_pair(sub, pub), TURBO_OK);
+      check_equal(progress_pair(sub, pub), SALTS_OK);
       if (flowmq_recv(sub, received, sizeof(received), &received_size,
-                      FLOWMQ_DONTWAIT) == TURBO_OK)
+                      FLOWMQ_DONTWAIT) == SALTS_OK)
         break;
     }
     check_equal(received_size, sizeof(accepted) - 1u);
     check_equal(memcmp(received, accepted, received_size), 0);
 
-    check_equal(flowmq_close(sub), TURBO_OK);
-    check_equal(flowmq_close(pub), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(sub), SALTS_OK);
+    check_equal(flowmq_close(pub), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("fans one PUB message out to every matching SUB peer") {
@@ -1371,38 +1371,38 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_socket_t *first = flowmq_socket(ctx, FLOWMQ_SUB);
     flowmq_socket_t *second = flowmq_socket(ctx, FLOWMQ_SUB);
 
-    check_equal(flowmq_setsockopt(first, FLOWMQ_SUBSCRIBE, NULL, 0u), TURBO_OK);
-    check_equal(flowmq_setsockopt(second, FLOWMQ_SUBSCRIBE, NULL, 0u), TURBO_OK);
-    check_equal(flowmq_bind(pub, "tcp://127.0.0.1:0"), TURBO_OK);
+    check_equal(flowmq_setsockopt(first, FLOWMQ_SUBSCRIBE, NULL, 0u), SALTS_OK);
+    check_equal(flowmq_setsockopt(second, FLOWMQ_SUBSCRIBE, NULL, 0u), SALTS_OK);
+    check_equal(flowmq_bind(pub, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(pub, endpoint, sizeof(endpoint), &endpoint_size),
-                TURBO_OK);
-    check_equal(flowmq_connect(first, endpoint), TURBO_OK);
-    check_equal(flowmq_connect(second, endpoint), TURBO_OK);
+                SALTS_OK);
+    check_equal(flowmq_connect(first, endpoint), SALTS_OK);
+    check_equal(flowmq_connect(second, endpoint), SALTS_OK);
     for (size_t i = 0u; i < 200u; ++i)
-      check_equal(progress_three(first, second, pub), TURBO_OK);
+      check_equal(progress_three(first, second, pub), SALTS_OK);
 
     check_equal(flowmq_send(pub, payload, sizeof(payload) - 1u,
-                            FLOWMQ_DONTWAIT), TURBO_OK);
+                            FLOWMQ_DONTWAIT), SALTS_OK);
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT; ++i) {
-      check_equal(progress_three(first, second, pub), TURBO_OK);
+      check_equal(progress_three(first, second, pub), SALTS_OK);
       if (flowmq_recv(first, received, sizeof(received), &received_size,
-                      FLOWMQ_DONTWAIT) == TURBO_OK)
+                      FLOWMQ_DONTWAIT) == SALTS_OK)
         break;
     }
     check_equal(received_size, sizeof(payload) - 1u);
     received_size = 0u;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT; ++i) {
-      check_equal(progress_three(first, second, pub), TURBO_OK);
+      check_equal(progress_three(first, second, pub), SALTS_OK);
       if (flowmq_recv(second, received, sizeof(received), &received_size,
-                      FLOWMQ_DONTWAIT) == TURBO_OK)
+                      FLOWMQ_DONTWAIT) == SALTS_OK)
         break;
     }
     check_equal(received_size, sizeof(payload) - 1u);
 
-    check_equal(flowmq_close(second), TURBO_OK);
-    check_equal(flowmq_close(first), TURBO_OK);
-    check_equal(flowmq_close(pub), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(second), SALTS_OK);
+    check_equal(flowmq_close(first), SALTS_OK);
+    check_equal(flowmq_close(pub), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("does not inherit a multipart PUB snapshot across peer sessions") {
@@ -1417,52 +1417,52 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_socket_t *pub = flowmq_socket(ctx, FLOWMQ_PUB);
     flowmq_socket_t *first = flowmq_socket(ctx, FLOWMQ_SUB);
     flowmq_socket_t *replacement = flowmq_socket(ctx, FLOWMQ_SUB);
-    int status = TURBO_EBUSY;
+    int status = SALTS_EBUSY;
 
     check_equal(flowmq_setsockopt(first, FLOWMQ_SUBSCRIBE, NULL, 0u),
-                TURBO_OK);
+                SALTS_OK);
     check_equal(flowmq_setsockopt(replacement, FLOWMQ_SUBSCRIBE, NULL, 0u),
-                TURBO_OK);
-    check_equal(flowmq_bind(pub, "tcp://127.0.0.1:0"), TURBO_OK);
+                SALTS_OK);
+    check_equal(flowmq_bind(pub, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(pub, endpoint, sizeof(endpoint),
-                                     &endpoint_size), TURBO_OK);
-    check_equal(flowmq_connect(first, endpoint), TURBO_OK);
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(first, endpoint), SALTS_OK);
     for (size_t i = 0u; i < 200u; ++i)
-      check_equal(progress_pair(first, pub), TURBO_OK);
+      check_equal(progress_pair(first, pub), SALTS_OK);
     check_equal(flowmq_send(pub, first_part, sizeof(first_part) - 1u,
-                            FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), TURBO_OK);
-    check_equal(flowmq_close(first), TURBO_OK);
+                            FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), SALTS_OK);
+    check_equal(flowmq_close(first), SALTS_OK);
     for (size_t i = 0u; i < 200u; ++i) {
       flowmq_pollitem_t item = {.socket = pub};
       size_t ready = 0u;
-      check_equal(flowmq_poll(&item, 1u, 0u, &ready), TURBO_OK);
+      check_equal(flowmq_poll(&item, 1u, 0u, &ready), SALTS_OK);
     }
 
-    check_equal(flowmq_connect(replacement, endpoint), TURBO_OK);
+    check_equal(flowmq_connect(replacement, endpoint), SALTS_OK);
     for (size_t i = 0u; i < 200u; ++i)
-      check_equal(progress_pair(replacement, pub), TURBO_OK);
+      check_equal(progress_pair(replacement, pub), SALTS_OK);
     check_equal(flowmq_send(pub, final_part, sizeof(final_part) - 1u,
-                            FLOWMQ_DONTWAIT), TURBO_OK);
+                            FLOWMQ_DONTWAIT), SALTS_OK);
     for (size_t i = 0u; i < 100u; ++i)
-      check_equal(progress_pair(replacement, pub), TURBO_OK);
+      check_equal(progress_pair(replacement, pub), SALTS_OK);
     check_equal(flowmq_recv(replacement, received, sizeof(received),
-                            &received_size, FLOWMQ_DONTWAIT), TURBO_EBUSY);
+                            &received_size, FLOWMQ_DONTWAIT), SALTS_EBUSY);
 
     check_equal(flowmq_send(pub, next_message, sizeof(next_message) - 1u,
-                            FLOWMQ_DONTWAIT), TURBO_OK);
+                            FLOWMQ_DONTWAIT), SALTS_OK);
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(replacement, pub), TURBO_OK);
+      check_equal(progress_pair(replacement, pub), SALTS_OK);
       status = flowmq_recv(replacement, received, sizeof(received),
                            &received_size, FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(received_size, sizeof(next_message) - 1u);
 
-    check_equal(flowmq_close(replacement), TURBO_OK);
-    check_equal(flowmq_close(pub), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(replacement), SALTS_OK);
+    check_equal(flowmq_close(pub), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("does not expose a multipart message before its final part arrives") {
@@ -1477,54 +1477,54 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_ctx_t *ctx = flowmq_ctx_new();
     flowmq_socket_t *sender = flowmq_socket(ctx, FLOWMQ_PAIR);
     flowmq_socket_t *receiver = flowmq_socket(ctx, FLOWMQ_PAIR);
-    int status = TURBO_EBUSY;
+    int status = SALTS_EBUSY;
 
-    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), TURBO_OK);
+    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
-                                     &endpoint_size), TURBO_OK);
-    check_equal(flowmq_connect(sender, endpoint), TURBO_OK);
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY; ++i) {
-      check_equal(progress_pair(sender, receiver), TURBO_OK);
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(sender, endpoint), SALTS_OK);
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
       status = flowmq_send(sender, first_part, sizeof(first_part) - 1u,
                            FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     for (size_t i = 0u; i < 100u; ++i)
-      check_equal(progress_pair(sender, receiver), TURBO_OK);
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
     check_equal(flowmq_recv(receiver, received, sizeof(received), &received_size,
-                            FLOWMQ_DONTWAIT), TURBO_EBUSY);
+                            FLOWMQ_DONTWAIT), SALTS_EBUSY);
 
-    status = TURBO_EBUSY;
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY; ++i) {
-      check_equal(progress_pair(sender, receiver), TURBO_OK);
+    status = SALTS_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
       status = flowmq_send(sender, final_part, sizeof(final_part) - 1u,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
-    status = TURBO_EBUSY;
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY; ++i) {
-      check_equal(progress_pair(sender, receiver), TURBO_OK);
+    check_equal(status, SALTS_OK);
+    status = SALTS_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
       status = flowmq_recv(receiver, received, sizeof(received), &received_size,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(received_size, sizeof(first_part) - 1u);
     check_equal(memcmp(received, first_part, received_size), 0);
     check_equal(flowmq_getsockopt(receiver, FLOWMQ_RCVMORE, &more,
-                                  &option_size), TURBO_OK);
+                                  &option_size), SALTS_OK);
     check_equal(more, 1);
     check_equal(flowmq_recv(receiver, received, sizeof(received), &received_size,
-                            FLOWMQ_DONTWAIT), TURBO_OK);
+                            FLOWMQ_DONTWAIT), SALTS_OK);
     check_equal(received_size, sizeof(final_part) - 1u);
     check_equal(memcmp(received, final_part, received_size), 0);
     option_size = sizeof(int);
     check_equal(flowmq_getsockopt(receiver, FLOWMQ_RCVMORE, &more,
-                                  &option_size), TURBO_OK);
+                                  &option_size), SALTS_OK);
     check_equal(more, 0);
 
-    check_equal(flowmq_close(sender), TURBO_OK);
-    check_equal(flowmq_close(receiver), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(sender), SALTS_OK);
+    check_equal(flowmq_close(receiver), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("returns multipart credit only after the final part is consumed") {
@@ -1539,52 +1539,52 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_ctx_t *ctx = flowmq_ctx_new();
     flowmq_socket_t *receiver = flowmq_socket(ctx, FLOWMQ_PAIR);
     flowmq_socket_t *sender = flowmq_socket(ctx, FLOWMQ_PAIR);
-    int status = TURBO_EBUSY;
+    int status = SALTS_EBUSY;
 
     check_equal(flowmq_setsockopt(receiver, FLOWMQ_RCVHWM_BYTES,
                                   &receive_hwm_bytes,
-                                  sizeof(receive_hwm_bytes)), TURBO_OK);
-    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), TURBO_OK);
+                                  sizeof(receive_hwm_bytes)), SALTS_OK);
+    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
-                                     &endpoint_size), TURBO_OK);
-    check_equal(flowmq_connect(sender, endpoint), TURBO_OK);
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(sender, endpoint), SALTS_OK);
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(sender, receiver), TURBO_OK);
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
       status = flowmq_send(sender, first_part, sizeof(first_part) - 1u,
                            FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(flowmq_send(sender, final_part, sizeof(final_part) - 1u,
-                            FLOWMQ_DONTWAIT), TURBO_OK);
+                            FLOWMQ_DONTWAIT), SALTS_OK);
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT; ++i) {
-      check_equal(progress_pair(sender, receiver), TURBO_OK);
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
       status = flowmq_recv(receiver, received, sizeof(received),
                            &received_size, FLOWMQ_DONTWAIT);
-      if (status != TURBO_EBUSY) break;
+      if (status != SALTS_EBUSY) break;
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(received_size, sizeof(first_part) - 1u);
     for (size_t i = 0u; i < 32u; ++i)
-      check_equal(progress_pair(sender, receiver), TURBO_OK);
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
     check_equal(flowmq_send(sender, next, sizeof(next) - 1u,
-                            FLOWMQ_DONTWAIT), TURBO_ENOBUFS);
+                            FLOWMQ_DONTWAIT), SALTS_ENOBUFS);
     check_equal(flowmq_recv(receiver, received, sizeof(received),
-                            &received_size, FLOWMQ_DONTWAIT), TURBO_OK);
-    status = TURBO_ENOBUFS;
+                            &received_size, FLOWMQ_DONTWAIT), SALTS_OK);
+    status = SALTS_ENOBUFS;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_ENOBUFS;
+                        status == SALTS_ENOBUFS;
          ++i) {
-      check_equal(progress_pair(sender, receiver), TURBO_OK);
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
       status = flowmq_send(sender, next, sizeof(next) - 1u,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
 
-    check_equal(flowmq_close(sender), TURBO_OK);
-    check_equal(flowmq_close(receiver), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(sender), SALTS_OK);
+    check_equal(flowmq_close(receiver), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("applies the byte HWM to the complete multipart message") {
@@ -1599,12 +1599,12 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_ctx_t *ctx = flowmq_ctx_new();
     flowmq_socket_t *sender = flowmq_socket(ctx, FLOWMQ_PAIR);
     flowmq_socket_t *receiver = flowmq_socket(ctx, FLOWMQ_PAIR);
-    int status = TURBO_EBUSY;
+    int status = SALTS_EBUSY;
     int oversized_status;
-    int fitting_status = TURBO_EBUSY;
-    int premature_receive_status = TURBO_OK;
-    int first_receive_status = TURBO_EBUSY;
-    int final_receive_status = TURBO_EBUSY;
+    int fitting_status = SALTS_EBUSY;
+    int premature_receive_status = SALTS_OK;
+    int first_receive_status = SALTS_EBUSY;
+    int final_receive_status = SALTS_EBUSY;
     size_t first_received_size = 0u;
     size_t final_received_size = 0u;
     char first_received[16] = {0};
@@ -1612,48 +1612,48 @@ spec("flowmq_socket lifecycle and pattern surface") {
 
     check_equal(
         flowmq_setsockopt(sender, FLOWMQ_SNDHWM_BYTES, &send_hwm_bytes, sizeof(send_hwm_bytes)),
-        TURBO_OK);
-    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), TURBO_OK);
+        SALTS_OK);
+    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint), &endpoint_size),
-                TURBO_OK);
-    check_equal(flowmq_connect(sender, endpoint), TURBO_OK);
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY; ++i) {
-      check_equal(progress_pair(sender, receiver), TURBO_OK);
+                SALTS_OK);
+    check_equal(flowmq_connect(sender, endpoint), SALTS_OK);
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
       status = flowmq_send(sender, first_part, sizeof(first_part) - 1u,
                            FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     for (size_t i = 0u; i < 100u; ++i)
-      check_equal(progress_pair(sender, receiver), TURBO_OK);
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
 
     oversized_status =
         flowmq_send(sender, oversized_final, sizeof(oversized_final) - 1u, FLOWMQ_DONTWAIT);
-    if (oversized_status == TURBO_EMSGSIZE) {
+    if (oversized_status == SALTS_EMSGSIZE) {
       premature_receive_status =
           flowmq_recv(receiver, received, sizeof(received), &received_size, FLOWMQ_DONTWAIT);
       fitting_status =
           flowmq_send(sender, fitting_final, sizeof(fitting_final) - 1u, FLOWMQ_DONTWAIT);
-      for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && first_receive_status == TURBO_EBUSY;
+      for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && first_receive_status == SALTS_EBUSY;
            ++i) {
-        check_equal(progress_pair(sender, receiver), TURBO_OK);
+        check_equal(progress_pair(sender, receiver), SALTS_OK);
         first_receive_status = flowmq_recv(receiver, first_received, sizeof(first_received),
                                            &first_received_size, FLOWMQ_DONTWAIT);
       }
-      if (first_receive_status == TURBO_OK)
+      if (first_receive_status == SALTS_OK)
         final_receive_status = flowmq_recv(receiver, final_received, sizeof(final_received),
                                            &final_received_size, FLOWMQ_DONTWAIT);
     }
 
-    check_equal(flowmq_close(sender), TURBO_OK);
-    check_equal(flowmq_close(receiver), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
-    check_equal(oversized_status, TURBO_EMSGSIZE);
-    check_equal(premature_receive_status, TURBO_EBUSY);
-    check_equal(fitting_status, TURBO_OK);
-    check_equal(first_receive_status, TURBO_OK);
+    check_equal(flowmq_close(sender), SALTS_OK);
+    check_equal(flowmq_close(receiver), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+    check_equal(oversized_status, SALTS_EMSGSIZE);
+    check_equal(premature_receive_status, SALTS_EBUSY);
+    check_equal(fitting_status, SALTS_OK);
+    check_equal(first_receive_status, SALTS_OK);
     check_equal(first_received_size, sizeof(first_part) - 1u);
     check_equal(memcmp(first_received, first_part, first_received_size), 0);
-    check_equal(final_receive_status, TURBO_OK);
+    check_equal(final_receive_status, SALTS_OK);
     check_equal(final_received_size, sizeof(fitting_final) - 1u);
     check_equal(memcmp(final_received, fitting_final, final_received_size), 0);
   }
@@ -1670,50 +1670,50 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_ctx_t *ctx = flowmq_ctx_new();
     flowmq_socket_t *receiver = flowmq_socket(ctx, FLOWMQ_PAIR);
     flowmq_socket_t *sender = flowmq_socket(ctx, FLOWMQ_PAIR);
-    int status = TURBO_EBUSY;
+    int status = SALTS_EBUSY;
 
     check_equal(flowmq_setsockopt(sender, FLOWMQ_SNDHWM, &send_hwm,
-                                 sizeof(send_hwm)), TURBO_OK);
-    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), TURBO_OK);
+                                 sizeof(send_hwm)), SALTS_OK);
+    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
-                                     &endpoint_size), TURBO_OK);
-    check_equal(flowmq_connect(sender, endpoint), TURBO_OK);
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY;
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(sender, endpoint), SALTS_OK);
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(sender, receiver), TURBO_OK);
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
       status = flowmq_send(sender, first, sizeof(first) - 1u,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(flowmq_send(sender, second, sizeof(second) - 1u,
-                            FLOWMQ_DONTWAIT), TURBO_OK);
+                            FLOWMQ_DONTWAIT), SALTS_OK);
     check_equal(flowmq_send(sender, third, sizeof(third) - 1u,
-                            FLOWMQ_DONTWAIT), TURBO_ENOBUFS);
+                            FLOWMQ_DONTWAIT), SALTS_ENOBUFS);
 
-    status = TURBO_ENOBUFS;
+    status = SALTS_ENOBUFS;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_ENOBUFS;
+                        status == SALTS_ENOBUFS;
          ++i) {
-      check_equal(progress_pair(sender, receiver), TURBO_OK);
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
       status = flowmq_send(sender, third, sizeof(third) - 1u,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     for (size_t message = 0u; message < 3u; ++message) {
-      status = TURBO_EBUSY;
+      status = SALTS_EBUSY;
       for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                          status == TURBO_EBUSY;
+                          status == SALTS_EBUSY;
            ++i) {
-        check_equal(progress_pair(sender, receiver), TURBO_OK);
+        check_equal(progress_pair(sender, receiver), SALTS_OK);
         status = flowmq_recv(receiver, received, sizeof(received),
                              &received_size, FLOWMQ_DONTWAIT);
       }
-      check_equal(status, TURBO_OK);
+      check_equal(status, SALTS_OK);
     }
 
-    check_equal(flowmq_close(sender), TURBO_OK);
-    check_equal(flowmq_close(receiver), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(sender), SALTS_OK);
+    check_equal(flowmq_close(receiver), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("blocking send drives its socket until HWM admission becomes available") {
@@ -1725,26 +1725,26 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_ctx_t *ctx = flowmq_ctx_new();
     flowmq_socket_t *receiver = flowmq_socket(ctx, FLOWMQ_PAIR);
     flowmq_socket_t *sender = flowmq_socket(ctx, FLOWMQ_PAIR);
-    int status = TURBO_EBUSY;
+    int status = SALTS_EBUSY;
 
     check_equal(flowmq_setsockopt(sender, FLOWMQ_SNDHWM, &send_hwm,
-                                 sizeof(send_hwm)), TURBO_OK);
-    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), TURBO_OK);
+                                 sizeof(send_hwm)), SALTS_OK);
+    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
-                                     &endpoint_size), TURBO_OK);
-    check_equal(flowmq_connect(sender, endpoint), TURBO_OK);
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY;
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(sender, endpoint), SALTS_OK);
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(sender, receiver), TURBO_OK);
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
       status = flowmq_send(sender, first, sizeof(first) - 1u,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
-    check_equal(flowmq_send(sender, second, sizeof(second) - 1u, 0), TURBO_OK);
+    check_equal(status, SALTS_OK);
+    check_equal(flowmq_send(sender, second, sizeof(second) - 1u, 0), SALTS_OK);
 
-    check_equal(flowmq_close(sender), TURBO_OK);
-    check_equal(flowmq_close(receiver), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(sender), SALTS_OK);
+    check_equal(flowmq_close(receiver), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("blocking receive drives its socket until an admitted message arrives") {
@@ -1758,28 +1758,28 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_socket_t *receiver = flowmq_socket(ctx, FLOWMQ_PAIR);
     flowmq_socket_t *sender = flowmq_socket(ctx, FLOWMQ_PAIR);
     flowmq_pollitem_t sender_item = {.socket = sender};
-    int status = TURBO_EBUSY;
+    int status = SALTS_EBUSY;
 
-    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), TURBO_OK);
+    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
-                                     &endpoint_size), TURBO_OK);
-    check_equal(flowmq_connect(sender, endpoint), TURBO_OK);
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY;
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(sender, endpoint), SALTS_OK);
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(sender, receiver), TURBO_OK);
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
       status = flowmq_send(sender, payload, sizeof(payload) - 1u,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
-    check_equal(flowmq_poll(&sender_item, 1u, 100u, &ready), TURBO_OK);
+    check_equal(status, SALTS_OK);
+    check_equal(flowmq_poll(&sender_item, 1u, 100u, &ready), SALTS_OK);
     check_equal(flowmq_recv(receiver, received, sizeof(received), &received_size,
-                            0), TURBO_OK);
+                            0), SALTS_OK);
     check_equal(received_size, sizeof(payload) - 1u);
     check_equal(memcmp(received, payload, received_size), 0);
 
-    check_equal(flowmq_close(sender), TURBO_OK);
-    check_equal(flowmq_close(receiver), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(sender), SALTS_OK);
+    check_equal(flowmq_close(receiver), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("coordinates the byte HWM before excess data reaches the receiver") {
@@ -1794,58 +1794,58 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_ctx_t *ctx = flowmq_ctx_new();
     flowmq_socket_t *receiver = flowmq_socket(ctx, FLOWMQ_PAIR);
     flowmq_socket_t *sender = flowmq_socket(ctx, FLOWMQ_PAIR);
-    int status = TURBO_EBUSY;
+    int status = SALTS_EBUSY;
 
     check_equal(flowmq_setsockopt(receiver, FLOWMQ_RCVHWM, &receive_hwm,
-                                 sizeof(receive_hwm)), TURBO_OK);
+                                 sizeof(receive_hwm)), SALTS_OK);
     check_equal(flowmq_setsockopt(receiver, FLOWMQ_RCVHWM_BYTES,
                                  &receive_hwm_bytes,
-                                 sizeof(receive_hwm_bytes)), TURBO_OK);
-    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), TURBO_OK);
+                                 sizeof(receive_hwm_bytes)), SALTS_OK);
+    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
-                                     &endpoint_size), TURBO_OK);
-    check_equal(flowmq_connect(sender, endpoint), TURBO_OK);
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY;
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(sender, endpoint), SALTS_OK);
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(sender, receiver), TURBO_OK);
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
       status = flowmq_send(sender, first, sizeof(first) - 1u,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     for (size_t i = 0u; i < 32u; ++i)
-      check_equal(progress_pair(sender, receiver), TURBO_OK);
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
     check_equal(flowmq_send(sender, second, sizeof(second) - 1u,
-                            FLOWMQ_DONTWAIT), TURBO_ENOBUFS);
+                            FLOWMQ_DONTWAIT), SALTS_ENOBUFS);
 
     check_equal(flowmq_recv(receiver, received, sizeof(received), &received_size,
-                            FLOWMQ_DONTWAIT), TURBO_OK);
+                            FLOWMQ_DONTWAIT), SALTS_OK);
     check_equal(received_size, sizeof(first) - 1u);
     check_equal(memcmp(received, first, received_size), 0);
     check_equal(flowmq_recv(receiver, received, sizeof(received), &received_size,
-                            FLOWMQ_DONTWAIT), TURBO_EBUSY);
+                            FLOWMQ_DONTWAIT), SALTS_EBUSY);
 
-    status = TURBO_ENOBUFS;
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_ENOBUFS;
+    status = SALTS_ENOBUFS;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_ENOBUFS;
          ++i) {
-      check_equal(progress_pair(sender, receiver), TURBO_OK);
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
       status = flowmq_send(sender, second, sizeof(second) - 1u,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
-    status = TURBO_EBUSY;
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY;
+    check_equal(status, SALTS_OK);
+    status = SALTS_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(sender, receiver), TURBO_OK);
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
       status = flowmq_recv(receiver, received, sizeof(received), &received_size,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(received_size, sizeof(second) - 1u);
     check_equal(memcmp(received, second, received_size), 0);
 
-    check_equal(flowmq_close(sender), TURBO_OK);
-    check_equal(flowmq_close(receiver), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(sender), SALTS_OK);
+    check_equal(flowmq_close(receiver), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("stops at negotiated receive credit and resumes after application consumption") {
@@ -1862,44 +1862,44 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_socket_t *sender = flowmq_socket(ctx, FLOWMQ_PAIR);
     flowmq_pollitem_t sender_item = {
         .socket = sender, .events = FLOWMQ_POLLOUT};
-    int status = TURBO_EBUSY;
+    int status = SALTS_EBUSY;
 
     check_equal(flowmq_setsockopt(receiver, FLOWMQ_RCVHWM_BYTES,
                                   &receive_hwm_bytes,
-                                  sizeof(receive_hwm_bytes)), TURBO_OK);
-    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), TURBO_OK);
+                                  sizeof(receive_hwm_bytes)), SALTS_OK);
+    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
-                                     &endpoint_size), TURBO_OK);
-    check_equal(flowmq_connect(sender, endpoint), TURBO_OK);
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY;
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(sender, endpoint), SALTS_OK);
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(sender, receiver), TURBO_OK);
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
       status = flowmq_send(sender, full_window, sizeof(full_window) - 1u,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     for (size_t i = 0u; i < 32u; ++i)
-      check_equal(progress_pair(sender, receiver), TURBO_OK);
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
 
     check_equal(flowmq_send(sender, next, sizeof(next) - 1u, FLOWMQ_DONTWAIT),
-                TURBO_ENOBUFS);
-    check_equal(flowmq_poll(&sender_item, 1u, 0u, &ready), TURBO_OK);
+                SALTS_ENOBUFS);
+    check_equal(flowmq_poll(&sender_item, 1u, 0u, &ready), SALTS_OK);
     check_equal(ready, 0u);
     check_equal(flowmq_recv(receiver, received, sizeof(received), &received_size,
-                            FLOWMQ_DONTWAIT), TURBO_OK);
+                            FLOWMQ_DONTWAIT), SALTS_OK);
     check_equal(received_size, sizeof(full_window) - 1u);
 
-    status = TURBO_ENOBUFS;
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_ENOBUFS;
+    status = SALTS_ENOBUFS;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_ENOBUFS;
          ++i) {
-      check_equal(progress_pair(sender, receiver), TURBO_OK);
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
       status = flowmq_send(sender, next, sizeof(next) - 1u, FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
 
-    check_equal(flowmq_close(sender), TURBO_OK);
-    check_equal(flowmq_close(receiver), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(sender), SALTS_OK);
+    check_equal(flowmq_close(receiver), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("publishes sub-quantum credit on the configured caller-driven deadline") {
@@ -1917,52 +1917,52 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_socket_t *receiver = flowmq_socket(ctx, FLOWMQ_PAIR);
     flowmq_socket_t *sender = flowmq_socket(ctx, FLOWMQ_PAIR);
     flowmq_pollitem_t items[] = {{.socket = sender}, {.socket = receiver}};
-    int status = TURBO_EBUSY;
+    int status = SALTS_EBUSY;
 
     check_equal(flowmq_setsockopt(receiver, FLOWMQ_RCVHWM_BYTES,
                                   &receive_hwm_bytes,
-                                  sizeof(receive_hwm_bytes)), TURBO_OK);
+                                  sizeof(receive_hwm_bytes)), SALTS_OK);
     check_equal(flowmq_setsockopt(receiver, FLOWMQ_FLOW_UPDATE_QUANTUM,
-                                  &flow_quantum, sizeof(flow_quantum)), TURBO_OK);
+                                  &flow_quantum, sizeof(flow_quantum)), SALTS_OK);
     check_equal(flowmq_setsockopt(receiver, FLOWMQ_FLOW_UPDATE_IVL,
                                   &flow_interval_ms,
-                                  sizeof(flow_interval_ms)), TURBO_OK);
-    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), TURBO_OK);
+                                  sizeof(flow_interval_ms)), SALTS_OK);
+    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
-                                     &endpoint_size), TURBO_OK);
-    check_equal(flowmq_connect(sender, endpoint), TURBO_OK);
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY;
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(sender, endpoint), SALTS_OK);
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(sender, receiver), TURBO_OK);
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
       status = flowmq_send(sender, first, sizeof(first) - 1u,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
-    status = TURBO_EBUSY;
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY;
+    check_equal(status, SALTS_OK);
+    status = SALTS_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(sender, receiver), TURBO_OK);
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
       status = flowmq_recv(receiver, received, sizeof(received), &received_size,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(flowmq_send(sender, second, sizeof(second) - 1u,
-                            FLOWMQ_DONTWAIT), TURBO_ENOBUFS);
+                            FLOWMQ_DONTWAIT), SALTS_ENOBUFS);
 
-    check_equal(flowmq_poll(items, 2u, 5u, &ready), TURBO_OK);
-    status = TURBO_ENOBUFS;
+    check_equal(flowmq_poll(items, 2u, 5u, &ready), SALTS_OK);
+    status = SALTS_ENOBUFS;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        (status == TURBO_ENOBUFS || status == TURBO_EBUSY);
+                        (status == SALTS_ENOBUFS || status == SALTS_EBUSY);
          ++i) {
-      check_equal(progress_pair(sender, receiver), TURBO_OK);
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
       status = flowmq_send(sender, second, sizeof(second) - 1u,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
 
-    check_equal(flowmq_close(sender), TURBO_OK);
-    check_equal(flowmq_close(receiver), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(sender), SALTS_OK);
+    check_equal(flowmq_close(receiver), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("does not charge ROUTER synthetic identity against wire credit") {
@@ -1977,49 +1977,49 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_ctx_t *ctx = flowmq_ctx_new();
     flowmq_socket_t *router = flowmq_socket(ctx, FLOWMQ_ROUTER);
     flowmq_socket_t *dealer = flowmq_socket(ctx, FLOWMQ_DEALER);
-    int status = TURBO_EBUSY;
+    int status = SALTS_EBUSY;
 
     check_equal(flowmq_setsockopt(dealer, FLOWMQ_IDENTITY, identity,
-                                  sizeof(identity) - 1u), TURBO_OK);
+                                  sizeof(identity) - 1u), SALTS_OK);
     check_equal(flowmq_setsockopt(router, FLOWMQ_RCVHWM_BYTES,
                                   &receive_hwm_bytes,
-                                  sizeof(receive_hwm_bytes)), TURBO_OK);
-    check_equal(flowmq_bind(router, "tcp://127.0.0.1:0"), TURBO_OK);
+                                  sizeof(receive_hwm_bytes)), SALTS_OK);
+    check_equal(flowmq_bind(router, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(router, endpoint, sizeof(endpoint),
-                                     &endpoint_size), TURBO_OK);
-    check_equal(flowmq_connect(dealer, endpoint), TURBO_OK);
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY;
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(dealer, endpoint), SALTS_OK);
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(dealer, router), TURBO_OK);
+      check_equal(progress_pair(dealer, router), SALTS_OK);
       status = flowmq_send(dealer, payload, sizeof(payload) - 1u,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT; ++i) {
-      check_equal(progress_pair(dealer, router), TURBO_OK);
+      check_equal(progress_pair(dealer, router), SALTS_OK);
       status = flowmq_recv(router, received, sizeof(received), &received_size,
                            FLOWMQ_DONTWAIT);
-      if (status != TURBO_EBUSY) break;
+      if (status != SALTS_EBUSY) break;
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(received_size, sizeof(identity) - 1u);
     check_equal(flowmq_send(dealer, next, sizeof(next) - 1u, FLOWMQ_DONTWAIT),
-                TURBO_ENOBUFS);
+                SALTS_ENOBUFS);
     check_equal(flowmq_recv(router, received, sizeof(received), &received_size,
-                            FLOWMQ_DONTWAIT), TURBO_OK);
+                            FLOWMQ_DONTWAIT), SALTS_OK);
     check_equal(received_size, sizeof(payload) - 1u);
 
-    status = TURBO_ENOBUFS;
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_ENOBUFS;
+    status = SALTS_ENOBUFS;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_ENOBUFS;
          ++i) {
-      check_equal(progress_pair(dealer, router), TURBO_OK);
+      check_equal(progress_pair(dealer, router), SALTS_OK);
       status = flowmq_send(dealer, next, sizeof(next) - 1u, FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
 
-    check_equal(flowmq_close(dealer), TURBO_OK);
-    check_equal(flowmq_close(router), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(dealer), SALTS_OK);
+    check_equal(flowmq_close(router), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("rejects a send larger than its byte HWM") {
@@ -2030,12 +2030,12 @@ spec("flowmq_socket lifecycle and pattern surface") {
 
     check_equal(flowmq_setsockopt(sender, FLOWMQ_SNDHWM_BYTES,
                                  &send_hwm_bytes, sizeof(send_hwm_bytes)),
-                TURBO_OK);
+                SALTS_OK);
     check_equal(flowmq_send(sender, payload, sizeof(payload) - 1u,
-                            FLOWMQ_DONTWAIT), TURBO_EMSGSIZE);
+                            FLOWMQ_DONTWAIT), SALTS_EMSGSIZE);
 
-    check_equal(flowmq_close(sender), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(sender), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("enforces REQ REP alternation over TCP") {
@@ -2048,49 +2048,49 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_ctx_t *ctx = flowmq_ctx_new();
     flowmq_socket_t *req = flowmq_socket(ctx, FLOWMQ_REQ);
     flowmq_socket_t *rep = flowmq_socket(ctx, FLOWMQ_REP);
-    int status = TURBO_EBUSY;
+    int status = SALTS_EBUSY;
 
-    check_equal(flowmq_bind(rep, "tcp://127.0.0.1:0"), TURBO_OK);
+    check_equal(flowmq_bind(rep, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(rep, endpoint, sizeof(endpoint), &endpoint_size),
-                TURBO_OK);
-    check_equal(flowmq_connect(req, endpoint), TURBO_OK);
-    check_equal(flowmq_send(rep, reply, sizeof(reply) - 1u, 0), TURBO_EPROTO);
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY; ++i) {
-      check_equal(progress_pair(req, rep), TURBO_OK);
+                SALTS_OK);
+    check_equal(flowmq_connect(req, endpoint), SALTS_OK);
+    check_equal(flowmq_send(rep, reply, sizeof(reply) - 1u, 0), SALTS_EPROTO);
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(req, rep), SALTS_OK);
       status = flowmq_send(req, request, sizeof(request) - 1u, FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(flowmq_send(req, request, sizeof(request) - 1u, 0),
-                TURBO_EPROTO);
-    status = TURBO_EBUSY;
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY; ++i) {
-      check_equal(progress_pair(req, rep), TURBO_OK);
+                SALTS_EPROTO);
+    status = SALTS_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(req, rep), SALTS_OK);
       status = flowmq_recv(rep, received, sizeof(received), &received_size,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(received_size, sizeof(request) - 1u);
     check_equal(flowmq_recv(rep, received, sizeof(received), &received_size, 0),
-                TURBO_EPROTO);
+                SALTS_EPROTO);
 
-    status = TURBO_EBUSY;
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY; ++i) {
-      check_equal(progress_pair(req, rep), TURBO_OK);
+    status = SALTS_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(req, rep), SALTS_OK);
       status = flowmq_send(rep, reply, sizeof(reply) - 1u, FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
-    status = TURBO_EBUSY;
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY; ++i) {
-      check_equal(progress_pair(req, rep), TURBO_OK);
+    check_equal(status, SALTS_OK);
+    status = SALTS_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(req, rep), SALTS_OK);
       status = flowmq_recv(req, received, sizeof(received), &received_size,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(received_size, sizeof(reply) - 1u);
 
-    check_equal(flowmq_close(req), TURBO_OK);
-    check_equal(flowmq_close(rep), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(req), SALTS_OK);
+    check_equal(flowmq_close(rep), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("rejects blocking direction changes inside multipart messages") {
@@ -2104,59 +2104,59 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_ctx_t *ctx = flowmq_ctx_new();
     flowmq_socket_t *left = flowmq_socket(ctx, FLOWMQ_PAIR);
     flowmq_socket_t *right = flowmq_socket(ctx, FLOWMQ_PAIR);
-    int status = TURBO_EBUSY;
+    int status = SALTS_EBUSY;
 
-    check_equal(flowmq_bind(left, "tcp://127.0.0.1:0"), TURBO_OK);
+    check_equal(flowmq_bind(left, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(left, endpoint, sizeof(endpoint),
-                                     &endpoint_size), TURBO_OK);
-    check_equal(flowmq_connect(right, endpoint), TURBO_OK);
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(right, endpoint), SALTS_OK);
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(left, right), TURBO_OK);
+      check_equal(progress_pair(left, right), SALTS_OK);
       status = flowmq_send(left, first_part, sizeof(first_part) - 1u,
                            FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(flowmq_recv(left, received, sizeof(received), &received_size, 0),
-                TURBO_EPROTO);
+                SALTS_EPROTO);
     check_equal(flowmq_send(left, final_part, sizeof(final_part) - 1u,
-                            FLOWMQ_DONTWAIT), TURBO_OK);
+                            FLOWMQ_DONTWAIT), SALTS_OK);
 
-    status = TURBO_EBUSY;
+    status = SALTS_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(left, right), TURBO_OK);
+      check_equal(progress_pair(left, right), SALTS_OK);
       status = flowmq_recv(right, received, sizeof(received), &received_size,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(flowmq_recv(right, received, sizeof(received), &received_size,
-                            FLOWMQ_DONTWAIT), TURBO_OK);
+                            FLOWMQ_DONTWAIT), SALTS_OK);
 
     status = flowmq_send(right, first_part, sizeof(first_part) - 1u,
                          FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE);
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(flowmq_send(right, final_part, sizeof(final_part) - 1u,
-                            FLOWMQ_DONTWAIT), TURBO_OK);
-    status = TURBO_EBUSY;
+                            FLOWMQ_DONTWAIT), SALTS_OK);
+    status = SALTS_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == TURBO_EBUSY;
+                        status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(left, right), TURBO_OK);
+      check_equal(progress_pair(left, right), SALTS_OK);
       status = flowmq_recv(left, received, sizeof(received), &received_size,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(flowmq_send(left, interleaved, sizeof(interleaved) - 1u, 0),
-                TURBO_EPROTO);
+                SALTS_EPROTO);
     check_equal(flowmq_recv(left, received, sizeof(received), &received_size,
-                            FLOWMQ_DONTWAIT), TURBO_OK);
+                            FLOWMQ_DONTWAIT), SALTS_OK);
 
-    check_equal(flowmq_close(right), TURBO_OK);
-    check_equal(flowmq_close(left), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(right), SALTS_OK);
+    check_equal(flowmq_close(left), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("exposes XSUB subscription commands through XPUB receive") {
@@ -2168,27 +2168,27 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_ctx_t *ctx = flowmq_ctx_new();
     flowmq_socket_t *xpub = flowmq_socket(ctx, FLOWMQ_XPUB);
     flowmq_socket_t *xsub = flowmq_socket(ctx, FLOWMQ_XSUB);
-    int status = TURBO_EBUSY;
+    int status = SALTS_EBUSY;
 
     check_equal(flowmq_setsockopt(xsub, FLOWMQ_SUBSCRIBE, topic,
-                                 sizeof(topic) - 1u), TURBO_OK);
-    check_equal(flowmq_bind(xpub, "tcp://127.0.0.1:0"), TURBO_OK);
+                                 sizeof(topic) - 1u), SALTS_OK);
+    check_equal(flowmq_bind(xpub, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(xpub, endpoint, sizeof(endpoint), &endpoint_size),
-                TURBO_OK);
-    check_equal(flowmq_connect(xsub, endpoint), TURBO_OK);
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY; ++i) {
-      check_equal(progress_pair(xsub, xpub), TURBO_OK);
+                SALTS_OK);
+    check_equal(flowmq_connect(xsub, endpoint), SALTS_OK);
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(xsub, xpub), SALTS_OK);
       status = flowmq_recv(xpub, event, sizeof(event), &event_size,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(event_size, sizeof(topic));
     check_equal(event[0], 1u);
     check_equal(memcmp(event + 1u, topic, sizeof(topic) - 1u), 0);
 
-    check_equal(flowmq_close(xsub), TURBO_OK);
-    check_equal(flowmq_close(xpub), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(xsub), SALTS_OK);
+    check_equal(flowmq_close(xpub), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("replays desired XSUB subscriptions into a reconnected session") {
@@ -2201,47 +2201,47 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_ctx_t *ctx = flowmq_ctx_new();
     flowmq_socket_t *xpub = flowmq_socket(ctx, FLOWMQ_XPUB);
     flowmq_socket_t *xsub = flowmq_socket(ctx, FLOWMQ_XSUB);
-    int status = TURBO_EBUSY;
+    int status = SALTS_EBUSY;
 
     check_equal(flowmq_setsockopt(xsub, FLOWMQ_RECONNECT_IVL,
                                  &reconnect_ms, sizeof(reconnect_ms)),
-                TURBO_OK);
+                SALTS_OK);
     check_equal(flowmq_setsockopt(xsub, FLOWMQ_RECONNECT_IVL_MAX,
                                  &reconnect_ms, sizeof(reconnect_ms)),
-                TURBO_OK);
+                SALTS_OK);
     check_equal(flowmq_setsockopt(xsub, FLOWMQ_SUBSCRIBE, topic,
-                                 sizeof(topic) - 1u), TURBO_OK);
-    check_equal(flowmq_bind(xpub, "tcp://127.0.0.1:0"), TURBO_OK);
+                                 sizeof(topic) - 1u), SALTS_OK);
+    check_equal(flowmq_bind(xpub, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(xpub, endpoint, sizeof(endpoint),
-                                     &endpoint_size), TURBO_OK);
-    check_equal(flowmq_connect(xsub, endpoint), TURBO_OK);
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY;
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(xsub, endpoint), SALTS_OK);
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(xsub, xpub), TURBO_OK);
+      check_equal(progress_pair(xsub, xpub), SALTS_OK);
       status = flowmq_recv(xpub, event, sizeof(event), &event_size,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
-    check_equal(flowmq_close(xpub), TURBO_OK);
+    check_equal(status, SALTS_OK);
+    check_equal(flowmq_close(xpub), SALTS_OK);
 
     xpub = flowmq_socket(ctx, FLOWMQ_XPUB);
     check_not_null(xpub);
-    check_equal(flowmq_bind(xpub, endpoint), TURBO_OK);
-    status = TURBO_EBUSY;
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY;
+    check_equal(flowmq_bind(xpub, endpoint), SALTS_OK);
+    status = SALTS_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(xsub, xpub), TURBO_OK);
+      check_equal(progress_pair(xsub, xpub), SALTS_OK);
       status = flowmq_recv(xpub, event, sizeof(event), &event_size,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(event_size, sizeof(topic));
     check_equal(event[0], 1u);
     check_equal(memcmp(event + 1u, topic, sizeof(topic) - 1u), 0);
 
-    check_equal(flowmq_close(xsub), TURBO_OK);
-    check_equal(flowmq_close(xpub), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(xsub), SALTS_OK);
+    check_equal(flowmq_close(xpub), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
   it("propagates a dynamic XSUB unsubscribe command to XPUB") {
@@ -2253,39 +2253,39 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_ctx_t *ctx = flowmq_ctx_new();
     flowmq_socket_t *xpub = flowmq_socket(ctx, FLOWMQ_XPUB);
     flowmq_socket_t *xsub = flowmq_socket(ctx, FLOWMQ_XSUB);
-    int status = TURBO_EBUSY;
+    int status = SALTS_EBUSY;
 
     check_equal(flowmq_setsockopt(xsub, FLOWMQ_SUBSCRIBE, topic,
-                                 sizeof(topic) - 1u), TURBO_OK);
-    check_equal(flowmq_bind(xpub, "tcp://127.0.0.1:0"), TURBO_OK);
+                                 sizeof(topic) - 1u), SALTS_OK);
+    check_equal(flowmq_bind(xpub, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(xpub, endpoint, sizeof(endpoint),
-                                     &endpoint_size), TURBO_OK);
-    check_equal(flowmq_connect(xsub, endpoint), TURBO_OK);
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY;
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(xsub, endpoint), SALTS_OK);
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(xsub, xpub), TURBO_OK);
+      check_equal(progress_pair(xsub, xpub), SALTS_OK);
       status = flowmq_recv(xpub, event, sizeof(event), &event_size,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(event[0], 1u);
 
     check_equal(flowmq_setsockopt(xsub, FLOWMQ_UNSUBSCRIBE, topic,
-                                 sizeof(topic) - 1u), TURBO_OK);
-    status = TURBO_EBUSY;
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY;
+                                 sizeof(topic) - 1u), SALTS_OK);
+    status = SALTS_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY;
          ++i) {
-      check_equal(progress_pair(xsub, xpub), TURBO_OK);
+      check_equal(progress_pair(xsub, xpub), SALTS_OK);
       status = flowmq_recv(xpub, event, sizeof(event), &event_size,
                            FLOWMQ_DONTWAIT);
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     check_equal(event_size, sizeof(topic));
     check_equal(event[0], 0u);
     check_equal(memcmp(event + 1u, topic, sizeof(topic) - 1u), 0);
 
-    check_equal(flowmq_close(xsub), TURBO_OK);
-    check_equal(flowmq_close(xpub), TURBO_OK);
-    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+    check_equal(flowmq_close(xsub), SALTS_OK);
+    check_equal(flowmq_close(xpub), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 }

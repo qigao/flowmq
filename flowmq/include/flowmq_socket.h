@@ -68,7 +68,7 @@ typedef struct flowmq_pollitem_s {
 /** Create a context. The context owns no progress thread. */
 FLOWMQ_C_API flowmq_ctx_t *flowmq_ctx_new(void);
 
-/** Destroy an empty context, or return TURBO_EBUSY while sockets remain. */
+/** Destroy an empty context, or return SALTS_EBUSY while sockets remain. */
 FLOWMQ_C_API int flowmq_ctx_term(flowmq_ctx_t *ctx);
 
 /** Create one caller-owned classic socket. */
@@ -128,9 +128,9 @@ FLOWMQ_C_API int flowmq_getsockopt(const flowmq_socket_t *socket, int option,
  * never means remote receipt. Without FLOWMQ_DONTWAIT, a runtime-backed
  * would-block condition advances this socket on the calling thread until the
  * message can be admitted or progress fails. If the peer bound to an active
- * transaction disconnects, the next affected send returns TURBO_ENOTCONN once
+ * transaction disconnects, the next affected send returns SALTS_ENOTCONN once
  * instead of retrying the cancelled transaction. An operation forbidden by
- * the pattern or multipart FSM returns TURBO_EPROTO without blocking. Returns
+ * the pattern or multipart FSM returns SALTS_EPROTO without blocking. Returns
  * a Turbo status.
  */
 FLOWMQ_C_API int flowmq_send(flowmq_socket_t *socket, const void *data,
@@ -140,9 +140,9 @@ FLOWMQ_C_API int flowmq_send(flowmq_socket_t *socket, const void *data,
  * Copy one available message part into caller storage. Without
  * FLOWMQ_DONTWAIT, advance this socket on the calling thread until a part is
  * available or progress fails. If the peer bound to an active transaction
- * disconnects, the next affected receive returns TURBO_ENOTCONN once instead
+ * disconnects, the next affected receive returns SALTS_ENOTCONN once instead
  * of retrying the cancelled transaction. An operation forbidden by the
- * pattern or multipart FSM returns TURBO_EPROTO without blocking. Returns a
+ * pattern or multipart FSM returns SALTS_EPROTO without blocking. Returns a
  * Turbo status.
  */
 FLOWMQ_C_API int flowmq_recv(flowmq_socket_t *socket, void *data,

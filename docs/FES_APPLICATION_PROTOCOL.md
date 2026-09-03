@@ -45,11 +45,11 @@ SCATTER_REQUEST 的 expected responses 必须非零，SAGA message 的 saga id �
 
 `flowmq_esb_encode()` 返回 owned `tstr`；调用者使用 `tstr_free()` 释放。`flowmq_esb_decode()`
 不分配，`consumer_group` 和 `payload` 都借用 encoded input。输入在借用 view 使用结束前必须存活
-且不可修改。`max_message_size` 同时约束 encode 与 decode，超限返回 `TURBO_EMSGSIZE`。
+且不可修改。`max_message_size` 同时约束 encode 与 decode，超限返回 `SALTS_EMSGSIZE`。
 
 ```c
 #include "flowmq_esb.h"
-#include "turbo_error.h"
+#include "salts_error.h"
 
 int main(void) {
   flowmq_esb_message_t message = {
@@ -58,7 +58,7 @@ int main(void) {
       .payload = vstr_from_cstr("work")};
   tstr encoded = NULL;
 
-  if (flowmq_esb_encode(&message, 1024u, &encoded) != TURBO_OK) {
+  if (flowmq_esb_encode(&message, 1024u, &encoded) != SALTS_OK) {
     return 1;
   }
   /* encoded 可直接作为一个普通 FMQ DATA frame 的 payload。 */

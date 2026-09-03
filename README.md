@@ -1,7 +1,7 @@
 # FlowMQ
 
 FlowMQ 是 C11 的 pattern-oriented messaging library。它提供 FMQ/6 wire codec、pattern/session
-状态、应用层能力，以及基于 Rocida CNet 的 TCP/TLS socket runtime。
+状态、应用层能力，以及基于 Salts CNet 的 TCP/TLS socket runtime。
 
 当前 transport 范围是明确且封闭的：
 
@@ -18,8 +18,9 @@ FlowMQ 是 C11 的 pattern-oriented messaging library。它提供 FMQ/6 wire cod
 | `FlowMQ::Transport` | build-tree ZeroMQ-style socket 与 CNet TCP/TLS runtime |
 | `FlowMQ::FlowMQ` | 唯一安装 target；合并上述公开能力 |
 
-安装包的公开依赖是 `Rocida::Core`、`TurboParser::Parser` 与
-`TurboParser::DataBind`；`Rocida::CNet` 和 `Rocida::STL` 是实现私有依赖。
+安装包的公开依赖是 `Salts::Core` 与 SaltsUtils 的 `Salts::TbeSchema`；
+`Salts::CNet`、`Salts::CSTL` 和 `Salts::CMeta` 是实现私有依赖。FMP/1 使用
+header-only TBE wire view/builder，不依赖 JSON typed codec。
 
 ## Caller-driven transport
 
@@ -38,7 +39,7 @@ HELLO/SETTINGS 与订阅重放仍由应用后续调用 `send/recv/poll` 推进�
 
 `FLOWMQ_SNDHWM`/`FLOWMQ_RCVHWM` 使用 `int` 消息数，扩展选项
 `FLOWMQ_SNDHWM_BYTES`/`FLOWMQ_RCVHWM_BYTES` 使用 `size_t` payload 字节数。四项都必须在
-首次 bind/connect 前设置且不能为零；普通发送达到 HWM 返回 `TURBO_ENOBUFS`，PUB/XPUB
+首次 bind/connect 前设置且不能为零；普通发送达到 HWM 返回 `SALTS_ENOBUFS`，PUB/XPUB
 按 peer 丢弃无法接纳的 publication。
 
 `FLOWMQ_FLOW_UPDATE_QUANTUM` 使用 `size_t`，默认由 receive byte HWM 推导；
@@ -65,7 +66,7 @@ token；同 identity 重连后的 delayed reply 会指向新 session。单条 ou
 
 ```c
 #include <flowmq_socket.h>
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -79,8 +80,8 @@ int main(void) {
   size_t endpoint_size = 0;
   size_t received_size = 0;
   size_t ready = 0;
-  int send_status = TURBO_EBUSY;
-  int recv_status = TURBO_EBUSY;
+  int send_status = SALTS_EBUSY;
+  int recv_status = SALTS_EBUSY;
   int result = 1;
   flowmq_ctx_t *ctx = flowmq_ctx_new();
   flowmq_socket_t *receiver = NULL;
@@ -91,34 +92,34 @@ int main(void) {
   receiver = flowmq_socket(ctx, FLOWMQ_PAIR);
   sender = flowmq_socket(ctx, FLOWMQ_PAIR);
   if (receiver == NULL || sender == NULL) goto cleanup;
-  if (flowmq_bind(receiver, "tcp://127.0.0.1:0") != TURBO_OK) goto cleanup;
+  if (flowmq_bind(receiver, "tcp://127.0.0.1:0") != SALTS_OK) goto cleanup;
   if (flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
-                           &endpoint_size) != TURBO_OK)
+                           &endpoint_size) != SALTS_OK)
     goto cleanup;
-  if (flowmq_connect(sender, endpoint) != TURBO_OK) goto cleanup;
+  if (flowmq_connect(sender, endpoint) != SALTS_OK) goto cleanup;
 
   items[0] = (flowmq_pollitem_t){.socket = sender};
   items[1] = (flowmq_pollitem_t){.socket = receiver};
-  for (size_t i = 0; i < PROGRESS_LIMIT && recv_status == TURBO_EBUSY; ++i) {
-    if (flowmq_poll(items, 2, 0, &ready) != TURBO_OK) goto cleanup;
-    if (send_status == TURBO_EBUSY)
+  for (size_t i = 0; i < PROGRESS_LIMIT && recv_status == SALTS_EBUSY; ++i) {
+    if (flowmq_poll(items, 2, 0, &ready) != SALTS_OK) goto cleanup;
+    if (send_status == SALTS_EBUSY)
       send_status = flowmq_send(sender, payload, sizeof(payload) - 1,
                                 FLOWMQ_DONTWAIT);
-    if (send_status != TURBO_OK && send_status != TURBO_EBUSY) goto cleanup;
-    if (send_status == TURBO_OK)
+    if (send_status != SALTS_OK && send_status != SALTS_EBUSY) goto cleanup;
+    if (send_status == SALTS_OK)
       recv_status = flowmq_recv(receiver, received, sizeof(received),
                                 &received_size, FLOWMQ_DONTWAIT);
   }
-  if (recv_status != TURBO_OK || received_size != sizeof(payload) - 1 ||
+  if (recv_status != SALTS_OK || received_size != sizeof(payload) - 1 ||
       memcmp(received, payload, received_size) != 0)
     goto cleanup;
   puts(received);
   result = 0;
 
 cleanup:
-  if (sender != NULL && flowmq_close(sender) != TURBO_OK) result = 1;
-  if (receiver != NULL && flowmq_close(receiver) != TURBO_OK) result = 1;
-  if (ctx != NULL && flowmq_ctx_term(ctx) != TURBO_OK) result = 1;
+  if (sender != NULL && flowmq_close(sender) != SALTS_OK) result = 1;
+  if (receiver != NULL && flowmq_close(receiver) != SALTS_OK) result = 1;
+  if (ctx != NULL && flowmq_ctx_term(ctx) != SALTS_OK) result = 1;
   return result;
 }
 ```

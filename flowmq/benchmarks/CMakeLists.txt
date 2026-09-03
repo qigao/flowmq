@@ -1,11 +1,11 @@
-if(NOT TARGET Rocida::TinyTest)
-  find_package(Rocida CONFIG REQUIRED)
+if(NOT TARGET Salts::TinyTest)
+  find_package(Salts CONFIG REQUIRED)
 endif()
 
 cmake_add_benchmark(
   bench_flowmq_protocol
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/protocol/bench_flowmq_protocol.c
-  LIBS FlowMQ::Protocol Rocida::TinyTest
+  LIBS FlowMQ::Protocol Salts::TinyTest
   FOLDER "flowmq/benchmarks/protocol")
 target_include_directories(
   bench_flowmq_protocol
@@ -14,7 +14,7 @@ target_include_directories(
 cmake_add_benchmark(
   bench_flowmq_socket
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_socket.c
-  LIBS FlowMQ::Transport Rocida::TinyTest
+  LIBS FlowMQ::Transport Salts::TinyTest
   FOLDER "flowmq/benchmarks/runtime")
 
 if(FLOWMQ_BUILD_ZMQ_BENCHMARK)

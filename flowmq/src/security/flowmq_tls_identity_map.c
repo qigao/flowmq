@@ -1,6 +1,6 @@
 #include "flowmq_tls_identity_map.h"
 
-#include "turbo_error.h"
+#include "salts_error.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -26,11 +26,11 @@ struct flowmq_tls_identity_map_s {
 static int flowmq_tls_identity_bounded_length(const char *text, size_t maximum,
                                               size_t *out_size) {
   size_t size = 0u;
-  if (!text || !out_size) return TURBO_EINVAL;
+  if (!text || !out_size) return SALTS_EINVAL;
   while (size <= maximum && text[size] != '\0') ++size;
-  if (size > maximum) return TURBO_ERANGE;
+  if (size > maximum) return SALTS_ERANGE;
   *out_size = size;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flowmq_tls_identity_fingerprint_validate(const char *fingerprint) {
@@ -38,23 +38,23 @@ static int flowmq_tls_identity_fingerprint_validate(const char *fingerprint) {
   size_t size = 0u;
   int rc = flowmq_tls_identity_bounded_length(
       fingerprint, FLOWMQ_TLS_CERTIFICATE_SHA256_TEXT_SIZE, &size);
-  if (rc != TURBO_OK || size != FLOWMQ_TLS_CERTIFICATE_SHA256_TEXT_SIZE ||
+  if (rc != SALTS_OK || size != FLOWMQ_TLS_CERTIFICATE_SHA256_TEXT_SIZE ||
       memcmp(fingerprint, prefix, sizeof(prefix) - 1u) != 0)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   for (size_t i = sizeof(prefix) - 1u; i < size; ++i) {
     char value = fingerprint[i];
     if (!((value >= '0' && value <= '9') || (value >= 'a' && value <= 'f')))
-      return TURBO_EINVAL;
+      return SALTS_EINVAL;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flowmq_tls_identity_string_validate(const char *identity,
                                                size_t *out_size) {
   int rc = flowmq_tls_identity_bounded_length(
       identity, FLOWMQ_PROTOCOL_MAX_IDENTITY_SIZE, out_size);
-  if (rc != TURBO_OK || *out_size == 0u) return TURBO_EINVAL;
-  return TURBO_OK;
+  if (rc != SALTS_OK || *out_size == 0u) return SALTS_EINVAL;
+  return SALTS_OK;
 }
 
 int flowmq_tls_identity_map_create(
@@ -63,26 +63,26 @@ int flowmq_tls_identity_map_create(
   flowmq_tls_identity_map_t *map = NULL;
   size_t retained_limit;
   size_t retained = 0u;
-  int rc = TURBO_OK;
-  if (!config || !out || config->size < sizeof(*config)) return TURBO_EINVAL;
+  int rc = SALTS_OK;
+  if (!config || !out || config->size < sizeof(*config)) return SALTS_EINVAL;
   *out = NULL;
   retained_limit = config->max_total_string_bytes
                        ? config->max_total_string_bytes
                        : FLOWMQ_TLS_IDENTITY_MAP_DEFAULT_MAX_TOTAL_STRING_BYTES;
   if (!config->bindings || config->binding_count == 0u)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   if (config->binding_count > FLOWMQ_TLS_IDENTITY_MAP_MAX_BINDINGS ||
       config->binding_count > SIZE_MAX / sizeof(*map->entries) ||
       retained_limit == 0u ||
       retained_limit > FLOWMQ_TLS_IDENTITY_MAP_MAX_TOTAL_STRING_BYTES)
-    return TURBO_ERANGE;
+    return SALTS_ERANGE;
   map = (flowmq_tls_identity_map_t *)calloc(1u, sizeof(*map));
-  if (!map) return TURBO_ENOMEM;
+  if (!map) return SALTS_ENOMEM;
   map->entries = (flowmq_tls_identity_map_entry_t *)calloc(
       config->binding_count, sizeof(*map->entries));
   if (!map->entries) {
     flowmq_tls_identity_map_destroy(map);
-    return TURBO_ENOMEM;
+    return SALTS_ENOMEM;
   }
   for (size_t i = 0u; i < config->binding_count; ++i) {
     const flowmq_tls_identity_binding_t *binding = &config->bindings[i];
@@ -91,22 +91,22 @@ int flowmq_tls_identity_map_create(
     size_t tuple_bytes;
     if (binding->size < sizeof(*binding) ||
         flowmq_tls_identity_fingerprint_validate(
-            binding->certificate_sha256) != TURBO_OK ||
+            binding->certificate_sha256) != SALTS_OK ||
         flowmq_tls_identity_string_validate(binding->hello_identity,
-                                            &identity_size) != TURBO_OK) {
-      rc = TURBO_EINVAL;
+                                            &identity_size) != SALTS_OK) {
+      rc = SALTS_EINVAL;
       goto failed;
     }
     tuple_bytes = FLOWMQ_TLS_CERTIFICATE_SHA256_CAPACITY + identity_size + 1u;
     if (retained > retained_limit || tuple_bytes > retained_limit - retained) {
-      rc = TURBO_ERANGE;
+      rc = SALTS_ERANGE;
       goto failed;
     }
     for (size_t previous = 0u; previous < i; ++previous) {
       if (memcmp(map->entries[previous].certificate_sha256,
                  binding->certificate_sha256,
                  FLOWMQ_TLS_CERTIFICATE_SHA256_CAPACITY) == 0) {
-        rc = TURBO_EINVAL;
+        rc = SALTS_EINVAL;
         goto failed;
       }
     }
@@ -120,7 +120,7 @@ int flowmq_tls_identity_map_create(
   map->retained_string_bytes = retained;
   map->policy_generation = config->policy_generation;
   *out = map;
-  return TURBO_OK;
+  return SALTS_OK;
 
 failed:
   flowmq_tls_identity_map_destroy(map);
@@ -134,8 +134,8 @@ int flowmq_tls_identity_map_verify(void *map_pointer,
       (const flowmq_tls_identity_map_t *)map_pointer;
   if (!map || !claimed_identity.data || claimed_identity.len == 0u ||
       claimed_identity.len > FLOWMQ_PROTOCOL_MAX_IDENTITY_SIZE ||
-      flowmq_tls_identity_fingerprint_validate(certificate_sha256) != TURBO_OK)
-    return TURBO_EINVAL;
+      flowmq_tls_identity_fingerprint_validate(certificate_sha256) != SALTS_OK)
+    return SALTS_EINVAL;
   for (size_t i = 0u; i < map->entry_count; ++i) {
     const flowmq_tls_identity_map_entry_t *entry = &map->entries[i];
     if (memcmp(entry->certificate_sha256, certificate_sha256,
@@ -143,9 +143,9 @@ int flowmq_tls_identity_map_verify(void *map_pointer,
         entry->hello_identity_size == claimed_identity.len &&
         memcmp(entry->hello_identity, claimed_identity.data,
                claimed_identity.len) == 0)
-      return TURBO_OK;
+      return SALTS_OK;
   }
-  return TURBO_EPERM;
+  return SALTS_EPERM;
 }
 
 uint64_t flowmq_tls_identity_map_generation(

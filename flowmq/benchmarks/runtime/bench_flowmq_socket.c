@@ -1,6 +1,6 @@
 #include "flowmq_socket.h"
 #include "tinytest.h"
-#include "turbo_error.h"
+#include "salts_error.h"
 
 #include <string.h>
 
@@ -36,15 +36,15 @@ static int bench_pair_open(bench_pair_t *pair) {
   size_t endpoint_size = 0u;
   memset(pair, 0, sizeof(*pair));
   pair->ctx = flowmq_ctx_new();
-  if (pair->ctx == NULL) return TURBO_ENOMEM;
+  if (pair->ctx == NULL) return SALTS_ENOMEM;
   pair->sender = flowmq_socket(pair->ctx, FLOWMQ_PAIR);
   pair->receiver = flowmq_socket(pair->ctx, FLOWMQ_PAIR);
-  if (pair->sender == NULL || pair->receiver == NULL) return TURBO_ENOMEM;
-  if (flowmq_bind(pair->receiver, "tcp://127.0.0.1:0") != TURBO_OK)
-    return TURBO_EIO;
+  if (pair->sender == NULL || pair->receiver == NULL) return SALTS_ENOMEM;
+  if (flowmq_bind(pair->receiver, "tcp://127.0.0.1:0") != SALTS_OK)
+    return SALTS_EIO;
   if (flowmq_last_endpoint(pair->receiver, endpoint, sizeof(endpoint),
-                           &endpoint_size) != TURBO_OK)
-    return TURBO_EIO;
+                           &endpoint_size) != SALTS_OK)
+    return SALTS_EIO;
   return flowmq_connect(pair->sender, endpoint);
 }
 
@@ -61,25 +61,25 @@ static int bench_exchange(bench_pair_t *pair, const void *payload,
   size_t received_size = 0u;
   int status = flowmq_send(pair->sender, payload, payload_size,
                            FLOWMQ_DONTWAIT);
-  for (size_t i = 0u; status == TURBO_EBUSY && i < BENCH_PROGRESS_LIMIT; ++i) {
+  for (size_t i = 0u; status == SALTS_EBUSY && i < BENCH_PROGRESS_LIMIT; ++i) {
     status = bench_progress(pair);
-    if (status == TURBO_OK)
+    if (status == SALTS_OK)
       status = flowmq_send(pair->sender, payload, payload_size,
                            FLOWMQ_DONTWAIT);
   }
-  if (status != TURBO_OK) return status;
-  status = TURBO_EBUSY;
-  for (size_t i = 0u; status == TURBO_EBUSY && i < BENCH_PROGRESS_LIMIT; ++i) {
+  if (status != SALTS_OK) return status;
+  status = SALTS_EBUSY;
+  for (size_t i = 0u; status == SALTS_EBUSY && i < BENCH_PROGRESS_LIMIT; ++i) {
     status = bench_progress(pair);
-    if (status == TURBO_OK)
+    if (status == SALTS_OK)
       status = flowmq_recv(pair->receiver, received, sizeof(received),
                            &received_size, FLOWMQ_DONTWAIT);
   }
-  if (status != TURBO_OK) return status;
+  if (status != SALTS_OK) return status;
   if (received_size != payload_size ||
       memcmp(received, payload, payload_size) != 0)
-    return TURBO_EPROTO;
-  return TURBO_OK;
+    return SALTS_EPROTO;
+  return SALTS_OK;
 }
 
 static int bench_exchange_batch(bench_pair_t *pair, const void *payload,
@@ -89,23 +89,23 @@ static int bench_exchange_batch(bench_pair_t *pair, const void *payload,
   int status;
   for (size_t i = 0u; i < BENCH_BATCH_MESSAGES; ++i) {
     status = flowmq_send(pair->sender, payload, payload_size, FLOWMQ_DONTWAIT);
-    if (status != TURBO_OK) return status;
+    if (status != SALTS_OK) return status;
   }
   for (size_t message = 0u; message < BENCH_BATCH_MESSAGES; ++message) {
     status = flowmq_recv(pair->receiver, received, sizeof(received),
                          &received_size, FLOWMQ_DONTWAIT);
-    for (size_t i = 0u; status == TURBO_EBUSY && i < BENCH_PROGRESS_LIMIT;
+    for (size_t i = 0u; status == SALTS_EBUSY && i < BENCH_PROGRESS_LIMIT;
          ++i) {
       status = bench_progress(pair);
-      if (status == TURBO_OK)
+      if (status == SALTS_OK)
         status = flowmq_recv(pair->receiver, received, sizeof(received),
                              &received_size, FLOWMQ_DONTWAIT);
     }
-    if (status != TURBO_OK || received_size != payload_size ||
+    if (status != SALTS_OK || received_size != payload_size ||
         memcmp(received, payload, payload_size) != 0)
-      return status == TURBO_OK ? TURBO_EPROTO : status;
+      return status == SALTS_OK ? SALTS_EPROTO : status;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 #if defined(FLOWMQ_BENCH_WITH_ZMQ)
@@ -182,29 +182,29 @@ spec("FlowMQ direct socket benchmark") {
     memset(payload, 0x5a, sizeof(payload));
     memset(large_payload, 0xa5, sizeof(large_payload));
     status = bench_pair_open(&pair);
-    check_equal(status, TURBO_OK);
-    check_equal(bench_exchange(&pair, payload, sizeof(payload)), TURBO_OK);
+    check_equal(status, SALTS_OK);
+    check_equal(bench_exchange(&pair, payload, sizeof(payload)), SALTS_OK);
 
     benchmark_bytes("PAIR 64-byte one-way", BENCH_SAMPLES,
                     BENCH_PAYLOAD_BYTES) {
       status = bench_exchange(&pair, payload, sizeof(payload));
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
 
     check_equal(bench_exchange(&pair, large_payload, sizeof(large_payload)),
-                TURBO_OK);
+                SALTS_OK);
     benchmark_bytes("PAIR 64-KiB one-way", BENCH_LARGE_SAMPLES,
                     BENCH_LARGE_PAYLOAD_BYTES) {
       status = bench_exchange(&pair, large_payload, sizeof(large_payload));
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
 
     benchmark_io("PAIR 64-message queued batch", BENCH_BATCH_SAMPLES,
                  BENCH_BATCH_MESSAGES,
                  BENCH_BATCH_MESSAGES * BENCH_PAYLOAD_BYTES) {
       status = bench_exchange_batch(&pair, payload, sizeof(payload));
     }
-    check_equal(status, TURBO_OK);
+    check_equal(status, SALTS_OK);
     bench_pair_close(&pair);
   }
 

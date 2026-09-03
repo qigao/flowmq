@@ -60,7 +60,7 @@ FMS/3 只允许位于 FMQ/6 HELLO payload
 
 - FMQ/6 不接受 FMQ/5，也不协商或 fallback。
 - FES/1 采用固定 header、network byte order 和严格 TLV：未知、重复、乱序、长度错误以及不属于
-  当前 message kind 的字段都返回 `TURBO_EPROTO`。
+  当前 message kind 的字段都返回 `SALTS_EPROTO`。
 - decode 返回的 `vstr` 都借用输入；encode 返回的 `tstr` 归调用者所有。
 - 所有可增长 payload 受调用方 `max_message_size` 与协议常量双重约束。
 - catalog 的未知 family/index 返回 `NULL`，不猜测默认协议。

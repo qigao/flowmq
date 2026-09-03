@@ -2,12 +2,12 @@
 #define FLOWMQ_STREAM_DECODER_H
 
 #include "flowmq_protocol.h"
-#include "turbo_bytes.h"
+#include "salts_bytes.h"
 
 #include <stddef.h>
 
 typedef struct flowmq_stream_decoder_s {
-  turbo_bytes_t buffer;
+  salts_bytes_t buffer;
   size_t max_frame_size;
   int initialized;
 } flowmq_stream_decoder_t;

@@ -32,8 +32,8 @@ target_include_directories(
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
           ${CMAKE_CURRENT_SOURCE_DIR}/stream)
 target_link_libraries(flowmq_protocol
-                      PUBLIC Rocida::Core
-                      PRIVATE Rocida::CMeta)
+                      PUBLIC Salts::Core
+                      PRIVATE Salts::CMeta)
 
 set(FLOWMQ_PROTOCOL_SOURCES ${FLOWMQ_PROTOCOL_SOURCES} PARENT_SCOPE)
 set(FLOWMQ_PROTOCOL_HEADERS ${FLOWMQ_PROTOCOL_HEADERS} PARENT_SCOPE)

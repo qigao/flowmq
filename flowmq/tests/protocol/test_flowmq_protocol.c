@@ -3,7 +3,7 @@
 #include "flowmq_protocol_internal.h"
 #include "flowmq_security.h"
 #include "tinytest.h"
-#include "turbo_error.h"
+#include "salts_error.h"
 
 #include <string.h>
 
@@ -63,11 +63,11 @@ spec("flowmq_protocol") {
                                      .message_id = 1u};
     tstr encoded = NULL;
 
-    check_equal(flowmq_protocol_encode_frame(&frame, 1024u, &encoded), TURBO_EINVAL);
+    check_equal(flowmq_protocol_encode_frame(&frame, 1024u, &encoded), SALTS_EINVAL);
     check_null(encoded);
     frame.pattern = FLOWMQ_PROTOCOL_PAIR;
     frame.kind = (flowmq_protocol_frame_kind_t)7u;
-    check_equal(flowmq_protocol_encode_frame(&frame, 1024u, &encoded), TURBO_EINVAL);
+    check_equal(flowmq_protocol_encode_frame(&frame, 1024u, &encoded), SALTS_EINVAL);
     check_null(encoded);
   }
 
@@ -86,7 +86,7 @@ spec("flowmq_protocol") {
     unsigned char settings_payload[FLOWMQ_PROTOCOL_SETTINGS_PAYLOAD_SIZE];
     unsigned char update_payload[FLOWMQ_PROTOCOL_FLOW_UPDATE_PAYLOAD_SIZE];
 
-    check_equal(flowmq_protocol_settings_encode(&settings, settings_payload), TURBO_OK);
+    check_equal(flowmq_protocol_settings_encode(&settings, settings_payload), SALTS_OK);
     check_equal(settings_payload[0], 0u);
     check_equal(settings_payload[3], FLOWMQ_PROTOCOL_CAP_FLOW_CREDIT);
     check_equal(settings_payload[8], 0x01u);
@@ -94,7 +94,7 @@ spec("flowmq_protocol") {
     check_equal(flowmq_protocol_settings_decode(
                     vstr_from_buf((const char *)settings_payload, sizeof(settings_payload)),
                     &decoded_settings),
-                TURBO_OK);
+                SALTS_OK);
     check_equal(decoded_settings.capabilities, settings.capabilities);
     check_equal(decoded_settings.max_frame_size, settings.max_frame_size);
     check_equal(decoded_settings.session_generation, settings.session_generation);
@@ -102,13 +102,13 @@ spec("flowmq_protocol") {
     check_equal(decoded_settings.flow_update_quantum, settings.flow_update_quantum);
     check_equal(decoded_settings.flow_update_interval_ms, settings.flow_update_interval_ms);
 
-    check_equal(flowmq_protocol_flow_update_encode(&update, update_payload), TURBO_OK);
+    check_equal(flowmq_protocol_flow_update_encode(&update, update_payload), SALTS_OK);
     check_equal(update_payload[0], 0x01u);
     check_equal(update_payload[7], 0x08u);
     check_equal(
         flowmq_protocol_flow_update_decode(
             vstr_from_buf((const char *)update_payload, sizeof(update_payload)), &decoded_update),
-        TURBO_OK);
+        SALTS_OK);
     check_equal(decoded_update.session_generation, update.session_generation);
     check_equal(decoded_update.consumed_data, update.consumed_data);
     check_equal(decoded_update.max_data, update.max_data);
@@ -127,26 +127,26 @@ spec("flowmq_protocol") {
     unsigned char update_payload[FLOWMQ_PROTOCOL_FLOW_UPDATE_PAYLOAD_SIZE] = {0};
 
     settings.capabilities = 0u;
-    check_equal(flowmq_protocol_settings_encode(&settings, settings_payload), TURBO_EPROTO);
+    check_equal(flowmq_protocol_settings_encode(&settings, settings_payload), SALTS_EPROTO);
     settings.capabilities = FLOWMQ_PROTOCOL_CAP_FLOW_CREDIT << 1u;
-    check_equal(flowmq_protocol_settings_encode(&settings, settings_payload), TURBO_EPROTO);
+    check_equal(flowmq_protocol_settings_encode(&settings, settings_payload), SALTS_EPROTO);
     settings.capabilities = FLOWMQ_PROTOCOL_CAP_FLOW_CREDIT;
     settings.flow_update_quantum = (uint32_t)settings.initial_max_data + 1u;
-    check_equal(flowmq_protocol_settings_encode(&settings, settings_payload), TURBO_EPROTO);
+    check_equal(flowmq_protocol_settings_encode(&settings, settings_payload), SALTS_EPROTO);
     settings.flow_update_quantum = 1024u;
     settings.session_generation = 0u;
-    check_equal(flowmq_protocol_settings_encode(&settings, settings_payload), TURBO_EPROTO);
+    check_equal(flowmq_protocol_settings_encode(&settings, settings_payload), SALTS_EPROTO);
     check_equal(flowmq_protocol_settings_decode(vstr_from_buf((const char *)settings_payload, 31u),
                                                 &settings),
-                TURBO_EPROTO);
+                SALTS_EPROTO);
 
-    check_equal(flowmq_protocol_flow_update_encode(&update, update_payload), TURBO_EPROTO);
+    check_equal(flowmq_protocol_flow_update_encode(&update, update_payload), SALTS_EPROTO);
     update.max_data = update.consumed_data;
     update.session_generation = 0u;
-    check_equal(flowmq_protocol_flow_update_encode(&update, update_payload), TURBO_EPROTO);
+    check_equal(flowmq_protocol_flow_update_encode(&update, update_payload), SALTS_EPROTO);
     check_equal(flowmq_protocol_flow_update_decode(vstr_from_buf((const char *)update_payload, 23u),
                                                    &update),
-                TURBO_EPROTO);
+                SALTS_EPROTO);
   }
 
   it("enforces FMQ/6 control-frame metadata") {
@@ -162,26 +162,26 @@ spec("flowmq_protocol") {
     tstr encoded = NULL;
     size_t consumed = 0u;
 
-    check_equal(flowmq_protocol_settings_encode(&settings, payload), TURBO_OK);
+    check_equal(flowmq_protocol_settings_encode(&settings, payload), SALTS_OK);
     frame.kind = FLOWMQ_PROTOCOL_FRAME_SETTINGS;
     frame.pattern = FLOWMQ_PROTOCOL_PAIR;
     frame.payload = vstr_from_buf((const char *)payload, sizeof(payload));
-    check_equal(flowmq_protocol_encode_frame(&frame, 1024u, &encoded), TURBO_OK);
+    check_equal(flowmq_protocol_encode_frame(&frame, 1024u, &encoded), SALTS_OK);
     check_equal(
         flowmq_protocol_decode_frame(encoded, tstr_len(encoded), 1024u, &decoded, &consumed),
-        TURBO_OK);
+        SALTS_OK);
     check_equal(decoded.kind, FLOWMQ_PROTOCOL_FRAME_SETTINGS);
     flowmq_protocol_frame_cleanup(&decoded);
     tstr_freep(&encoded);
 
     frame.message_id = 1u;
-    check_equal(flowmq_protocol_encode_frame(&frame, 1024u, &encoded), TURBO_EPROTO);
+    check_equal(flowmq_protocol_encode_frame(&frame, 1024u, &encoded), SALTS_EPROTO);
     frame.message_id = 0u;
     frame.topic = vstr_from_cstr("forbidden");
-    check_equal(flowmq_protocol_encode_frame(&frame, 1024u, &encoded), TURBO_EPROTO);
+    check_equal(flowmq_protocol_encode_frame(&frame, 1024u, &encoded), SALTS_EPROTO);
     frame.topic = vstr_from_buf(NULL, 0u);
     frame.payload.len--;
-    check_equal(flowmq_protocol_encode_frame(&frame, 1024u, &encoded), TURBO_EPROTO);
+    check_equal(flowmq_protocol_encode_frame(&frame, 1024u, &encoded), SALTS_EPROTO);
   }
 
   it("preserves the multipart-more bit across encode and decode") {
@@ -196,9 +196,9 @@ spec("flowmq_protocol") {
     input.more = 1;
     input.payload = vstr_from_cstr("part-1");
 
-    check_equal(flowmq_protocol_encode_frame(&input, 1024u, &encoded), TURBO_OK);
+    check_equal(flowmq_protocol_encode_frame(&input, 1024u, &encoded), SALTS_OK);
     check_equal(flowmq_protocol_decode_frame(encoded, tstr_len(encoded), 1024u, &output, &consumed),
-                TURBO_OK);
+                SALTS_OK);
     check_equal(output.more, 1);
     check_equal(consumed, tstr_len(encoded));
     check_true(vstr_eq(output.payload, input.payload));
@@ -214,7 +214,7 @@ spec("flowmq_protocol") {
     input.kind = FLOWMQ_PROTOCOL_FRAME_HELLO;
     input.pattern = FLOWMQ_PROTOCOL_PAIR;
     input.more = 1;
-    check_equal(flowmq_protocol_encode_frame(&input, 1024u, &encoded), TURBO_EPROTO);
+    check_equal(flowmq_protocol_encode_frame(&input, 1024u, &encoded), SALTS_EPROTO);
     check_null(encoded);
   }
 
@@ -231,8 +231,8 @@ spec("flowmq_protocol") {
     input.identity = vstr_from_cstr("publisher");
     input.topic = vstr_from_cstr("events.created");
     input.payload = vstr_from_buf(payload, sizeof(payload));
-    check_equal(flowmq_protocol_encode_frame(&input, 1024u, &contiguous), TURBO_OK);
-    check_equal(flowmq_protocol_encode_frame_segmented(&input, 1024u, &segmented), TURBO_OK);
+    check_equal(flowmq_protocol_encode_frame(&input, 1024u, &contiguous), SALTS_OK);
+    check_equal(flowmq_protocol_encode_frame_segmented(&input, 1024u, &segmented), SALTS_OK);
     check_equal(segmented.segment_count, 2u);
     check_true(segmented.segments[1].data == payload);
     check_equal(segmented.encoded_size, tstr_len(contiguous));
@@ -259,9 +259,9 @@ spec("flowmq_protocol") {
     input.message_id = 9u;
     input.topic = vstr_from_cstr("bulk");
     input.payload = vstr_from_buf(payload, sizeof(payload));
-    check_equal(flowmq_protocol_encode_frame(&input, sizeof(payload) + 4u, &contiguous), TURBO_OK);
+    check_equal(flowmq_protocol_encode_frame(&input, sizeof(payload) + 4u, &contiguous), SALTS_OK);
     check_equal(flowmq_protocol_encode_frame_segmented(&input, sizeof(payload) + 4u, &segmented),
-                TURBO_OK);
+                SALTS_OK);
     check_equal(segmented.segment_count, 4u);
     check_true(segmented.segments[1].data == payload);
     check_true(segmented.segments[3].data == payload + FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE);
@@ -299,11 +299,11 @@ spec("flowmq_protocol") {
     input.payload = vstr_from_buf(payload, sizeof(payload));
     check_equal(flowmq_protocol_encode_frame(&input, sizeof(payload) + 9u,
                                              &contiguous),
-                TURBO_OK);
+                SALTS_OK);
     check_equal(flowmq_protocol_encode_frame_segmented_into_internal(
                     &input, sizeof(payload) + 9u, segments, SEGMENT_CAPACITY,
                     framing, sizeof(framing), &segment_count, &encoded_size),
-                TURBO_OK);
+                SALTS_OK);
     check_equal(segment_count, (size_t)SEGMENT_CAPACITY);
     check_equal(encoded_size, tstr_len(contiguous));
     check_true(segments[1].data == payload);
@@ -322,14 +322,14 @@ spec("flowmq_protocol") {
                     &input, sizeof(payload) + 9u, segments,
                     SEGMENT_CAPACITY - 1u, framing, sizeof(framing),
                     &segment_count, &encoded_size),
-                TURBO_ENOSPC);
+                SALTS_ENOSPC);
     check_equal(segment_count, 0u);
     check_equal(encoded_size, 0u);
     check_equal(flowmq_protocol_encode_frame_segmented_into_internal(
                     &input, sizeof(payload) + 9u, segments, SEGMENT_CAPACITY,
                     framing, sizeof(framing) - 1u, &segment_count,
                     &encoded_size),
-                TURBO_ENOSPC);
+                SALTS_ENOSPC);
     check_equal(segment_count, 0u);
     check_equal(encoded_size, 0u);
 
@@ -348,8 +348,8 @@ spec("flowmq_protocol") {
     input.message_id = 11u;
     input.identity = vstr_from_cstr("client");
     input.topic = vstr_from_cstr("empty");
-    check_equal(flowmq_protocol_encode_frame(&input, 1024u, &contiguous), TURBO_OK);
-    check_equal(flowmq_protocol_encode_frame_segmented(&input, 1024u, &segmented), TURBO_OK);
+    check_equal(flowmq_protocol_encode_frame(&input, 1024u, &contiguous), SALTS_OK);
+    check_equal(flowmq_protocol_encode_frame_segmented(&input, 1024u, &segmented), SALTS_OK);
     check_equal(segmented.segment_count, 1u);
     flat = flowmq_protocol_test_flatten(&segmented);
     check_not_null(flat);
@@ -370,9 +370,9 @@ spec("flowmq_protocol") {
     input.message_id = 13u;
     input.payload = vstr_from_cstr("payload");
     segmented.encoded_size = 1u;
-    check_equal(flowmq_protocol_encode_frame_segmented(&input, 1024u, &segmented), TURBO_EINVAL);
+    check_equal(flowmq_protocol_encode_frame_segmented(&input, 1024u, &segmented), SALTS_EINVAL);
     segmented.encoded_size = 0u;
-    check_equal(flowmq_protocol_encode_frame_segmented(&input, 3u, &segmented), TURBO_EMSGSIZE);
+    check_equal(flowmq_protocol_encode_frame_segmented(&input, 3u, &segmented), SALTS_EMSGSIZE);
     flowmq_protocol_segmented_frame_cleanup(NULL);
   }
 
@@ -391,12 +391,12 @@ spec("flowmq_protocol") {
     input.topic = vstr_from_cstr("orders.created");
     input.payload = vstr_from_buf(payload, sizeof(payload));
 
-    check_equal(flowmq_protocol_encode_frame(&input, 1024u, &encoded), TURBO_OK);
+    check_equal(flowmq_protocol_encode_frame(&input, 1024u, &encoded), SALTS_OK);
     check_equal(flowmq_protocol_decode_frame(encoded, FLOWMQ_PROTOCOL_HEADER_SIZE - 1u, 1024u,
                                              &output, &consumed),
                 FLOWMQ_PROTOCOL_INCOMPLETE);
     check_equal(flowmq_protocol_decode_frame(encoded, tstr_len(encoded), 1024u, &output, &consumed),
-                TURBO_OK);
+                SALTS_OK);
     check_equal(output.kind, FLOWMQ_PROTOCOL_FRAME_DATA);
     check_equal(output.pattern, FLOWMQ_PROTOCOL_PUB);
     check_equal(output.payload.len, sizeof(payload));
@@ -422,10 +422,10 @@ spec("flowmq_protocol") {
     input.message_id = UINT64_C(0x1020304050607080);
     input.payload = vstr_from_buf(payload, sizeof(payload));
 
-    check_equal(flowmq_protocol_encode_frame(&input, sizeof(payload), &encoded), TURBO_OK);
+    check_equal(flowmq_protocol_encode_frame(&input, sizeof(payload), &encoded), SALTS_OK);
     check_equal(flowmq_protocol_decode_frame(encoded, tstr_len(encoded), sizeof(payload), &output,
                                              &consumed),
-                TURBO_OK);
+                SALTS_OK);
     check_not_null(output.owned_payload);
     check_equal(output.payload.len, sizeof(payload));
     check_equal(output.payload.data, payload, sizeof(payload));
@@ -445,8 +445,8 @@ spec("flowmq_protocol") {
     input.method = vstr_from_cstr("token");
     input.secret = vstr_from_cstr("credential");
     input.channel_binding = vstr_from_buf(binding, sizeof(binding));
-    check_equal(flowmq_security_encode(&input, &payload), TURBO_OK);
-    check_equal(flowmq_security_decode(tstr_to_v(payload), &output), TURBO_OK);
+    check_equal(flowmq_security_encode(&input, &payload), SALTS_OK);
+    check_equal(flowmq_security_decode(tstr_to_v(payload), &output), SALTS_OK);
     check_equal(output.mode, FLOWMQ_SECURITY_AUTH);
     check_equal(output.identity.len, sizeof("client-a") - 1u);
     check_equal(output.identity.data, "client-a", sizeof("client-a") - 1u);
@@ -458,8 +458,8 @@ spec("flowmq_protocol") {
 
     payload = NULL;
     input.channel_binding = vstr_from_buf(NULL, 0u);
-    check_equal(flowmq_security_encode(&input, &payload), TURBO_OK);
-    check_equal(flowmq_security_decode(tstr_to_v(payload), &output), TURBO_OK);
+    check_equal(flowmq_security_encode(&input, &payload), SALTS_OK);
+    check_equal(flowmq_security_decode(tstr_to_v(payload), &output), SALTS_OK);
     check_equal(output.channel_binding.len, 0u);
     tstr_free(payload);
   }
@@ -475,16 +475,16 @@ spec("flowmq_protocol") {
 
     security.mode = FLOWMQ_SECURITY_ACCEPTED;
     security.channel_binding = vstr_from_buf(binding, sizeof(binding));
-    check_equal(flowmq_security_encode(&security, &payload), TURBO_OK);
+    check_equal(flowmq_security_encode(&security, &payload), SALTS_OK);
     input.kind = FLOWMQ_PROTOCOL_FRAME_HELLO;
     input.pattern = FLOWMQ_PROTOCOL_PUB;
     input.topic = vstr_from_cstr("secure");
     input.payload = tstr_to_v(payload);
-    check_equal(flowmq_protocol_encode_frame(&input, 1024u, &encoded), TURBO_OK);
+    check_equal(flowmq_protocol_encode_frame(&input, 1024u, &encoded), SALTS_OK);
     check_equal(flowmq_protocol_decode_frame(encoded, tstr_len(encoded), 1024u, &output, &consumed),
-                TURBO_OK);
+                SALTS_OK);
     check_equal(output.kind, FLOWMQ_PROTOCOL_FRAME_HELLO);
-    check_equal(flowmq_security_decode(output.payload, &security), TURBO_OK);
+    check_equal(flowmq_security_decode(output.payload, &security), SALTS_OK);
     check_equal(security.mode, FLOWMQ_SECURITY_ACCEPTED);
     flowmq_protocol_frame_cleanup(&output);
     tstr_free(encoded);
@@ -504,15 +504,15 @@ spec("flowmq_protocol") {
     frame.kind = FLOWMQ_PROTOCOL_FRAME_HELLO;
     frame.pattern = FLOWMQ_PROTOCOL_DEALER;
     frame.identity = vstr_from_cstr("client-a");
-    check_equal(flowmq_protocol_encode_frame(&frame, 1024u, &encoded), TURBO_OK);
+    check_equal(flowmq_protocol_encode_frame(&frame, 1024u, &encoded), SALTS_OK);
     encoded[4] = 5u;
     check_equal(
         flowmq_protocol_decode_frame(encoded, tstr_len(encoded), 1024u, &decoded, &consumed),
-        TURBO_EPROTO);
+        SALTS_EPROTO);
     encoded[4] = FLOWMQ_PROTOCOL_WIRE_VERSION + 1u;
     check_equal(
         flowmq_protocol_decode_frame(encoded, tstr_len(encoded), 1024u, &decoded, &consumed),
-        TURBO_EPROTO);
+        SALTS_EPROTO);
     encoded[4] = FLOWMQ_PROTOCOL_WIRE_VERSION;
     encoded[24] = 0;
     encoded[25] = 0;
@@ -520,7 +520,7 @@ spec("flowmq_protocol") {
     encoded[27] = 1;
     check_equal(
         flowmq_protocol_decode_frame(encoded, tstr_len(encoded), 1024u, &decoded, &consumed),
-        TURBO_EPROTO);
+        SALTS_EPROTO);
     tstr_free(encoded);
 
     security.mode = FLOWMQ_SECURITY_AUTH;
@@ -528,16 +528,16 @@ spec("flowmq_protocol") {
     security.method = vstr_from_cstr("token");
     security.secret = vstr_from_cstr("secret");
     security.channel_binding = vstr_from_buf(binding, sizeof(binding));
-    check_equal(flowmq_security_encode(&security, &security_payload), TURBO_EPROTO);
+    check_equal(flowmq_security_encode(&security, &security_payload), SALTS_EPROTO);
     check_null(security_payload);
 
     security.identity = vstr_from_cstr("client-a");
-    check_equal(flowmq_security_encode(&security, &security_payload), TURBO_OK);
+    check_equal(flowmq_security_encode(&security, &security_payload), SALTS_OK);
     security_payload[3] = '2';
-    check_equal(flowmq_security_decode(tstr_to_v(security_payload), &security), TURBO_EPROTO);
+    check_equal(flowmq_security_decode(tstr_to_v(security_payload), &security), SALTS_EPROTO);
     security_payload[3] = '3';
     security_payload[FLOWMQ_SECURITY_HEADER_SIZE + 2u] = '\0';
-    check_equal(flowmq_security_decode(tstr_to_v(security_payload), &security), TURBO_EPROTO);
+    check_equal(flowmq_security_decode(tstr_to_v(security_payload), &security), SALTS_EPROTO);
     tstr_free(security_payload);
 
     security_payload = NULL;
@@ -545,7 +545,7 @@ spec("flowmq_protocol") {
     security.method = vstr_from_cstr("token");
     security.secret = vstr_from_cstr("secret");
     security.channel_binding = vstr_from_buf(binding, 1u);
-    check_equal(flowmq_security_encode(&security, &security_payload), TURBO_EPROTO);
+    check_equal(flowmq_security_encode(&security, &security_payload), SALTS_EPROTO);
     check_null(security_payload);
   }
 
@@ -557,7 +557,7 @@ spec("flowmq_protocol") {
     frame.kind = FLOWMQ_PROTOCOL_FRAME_SUBSCRIBE;
     frame.pattern = FLOWMQ_PROTOCOL_XSUB;
     frame.identity = vstr_from_cstr("peer");
-    check_equal(flowmq_protocol_encode_frame(&frame, 1024u, &encoded), TURBO_EPROTO);
+    check_equal(flowmq_protocol_encode_frame(&frame, 1024u, &encoded), SALTS_EPROTO);
     check_null(encoded);
   }
 

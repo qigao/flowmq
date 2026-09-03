@@ -27,8 +27,8 @@ target_include_directories(
           ${PROJECT_SOURCE_DIR}/flowmq/src/protocol
           ${PROJECT_SOURCE_DIR}/flowmq/src/protocol/stream)
 target_link_libraries(flowmq_transport
-                      PUBLIC FlowMQ::Core Rocida::Core
-                      PRIVATE Rocida::CNet)
+                      PUBLIC FlowMQ::Core Salts::Core
+                      PRIVATE Salts::CNet)
 
 set(FLOWMQ_TRANSPORT_SOURCES ${FLOWMQ_TRANSPORT_SOURCES} PARENT_SCOPE)
 set(FLOWMQ_TRANSPORT_HEADERS ${FLOWMQ_TRANSPORT_HEADERS} PARENT_SCOPE)

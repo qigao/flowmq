@@ -5,8 +5,8 @@
 #include "flowmq_protocol_catalog.h"
 
 #include "platform.h"
-#include "turbo_error.h"
-#include "turbo_str.h"
+#include "salts_error.h"
+#include "salts_str.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -144,8 +144,8 @@ flowmq_protocol_heartbeat_deadlines_next(const flowmq_protocol_heartbeat_deadlin
 
 /**
  * Encode one complete frame. On success, caller owns *out and releases it with
- * tstr_free(). Returns TURBO_OK, TURBO_EINVAL, TURBO_EPROTO,
- * TURBO_EMSGSIZE, TURBO_ERANGE, or TURBO_ENOMEM.
+ * tstr_free(). Returns SALTS_OK, SALTS_EINVAL, SALTS_EPROTO,
+ * SALTS_EMSGSIZE, SALTS_ERANGE, or SALTS_ENOMEM.
  */
 FLOWMQ_C_API int flowmq_protocol_encode_frame(const flowmq_protocol_frame_t *frame,
                                               size_t max_frame_size, tstr *out);
@@ -155,7 +155,7 @@ FLOWMQ_C_API int flowmq_protocol_encode_frame(const flowmq_protocol_frame_t *fra
  * payload. `out` must be initialized with
  * FLOWMQ_PROTOCOL_SEGMENTED_FRAME_INIT. On success, release framing storage
  * with flowmq_protocol_segmented_frame_cleanup(). Returns the same validation
- * and size errors as flowmq_protocol_encode_frame(), plus TURBO_ENOMEM.
+ * and size errors as flowmq_protocol_encode_frame(), plus SALTS_ENOMEM.
  */
 FLOWMQ_C_API int flowmq_protocol_encode_frame_segmented(const flowmq_protocol_frame_t *frame,
                                                         size_t max_frame_size,
@@ -177,7 +177,7 @@ FLOWMQ_C_API int flowmq_protocol_decode_frame(const char *data, size_t data_len,
 
 /**
  * Borrow the first packet topic directly from encoded bytes. The view remains
- * valid while data is alive and unchanged. Returns TURBO_OK,
+ * valid while data is alive and unchanged. Returns SALTS_OK,
  * FLOWMQ_PROTOCOL_INCOMPLETE, or a concrete validation/size error.
  */
 FLOWMQ_C_API int flowmq_protocol_encoded_topic(const char *data, size_t data_len,
@@ -186,8 +186,8 @@ FLOWMQ_C_API int flowmq_protocol_encoded_topic(const char *data, size_t data_len
 FLOWMQ_C_API void flowmq_protocol_frame_cleanup(flowmq_protocol_frame_t *frame);
 
 /**
- * Return the maximum encoded byte count for max_frame_size. Returns TURBO_OK,
- * TURBO_EINVAL, or TURBO_ERANGE.
+ * Return the maximum encoded byte count for max_frame_size. Returns SALTS_OK,
+ * SALTS_EINVAL, or SALTS_ERANGE.
  */
 FLOWMQ_C_API int flowmq_protocol_encoded_size_limit(size_t max_frame_size, size_t *limit);
 

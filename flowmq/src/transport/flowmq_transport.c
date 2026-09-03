@@ -1,6 +1,6 @@
 #include "flowmq_transport.h"
 
-#include <turbo/error_codes.h>
+#include <salts/error_codes.h>
 
 #include <limits.h>
 
@@ -19,8 +19,8 @@ static int flowmq_power_of_two(size_t value) {
 }
 
 int flowmq_transport_validate(flowmq_transport_t transport) {
-  return transport == FLOWMQ_TRANSPORT_TCP || transport == FLOWMQ_TRANSPORT_TLS ? TURBO_OK
-                                                                                : TURBO_EINVAL;
+  return transport == FLOWMQ_TRANSPORT_TCP || transport == FLOWMQ_TRANSPORT_TLS ? SALTS_OK
+                                                                                : SALTS_EINVAL;
 }
 
 void flowmq_timeouts_resolve(flowmq_timeout_config_t *timeouts, uint64_t fallback_timeout_ms) {
@@ -64,6 +64,6 @@ int flowmq_io_config_validate(const flowmq_io_config_t *config) {
       !flowmq_power_of_two(config->event_capacity) || config->event_capacity < 2u ||
       config->receive_buffer_bytes == 0u || config->tls_io_buffer_bytes < 17u * 1024u ||
       config->tls_io_buffer_bytes > INT_MAX || config->poll_timeout_ms == 0u)
-    return TURBO_EINVAL;
-  return TURBO_OK;
+    return SALTS_EINVAL;
+  return SALTS_OK;
 }

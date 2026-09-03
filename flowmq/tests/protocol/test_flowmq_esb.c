@@ -1,7 +1,7 @@
 #include "flowmq_esb.h"
 #include "flowmq_protocol.h"
 #include "tinytest.h"
-#include "turbo_error.h"
+#include "salts_error.h"
 
 #include <string.h>
 
@@ -15,17 +15,17 @@ spec("flowmq_esb") {
     tstr encoded = NULL;
     size_t encoded_size = 0u;
 
-    check_equal(flowmq_esb_encoded_size(&input, 1024u, &encoded_size), TURBO_OK);
-    check_equal(flowmq_esb_encode(&input, 1024u, &encoded), TURBO_OK);
+    check_equal(flowmq_esb_encoded_size(&input, 1024u, &encoded_size), SALTS_OK);
+    check_equal(flowmq_esb_encode(&input, 1024u, &encoded), SALTS_OK);
     check_equal(tstr_len(encoded), encoded_size);
     check_equal(encoded, "FES1", 4u);
-    check_equal(flowmq_esb_decode(tstr_to_v(encoded), 1024u, &output), TURBO_OK);
+    check_equal(flowmq_esb_decode(tstr_to_v(encoded), 1024u, &output), SALTS_OK);
     check_equal(output.kind, FLOWMQ_ESB_SCATTER_REQUEST);
     check_equal(output.expected_responses, 5u);
     check_equal(output.aggregation_policy, FLOWMQ_ESB_GATHER_ALL);
     check_true(vstr_eq(output.payload, vstr_from_cstr("request")));
     encoded[3] = '0';
-    check_equal(flowmq_esb_decode(tstr_to_v(encoded), 1024u, &output), TURBO_EPROTO);
+    check_equal(flowmq_esb_decode(tstr_to_v(encoded), 1024u, &output), SALTS_EPROTO);
     tstr_free(encoded);
   }
 
@@ -37,8 +37,8 @@ spec("flowmq_esb") {
     flowmq_esb_message_t output;
     tstr encoded = NULL;
 
-    check_equal(flowmq_esb_encode(&input, 1024u, &encoded), TURBO_OK);
-    check_equal(flowmq_esb_decode(tstr_to_v(encoded), 1024u, &output), TURBO_OK);
+    check_equal(flowmq_esb_encode(&input, 1024u, &encoded), SALTS_OK);
+    check_equal(flowmq_esb_decode(tstr_to_v(encoded), 1024u, &output), SALTS_OK);
     check_equal(output.partition_id, 0u);
     check_equal(output.offset, UINT64_C(42));
     check_true(vstr_eq(output.consumer_group, vstr_from_cstr("workers")));
@@ -55,8 +55,8 @@ spec("flowmq_esb") {
     flowmq_esb_message_t output;
     tstr encoded = NULL;
 
-    check_equal(flowmq_esb_encode(&message, 1024u, &encoded), TURBO_OK);
-    check_equal(flowmq_esb_decode(tstr_to_v(encoded), 1024u, &output), TURBO_OK);
+    check_equal(flowmq_esb_encode(&message, 1024u, &encoded), SALTS_OK);
+    check_equal(flowmq_esb_decode(tstr_to_v(encoded), 1024u, &output), SALTS_OK);
     check_equal(output.saga_id, message.saga_id);
     check_equal(output.saga_step, 3u);
     check_equal(output.saga_state, FLOWMQ_ESB_SAGA_COMPENSATING);
@@ -64,16 +64,16 @@ spec("flowmq_esb") {
 
     message = (flowmq_esb_message_t){
         .kind = FLOWMQ_ESB_PRIORITY_PUBLISH, .priority = 0u, .payload = {.data = "low", .len = 3u}};
-    check_equal(flowmq_esb_encode(&message, 1024u, &encoded), TURBO_OK);
-    check_equal(flowmq_esb_decode(tstr_to_v(encoded), 1024u, &output), TURBO_OK);
+    check_equal(flowmq_esb_encode(&message, 1024u, &encoded), SALTS_OK);
+    check_equal(flowmq_esb_decode(tstr_to_v(encoded), 1024u, &output), SALTS_OK);
     check_equal(output.priority, 0u);
     tstr_freep(&encoded);
 
     message = (flowmq_esb_message_t){.kind = FLOWMQ_ESB_CIRCUIT_STATUS,
                                      .circuit_state = FLOWMQ_ESB_CIRCUIT_HALF_OPEN,
                                      .failure_count = 9u};
-    check_equal(flowmq_esb_encode(&message, 1024u, &encoded), TURBO_OK);
-    check_equal(flowmq_esb_decode(tstr_to_v(encoded), 1024u, &output), TURBO_OK);
+    check_equal(flowmq_esb_encode(&message, 1024u, &encoded), SALTS_OK);
+    check_equal(flowmq_esb_decode(tstr_to_v(encoded), 1024u, &output), SALTS_OK);
     check_equal(output.circuit_state, FLOWMQ_ESB_CIRCUIT_HALF_OPEN);
     check_equal(output.failure_count, 9u);
     tstr_free(encoded);
@@ -93,14 +93,14 @@ spec("flowmq_esb") {
     tstr fmq_bytes = NULL;
     size_t consumed = 0u;
 
-    check_equal(flowmq_esb_encode(&esb, 1024u, &esb_bytes), TURBO_OK);
+    check_equal(flowmq_esb_encode(&esb, 1024u, &esb_bytes), SALTS_OK);
     frame.payload = tstr_to_v(esb_bytes);
-    check_equal(flowmq_protocol_encode_frame(&frame, 2048u, &fmq_bytes), TURBO_OK);
+    check_equal(flowmq_protocol_encode_frame(&frame, 2048u, &fmq_bytes), SALTS_OK);
     check_equal(flowmq_protocol_decode_frame(fmq_bytes, tstr_len(fmq_bytes), 2048u, &decoded_frame,
                                              &consumed),
-                TURBO_OK);
+                SALTS_OK);
     check_equal(decoded_frame.kind, FLOWMQ_PROTOCOL_FRAME_DATA);
-    check_equal(flowmq_esb_decode(decoded_frame.payload, 1024u, &decoded_esb), TURBO_OK);
+    check_equal(flowmq_esb_decode(decoded_frame.payload, 1024u, &decoded_esb), SALTS_OK);
     check_equal(decoded_esb.kind, FLOWMQ_ESB_STREAM_PUBLISH);
     check_true(vstr_eq(decoded_esb.payload, vstr_from_cstr("event")));
     flowmq_protocol_frame_cleanup(&decoded_frame);
@@ -115,16 +115,16 @@ spec("flowmq_esb") {
     tstr extended = NULL;
     size_t size;
 
-    check_equal(flowmq_esb_encode(&message, 1024u, &encoded), TURBO_OK);
+    check_equal(flowmq_esb_encode(&message, 1024u, &encoded), SALTS_OK);
     size = tstr_len(encoded);
     encoded[FLOWMQ_ESB_HEADER_SIZE] = (char)0x7f;
-    check_equal(flowmq_esb_decode(tstr_to_v(encoded), 1024u, &output), TURBO_EPROTO);
+    check_equal(flowmq_esb_decode(tstr_to_v(encoded), 1024u, &output), SALTS_EPROTO);
     encoded[FLOWMQ_ESB_HEADER_SIZE] = FLOWMQ_ESB_FIELD_PARTIAL_INDEX;
     extended = tstr_new_len(NULL, size + 1u);
     check_not_null(extended);
     memcpy(extended, encoded, size);
     extended[size] = 0;
-    check_equal(flowmq_esb_decode(tstr_to_v(extended), 1024u, &output), TURBO_EPROTO);
+    check_equal(flowmq_esb_decode(tstr_to_v(extended), 1024u, &output), SALTS_EPROTO);
     tstr_free(extended);
     tstr_free(encoded);
   }
@@ -135,12 +135,12 @@ spec("flowmq_esb") {
                                     .aggregation_policy = FLOWMQ_ESB_GATHER_ALL};
     tstr encoded = NULL;
 
-    check_equal(flowmq_esb_encode(&message, 1024u, &encoded), TURBO_EINVAL);
+    check_equal(flowmq_esb_encode(&message, 1024u, &encoded), SALTS_EINVAL);
     message.expected_responses = 1u;
     message.consumer_group = vstr_from_cstr("not-a-scatter-field");
-    check_equal(flowmq_esb_encode(&message, 1024u, &encoded), TURBO_EPROTO);
+    check_equal(flowmq_esb_encode(&message, 1024u, &encoded), SALTS_EPROTO);
     message.consumer_group = (vstr){0};
-    check_equal(flowmq_esb_encode(&message, FLOWMQ_ESB_HEADER_SIZE, &encoded), TURBO_EMSGSIZE);
+    check_equal(flowmq_esb_encode(&message, FLOWMQ_ESB_HEADER_SIZE, &encoded), SALTS_EMSGSIZE);
     check_null(encoded);
   }
 }

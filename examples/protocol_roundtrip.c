@@ -1,7 +1,7 @@
 #include "flowmq_protocol.h"
 
-#include "turbo_error.h"
-#include "turbo_str.h"
+#include "salts_error.h"
+#include "salts_str.h"
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -27,11 +27,11 @@ int main(void) {
   input.payload = vstr_from_buf(payload, sizeof(payload) - 1u);
 
   rc = flowmq_protocol_encode_frame(&input, EXAMPLE_MAX_FRAME_SIZE, &encoded);
-  if (rc == TURBO_OK)
+  if (rc == SALTS_OK)
     rc = flowmq_protocol_decode_frame(encoded, tstr_len(encoded),
                                       EXAMPLE_MAX_FRAME_SIZE, &output,
                                       &consumed);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     fprintf(stderr, "FlowMQ frame round-trip failed: %d\n", rc);
     tstr_free(encoded);
     return 1;

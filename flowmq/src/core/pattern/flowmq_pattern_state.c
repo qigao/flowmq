@@ -1,6 +1,6 @@
 #include "flowmq_pattern_state.h"
 
-#include "turbo_error.h"
+#include "salts_error.h"
 
 #include <string.h>
 
@@ -18,24 +18,24 @@ int flowmq_pattern_state_init(flowmq_pattern_state_t *state,
                               flowmq_protocol_pattern_t pattern) {
   if (state == NULL || pattern < FLOWMQ_PROTOCOL_PUB ||
       pattern > FLOWMQ_PROTOCOL_XSUB)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   memset(state, 0, sizeof(*state));
   state->pattern = pattern;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int flowmq_pattern_state_send_validate(const flowmq_pattern_state_t *state) {
   if (state == NULL || !flowmq_pattern_can_send(state->pattern))
-    return TURBO_ENOTSUP;
-  if (state->receiving_multipart) return TURBO_EPROTO;
-  if (state->sending_multipart) return TURBO_OK;
+    return SALTS_ENOTSUP;
+  if (state->receiving_multipart) return SALTS_EPROTO;
+  if (state->sending_multipart) return SALTS_OK;
   if (state->pattern == FLOWMQ_PROTOCOL_REQ &&
       state->phase != FLOWMQ_PATTERN_PHASE_READY)
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   if (state->pattern == FLOWMQ_PROTOCOL_REP &&
       state->phase != FLOWMQ_PATTERN_PHASE_REP_SEND_REPLY)
-    return TURBO_EPROTO;
-  return TURBO_OK;
+    return SALTS_EPROTO;
+  return SALTS_OK;
 }
 
 void flowmq_pattern_state_send_commit(flowmq_pattern_state_t *state, int more) {
@@ -50,16 +50,16 @@ void flowmq_pattern_state_send_commit(flowmq_pattern_state_t *state, int more) {
 
 int flowmq_pattern_state_receive_validate(const flowmq_pattern_state_t *state) {
   if (state == NULL || !flowmq_pattern_can_receive(state->pattern))
-    return TURBO_ENOTSUP;
-  if (state->sending_multipart) return TURBO_EPROTO;
-  if (state->receiving_multipart) return TURBO_OK;
+    return SALTS_ENOTSUP;
+  if (state->sending_multipart) return SALTS_EPROTO;
+  if (state->receiving_multipart) return SALTS_OK;
   if (state->pattern == FLOWMQ_PROTOCOL_REQ &&
       state->phase != FLOWMQ_PATTERN_PHASE_REQ_WAIT_REPLY)
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   if (state->pattern == FLOWMQ_PROTOCOL_REP &&
       state->phase != FLOWMQ_PATTERN_PHASE_READY)
-    return TURBO_EPROTO;
-  return TURBO_OK;
+    return SALTS_EPROTO;
+  return SALTS_OK;
 }
 
 void flowmq_pattern_state_receive_commit(flowmq_pattern_state_t *state, int more) {

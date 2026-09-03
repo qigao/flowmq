@@ -4,7 +4,7 @@
 #include "flowmq_export.h"
 #include "flowmq_protocol_catalog.h"
 
-#include "turbo_str.h"
+#include "salts_str.h"
 
 #include <stddef.h>
 
@@ -38,7 +38,7 @@ typedef struct flowmq_security_s {
  *
  * @param security Borrowed validated input fields.
  * @param payload Output initialized to NULL; caller releases success output with tstr_free().
- * @return TURBO_OK, TURBO_EINVAL, TURBO_EPROTO, TURBO_EMSGSIZE, or TURBO_ENOMEM.
+ * @return SALTS_OK, SALTS_EINVAL, SALTS_EPROTO, SALTS_EMSGSIZE, or SALTS_ENOMEM.
  */
 FLOWMQ_C_API int flowmq_security_encode(const flowmq_security_t *security, tstr *payload);
 /**
@@ -46,7 +46,7 @@ FLOWMQ_C_API int flowmq_security_encode(const flowmq_security_t *security, tstr 
  *
  * @param payload Encoded bytes; an empty view represents FLOWMQ_SECURITY_NONE.
  * @param security Output reset to zero before decoding and on malformed input.
- * @return TURBO_OK, TURBO_EINVAL, TURBO_EPROTO, TURBO_EMSGSIZE, or TURBO_ERANGE.
+ * @return SALTS_OK, SALTS_EINVAL, SALTS_EPROTO, SALTS_EMSGSIZE, or SALTS_ERANGE.
  */
 FLOWMQ_C_API int flowmq_security_decode(vstr payload, flowmq_security_t *security);
 

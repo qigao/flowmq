@@ -11,11 +11,11 @@ pattern FSM + routing + bounded message queues
     |
 caller-driven TCP/TLS primitives
     |
-FMQ/6 codec + Rocida CNet
+FMQ/6 codec + Salts CNet
 ```
 
 `FlowMQ::Protocol` 不依赖网络；`FlowMQ::Core` 保存 pattern/session 规则；
-`FlowMQ::Transport` 私有依赖 `Rocida::CNet`。当前 transport 只有 TCP/TLS，未实现
+`FlowMQ::Transport` 私有依赖 `Salts::CNet`。当前 transport 只有 TCP/TLS，未实现
 transport 会在配置边界 fail fast。
 
 物理目录与上述 target 保持一致：
@@ -28,7 +28,7 @@ flowmq/src/core/session/                credit/HWM 与 reconnect policy
 flowmq/src/runtime/                     context/socket/peer owner 与 caller progress
 flowmq/src/transport/cnet/              CNet TCP/TLS 薄适配
 flowmq/src/security/                    TLS principal/identity policy
-flowmq/extensions/media_provider/       FMP/1 schema 与 typed adapter
+flowmq/extensions/media_provider/       FMP/1 schema、TBE wire view 与 validator
 flowmq/tests/、flowmq/benchmarks/       按相同责任分组的验证入口
 ```
 
@@ -83,9 +83,9 @@ application message
 ```
 
 成功 admission 只表示本地 socket 已接管消息。连接建立、CNet write、远端接收与业务处理
-是不同完成边界。`DONTWAIT` 在消息数或 payload byte HWM 满时立即返回 `TURBO_ENOBUFS`；
+是不同完成边界。`DONTWAIT` 在消息数或 payload byte HWM 满时立即返回 `SALTS_ENOBUFS`；
 普通 send 在调用线程内推进所属 socket 后重试。单个 part 或完整 multipart 永远不可能装入
-byte HWM 时返回 `TURBO_EMSGSIZE`。远端累计 credit 耗尽时返回 `TURBO_ENOBUFS`；远端应用
+byte HWM 时返回 `SALTS_EMSGSIZE`。远端累计 credit 耗尽时返回 `SALTS_ENOBUFS`；远端应用
 消费 DATA 并由其 owner 发送 FLOW_UPDATE 后恢复。multipart 的 credit 在 final part 时按完整
 payload 一次提交，失败不会暴露或接纳部分 message。
 PUB/XPUB 的 mute peer 按 ZeroMQ 语义丢弃，PUSH/DEALER/REQ 等模式不静默丢弃。
@@ -111,7 +111,7 @@ buffer；完整 multipart 提交前只存在于对应 peer staging。完整消�
 ## Pattern 状态
 
 - REQ：`SEND_READY -> WAIT_REPLY -> SEND_READY`，非法 send/recv 与 multipart 方向交错立即
-  返回 `TURBO_EPROTO`，不进入阻塞重试。
+  返回 `SALTS_EPROTO`，不进入阻塞重试。
 - REP：`RECV_READY -> SEND_REPLY -> RECV_READY`，reply 绑定最后一个 requester。
 - PUSH/DEALER/REQ：eligible peer round-robin；peer busy 时不形成跨 peer HOL。
 - PULL/SUB/DEALER/ROUTER：当前按网络完成顺序进入全局队列；严格 per-peer fair queue 尚未完成。

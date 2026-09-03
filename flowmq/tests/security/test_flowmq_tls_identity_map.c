@@ -1,7 +1,7 @@
 #include "flowmq_tls_identity_map.h"
 
 #include "tinytest.h"
-#include "turbo_error.h"
+#include "salts_error.h"
 
 #include <string.h>
 
@@ -21,18 +21,18 @@ spec("FlowMQ TLS identity map") {
     config.bindings = bindings;
     config.binding_count = 2u;
     config.policy_generation = 7u;
-    check_equal(flowmq_tls_identity_map_create(&config, &map), TURBO_OK);
+    check_equal(flowmq_tls_identity_map_create(&config, &map), SALTS_OK);
     check_not_null(map);
     check_equal(flowmq_tls_identity_map_generation(map), 7u);
     check_equal(flowmq_tls_identity_map_verify(
                      map, cert_a, vstr_from_cstr("mesh-agent:node-01")),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(flowmq_tls_identity_map_verify(
                      map, cert_b, vstr_from_cstr("mesh-agent:node-01")),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(flowmq_tls_identity_map_verify(
                      map, cert_a, vstr_from_cstr("meshd:node-01")),
-                 TURBO_EPERM);
+                 SALTS_EPERM);
     flowmq_tls_identity_map_destroy(map);
   }
 
@@ -49,12 +49,12 @@ spec("FlowMQ TLS identity map") {
     binding.hello_identity = identity;
     config.bindings = &binding;
     config.binding_count = 1u;
-    check_equal(flowmq_tls_identity_map_create(&config, &map), TURBO_OK);
+    check_equal(flowmq_tls_identity_map_create(&config, &map), SALTS_OK);
     memset(fingerprint, 'x', sizeof(fingerprint) - 1u);
     identity[0] = 'x';
     check_equal(flowmq_tls_identity_map_verify(
                      map, cert_a, vstr_from_cstr("mesh-agent:node-01")),
-                 TURBO_OK);
+                 SALTS_OK);
     flowmq_tls_identity_map_destroy(map);
   }
 
@@ -67,15 +67,15 @@ spec("FlowMQ TLS identity map") {
     flowmq_tls_identity_map_t *map = NULL;
     config.bindings = bindings;
     config.binding_count = 2u;
-    check_equal(flowmq_tls_identity_map_create(&config, &map), TURBO_EINVAL);
+    check_equal(flowmq_tls_identity_map_create(&config, &map), SALTS_EINVAL);
     check_null(map);
     bindings[1].certificate_sha256 =
         "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-    check_equal(flowmq_tls_identity_map_create(&config, &map), TURBO_EINVAL);
+    check_equal(flowmq_tls_identity_map_create(&config, &map), SALTS_EINVAL);
     check_null(map);
     bindings[1].certificate_sha256 = cert_b;
     config.max_total_string_bytes = 1u;
-    check_equal(flowmq_tls_identity_map_create(&config, &map), TURBO_ERANGE);
+    check_equal(flowmq_tls_identity_map_create(&config, &map), SALTS_ERANGE);
     check_null(map);
   }
 }

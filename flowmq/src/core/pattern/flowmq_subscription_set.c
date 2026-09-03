@@ -1,19 +1,19 @@
 #include "flowmq_subscription_set.h"
 
 #include "flowmq_stl_error_internal.h"
-#include "turbo_error.h"
+#include "salts_error.h"
 
 #include <stdint.h>
 #include <string.h>
 
 int flowmq_subscription_set_init(flowmq_subscription_set_t *subscriptions) {
   int rc;
-  if (!subscriptions || subscriptions->initialized) return TURBO_EINVAL;
+  if (!subscriptions || subscriptions->initialized) return SALTS_EINVAL;
   rc = vec_init_bytes(&subscriptions->entries, sizeof(flowmq_subscription_t),
                             _Alignof(flowmq_subscription_t), SIZE_MAX);
   if (rc != STL_OK) return flowmq_stl_error((stl_status)rc);
   subscriptions->initialized = 1;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 void flowmq_subscription_set_clear(flowmq_subscription_set_t *subscriptions) {
@@ -38,7 +38,7 @@ void flowmq_subscription_set_destroy(flowmq_subscription_set_t *subscriptions) {
 int flowmq_subscription_set_update(flowmq_subscription_set_t *subscriptions, int subscribe,
                                    vstr topic, int *changed) {
   if (!subscriptions || !subscriptions->initialized || !changed || (topic.len > 0u && !topic.data))
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   *changed = 0;
   for (size_t i = 0u; i < vec_size(&subscriptions->entries); ++i) {
     flowmq_subscription_t *existing =
@@ -48,7 +48,7 @@ int flowmq_subscription_set_update(flowmq_subscription_set_t *subscriptions, int
         (topic.len > 0u && memcmp(existing->topic, topic.data, topic.len) != 0))
       continue;
     if (subscribe) {
-      if (existing->refs == SIZE_MAX) return TURBO_ERANGE;
+      if (existing->refs == SIZE_MAX) return SALTS_ERANGE;
       existing->refs += 1u;
     } else if (existing->refs > 1u) {
       existing->refs -= 1u;
@@ -59,21 +59,21 @@ int flowmq_subscription_set_update(flowmq_subscription_set_t *subscriptions, int
       tstr_freep(&removed.topic);
     }
     *changed = 1;
-    return TURBO_OK;
+    return SALTS_OK;
   }
-  if (!subscribe) return TURBO_OK;
+  if (!subscribe) return SALTS_OK;
   {
     flowmq_subscription_t value = {0};
     int rc;
     value.topic = tstr_new_len(topic.data, topic.len);
     value.refs = 1u;
-    if (!value.topic) return TURBO_ENOMEM;
+    if (!value.topic) return SALTS_ENOMEM;
     rc = vec_push(&subscriptions->entries, &value);
     if (rc != STL_OK) tstr_free(value.topic);
     if (rc != STL_OK) return flowmq_stl_error((stl_status)rc);
   }
   *changed = 1;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 size_t flowmq_subscription_set_count(const flowmq_subscription_set_t *subscriptions) {

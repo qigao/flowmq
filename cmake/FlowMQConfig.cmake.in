@@ -2,8 +2,24 @@
 
 include(CMakeFindDependencyMacro)
 find_dependency(Threads REQUIRED)
-find_dependency(Rocida CONFIG REQUIRED)
-find_dependency(TurboParser CONFIG REQUIRED)
+if(NOT DEFINED ENV{SALTS_ROOT} OR "$ENV{SALTS_ROOT}" STREQUAL "")
+  set(FlowMQ_FOUND FALSE)
+  set(FlowMQ_NOT_FOUND_MESSAGE
+      "SALTS_ROOT must name the installed Salts profile")
+  return()
+endif()
+if(NOT DEFINED ENV{SALTS_UTILS_ROOT} OR "$ENV{SALTS_UTILS_ROOT}" STREQUAL "")
+  set(FlowMQ_FOUND FALSE)
+  set(FlowMQ_NOT_FOUND_MESSAGE
+      "SALTS_UTILS_ROOT must name the installed SaltsUtils profile")
+  return()
+endif()
+file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" FLOWMQ_SALTS_ROOT_PATH)
+file(TO_CMAKE_PATH "$ENV{SALTS_UTILS_ROOT}" FLOWMQ_SALTS_UTILS_ROOT_PATH)
+find_dependency(Salts CONFIG REQUIRED PATHS "${FLOWMQ_SALTS_ROOT_PATH}"
+                NO_DEFAULT_PATH)
+find_dependency(SaltsUtils CONFIG REQUIRED PATHS "${FLOWMQ_SALTS_UTILS_ROOT_PATH}"
+                NO_DEFAULT_PATH)
 
 include("${CMAKE_CURRENT_LIST_DIR}/FlowMQTargets.cmake")
 

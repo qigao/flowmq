@@ -34,31 +34,43 @@ include(Sanitizers)
 include(CmakeUtils)
 
 
+foreach(_flowmq_dependency_root IN ITEMS SALTS_ROOT SALTS_UTILS_ROOT)
+  if(NOT DEFINED ENV{${_flowmq_dependency_root}} OR
+     "$ENV{${_flowmq_dependency_root}}" STREQUAL "")
+    message(FATAL_ERROR
+            "${_flowmq_dependency_root} must name an installed dependency profile")
+  endif()
+  file(TO_CMAKE_PATH "$ENV{${_flowmq_dependency_root}}"
+       FLOWMQ_${_flowmq_dependency_root}_PATH)
+  if(NOT IS_DIRECTORY "${FLOWMQ_${_flowmq_dependency_root}_PATH}")
+    message(FATAL_ERROR
+            "${_flowmq_dependency_root} is not a directory: $ENV{${_flowmq_dependency_root}}")
+  endif()
+endforeach()
+
 find_package(
-  Rocida CONFIG REQUIRED
-  PATHS "$ENV{ROCIDA_ROOT}"
+  Salts CONFIG REQUIRED
+  PATHS "${FLOWMQ_SALTS_ROOT_PATH}"
   NO_DEFAULT_PATH)
 find_package(
-  TurboParser CONFIG REQUIRED
-  PATHS "$ENV{TURBOPARSER_ROOT}"
+  SaltsUtils CONFIG REQUIRED
+  PATHS "${FLOWMQ_SALTS_UTILS_ROOT_PATH}"
   NO_DEFAULT_PATH)
 find_package(OpenSSL CONFIG REQUIRED)
 
 unset(FLOWMQ_TBE_COMPILER_EXECUTABLE)
 unset(FLOWMQ_TBE_COMPILER_EXECUTABLE CACHE)
 find_program(FLOWMQ_TBE_COMPILER_EXECUTABLE NAMES tbe_compiler
-             PATHS "$ENV{TURBOPARSER_ROOT}/bin"
+             PATHS "${FLOWMQ_SALTS_UTILS_ROOT_PATH}/bin"
              NO_DEFAULT_PATH)
 if(NOT FLOWMQ_TBE_COMPILER_EXECUTABLE)
   message(FATAL_ERROR
-    "FlowMQ media-provider contract requires the TurboParser tbe_compiler")
+    "FlowMQ media-provider contract requires the SaltsUtils tbe_compiler")
 endif()
 
 set(FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS
-    "PATH=path_list_prepend:$<TARGET_FILE_DIR:Rocida::CNet>"
-    "PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboParser::Parser>"
-    "PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboParser::DataBind>"
-    "PATH=path_list_prepend:$<TARGET_FILE_DIR:Rocida::Core>")
+    "PATH=path_list_prepend:$<TARGET_FILE_DIR:Salts::CNet>"
+    "PATH=path_list_prepend:$<TARGET_FILE_DIR:Salts::Core>")
 if(WIN32)
   list(APPEND FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS
        "PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenSSL::SSL>")
@@ -81,7 +93,6 @@ add_library(flowmq SHARED
             ${FLOWMQ_PROTOCOL_SOURCES}
             ${FLOWMQ_CORE_SOURCES}
             ${FLOWMQ_TRANSPORT_SOURCES}
-            ${FLOWMQ_MEDIA_PROVIDER_GENERATED_SOURCE}
             ${FLOWMQ_MEDIA_PROVIDER_SOURCE}
             ${FLOWMQ_PROTOCOL_HEADERS}
             ${FLOWMQ_CORE_HEADERS}
@@ -94,7 +105,6 @@ cmake_config_target(
   ALIAS FlowMQ::FlowMQ
   FOLDER "flowmq"
   EXPORT_NAME FlowMQ)
-target_compile_definitions(flowmq PRIVATE TBE_GENERATED_BUILD_SHARED)
 if(WIN32)
   target_compile_definitions(
     flowmq
@@ -112,8 +122,8 @@ target_include_directories(
           ${CMAKE_CURRENT_SOURCE_DIR}/flowmq/src/core/session
           ${CMAKE_CURRENT_SOURCE_DIR}/flowmq/src/transport/cnet)
 target_link_libraries(flowmq
-                      PUBLIC Rocida::Core TurboParser::Parser TurboParser::DataBind
-                      PRIVATE Rocida::STL Rocida::CMeta Rocida::CNet)
+                      PUBLIC Salts::Core Salts::TbeSchema
+                      PRIVATE Salts::CSTL Salts::CMeta Salts::CNet)
 if(TARGET flowmq_media_provider_codegen)
   add_dependencies(flowmq flowmq_media_provider_codegen)
 endif()

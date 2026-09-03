@@ -2,8 +2,8 @@
 #include "flowmq_protocol_internal.h"
 
 #include "tinytest.h"
-#include "turbo_error.h"
-#include "turbo_str.h"
+#include "salts_error.h"
+#include "salts_str.h"
 
 #include <string.h>
 
@@ -31,7 +31,7 @@ static void bench_protocol_roundtrip(size_t payload_size, size_t samples, const 
   size_t consumed = 0u;
   size_t encoded_size = 0u;
   size_t segment_count = 0u;
-  int rc = TURBO_OK;
+  int rc = SALTS_OK;
 
   memset(payload, 0x5a, payload_size);
   memset(&input, 0, sizeof(input));
@@ -42,24 +42,24 @@ static void bench_protocol_roundtrip(size_t payload_size, size_t samples, const 
   input.topic = vstr_from_cstr("bench.protocol");
   input.payload = vstr_from_buf(payload, payload_size);
 
-  check_equal(flowmq_protocol_encode_frame(&input, BENCH_MAX_FRAME_BYTES, &encoded), TURBO_OK);
+  check_equal(flowmq_protocol_encode_frame(&input, BENCH_MAX_FRAME_BYTES, &encoded), SALTS_OK);
   memset(&output, 0, sizeof(output));
   check_equal(flowmq_protocol_decode_frame(encoded, tstr_len(encoded), BENCH_MAX_FRAME_BYTES,
                                            &output, &consumed),
-              TURBO_OK);
+              SALTS_OK);
   check_equal(output.payload.len, payload_size);
   check_equal(output.payload.data, payload, payload_size);
   flowmq_protocol_frame_cleanup(&output);
   check_equal(flowmq_protocol_encode_frame_into_internal(
                   &input, BENCH_MAX_FRAME_BYTES, contiguous_storage,
                   sizeof(contiguous_storage), &encoded_size),
-              TURBO_OK);
+              SALTS_OK);
   check_equal(encoded_size, tstr_len(encoded));
   check_equal(flowmq_protocol_encode_frame_segmented_into_internal(
                   &input, BENCH_MAX_FRAME_BYTES, segments,
                   BENCH_SEGMENT_CAPACITY, framing, sizeof(framing),
                   &segment_count, &encoded_size),
-              TURBO_OK);
+              SALTS_OK);
   check_equal(segment_count, (size_t)BENCH_SEGMENT_CAPACITY);
   check_equal(encoded_size, tstr_len(encoded));
   check_true(segments[1].data == payload);
@@ -69,21 +69,21 @@ static void bench_protocol_roundtrip(size_t payload_size, size_t samples, const 
     rc = flowmq_protocol_encode_frame(&input, BENCH_MAX_FRAME_BYTES, &sample);
     tstr_free(sample);
   }
-  check_equal(rc, TURBO_OK);
+  check_equal(rc, SALTS_OK);
 
   benchmark_bytes(encode_into_title, samples, payload_size) {
     rc = flowmq_protocol_encode_frame_into_internal(
         &input, BENCH_MAX_FRAME_BYTES, contiguous_storage,
         sizeof(contiguous_storage), &encoded_size);
   }
-  check_equal(rc, TURBO_OK);
+  check_equal(rc, SALTS_OK);
 
   benchmark_bytes(segmented_title, samples, payload_size) {
     rc = flowmq_protocol_encode_frame_segmented_into_internal(
         &input, BENCH_MAX_FRAME_BYTES, segments, BENCH_SEGMENT_CAPACITY,
         framing, sizeof(framing), &segment_count, &encoded_size);
   }
-  check_equal(rc, TURBO_OK);
+  check_equal(rc, SALTS_OK);
 
   benchmark_bytes(decode_title, samples, payload_size) {
     memset(&output, 0, sizeof(output));
@@ -91,7 +91,7 @@ static void bench_protocol_roundtrip(size_t payload_size, size_t samples, const 
                                       &consumed);
     flowmq_protocol_frame_cleanup(&output);
   }
-  check_equal(rc, TURBO_OK);
+  check_equal(rc, SALTS_OK);
   check_equal(consumed, tstr_len(encoded));
   tstr_free(encoded);
 }
