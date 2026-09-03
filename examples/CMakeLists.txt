@@ -15,13 +15,3 @@ cmake_add_executable(
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/security_hello.c
   LIBS FlowMQ::Protocol
   FOLDER "examples")
-
-cmake_add_executable(
-  flowmq_router_dealer
-  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/router_dealer.c
-  LIBS FlowMQ::Transport
-  FOLDER "examples")
-
-if(WIN32)
-  target_link_libraries(flowmq_router_dealer PRIVATE ws2_32)
-endif()

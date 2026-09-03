@@ -15,7 +15,7 @@ add_custom_command(
   OUTPUT "${FLOWMQ_MEDIA_PROVIDER_GENERATED_HEADER}"
          "${FLOWMQ_MEDIA_PROVIDER_GENERATED_SOURCE}"
   COMMAND "${CMAKE_COMMAND}" -E env
-          "PATH=$<TARGET_FILE_DIR:TurboParser::DataBind>\;$<TARGET_FILE_DIR:TurboParser::Parser>\;$<TARGET_FILE_DIR:TurboUtils::Core>\;$<TARGET_FILE_DIR:OpenSSL::Crypto>\;$ENV{PATH}"
+          "PATH=$<TARGET_FILE_DIR:TurboParser::DataBind>\;$<TARGET_FILE_DIR:TurboParser::Parser>\;$<TARGET_FILE_DIR:Rocida::Core>\;$<TARGET_FILE_DIR:OpenSSL::Crypto>\;$ENV{PATH}"
           "${FLOWMQ_TBE_COMPILER_EXECUTABLE}"
           "${FLOWMQ_MEDIA_PROVIDER_SCHEMA}"
           --lang c

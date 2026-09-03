@@ -16,7 +16,7 @@
  * - Maintains max_priority tracker for O(1) peek
  */
 
-#include <turbostl/deque.h>
+#include <rocida/stl.h>
 #include "turbo_error.h"
 #include "turbo_str.h"
 

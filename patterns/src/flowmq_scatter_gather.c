@@ -6,8 +6,7 @@
 #include "flowmq_scatter_gather.h"
 #include "flowmq_stl_error_internal.h"
 
-#include <turbostl/hash_map.h>
-#include <turbostl/vec.h>
+#include <rocida/stl.h>
 
 #include <string.h>
 

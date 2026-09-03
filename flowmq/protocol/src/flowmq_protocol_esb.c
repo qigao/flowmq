@@ -3,7 +3,7 @@
  * FlowMQ ESB protocol implementation.
  *
  * ESB-specific fields are encoded as TLV (Type-Length-Value) sections in the
- * frame payload. This maintains wire compatibility with FMQ v3 while allowing
+ * frame payload. This keeps ESB values inside the FMQ/5 reserved range while allowing
  * pattern-specific extensions.
  *
  * TLV encoding format:

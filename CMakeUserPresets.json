@@ -62,9 +62,8 @@
                 "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/flowmq-android/debug"
             },
             "environment": {
-                "TURBOUTILS_ROOT": "$env{PKG_ROOT}/turboutils-android/debug",
-                "TURBOPARSER_ROOT": "$env{PKG_ROOT}/turboparser-android/debug",
-                "TURBONET_ROOT": "$env{PKG_ROOT}/turbonet-android/debug"
+                "ROCIDA_ROOT": "$env{PKG_ROOT}/rocida-android/debug",
+                "TURBOPARSER_ROOT": "$env{PKG_ROOT}/turboparser-android/debug"
             }
         },
         {
@@ -74,9 +73,8 @@
                 "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/flowmq-android/release"
             },
             "environment": {
-                "TURBOUTILS_ROOT": "$env{PKG_ROOT}/turboutils-android/release",
-                "TURBOPARSER_ROOT": "$env{PKG_ROOT}/turboparser-android/release",
-                "TURBONET_ROOT": "$env{PKG_ROOT}/turbonet-android/release"
+                "ROCIDA_ROOT": "$env{PKG_ROOT}/rocida-android/release",
+                "TURBOPARSER_ROOT": "$env{PKG_ROOT}/turboparser-android/release"
             }
         },
         {
@@ -87,10 +85,9 @@
                 "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/flowmq/debug"
             },
             "environment": {
-                "TURBOUTILS_ROOT": "$env{PKG_ROOT}/turboutils/debug",
+                "ROCIDA_ROOT": "$env{PKG_ROOT}/rocida/debug",
                 "TURBOPARSER_ROOT": "$env{PKG_ROOT}/turboparser/debug",
-                "TURBONET_ROOT": "$env{PKG_ROOT}/turbonet/debug",
-                "PATH": "${sourceDir}/build/Msvc/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{TURBOUTILS_ROOT}/bin${pathListSep}$env{TURBOPARSER_ROOT}/bin${pathListSep}$env{TURBONET_ROOT}/bin${pathListSep}$penv{PATH}"
+                "PATH": "${sourceDir}/build/Msvc/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{ROCIDA_ROOT}/bin${pathListSep}$env{TURBOPARSER_ROOT}/bin${pathListSep}$penv{PATH}"
             },
             "inherits": ["base-win-dev-user", "win-paths"]
         },
@@ -101,10 +98,9 @@
                 "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/flowmq/release"
             },
             "environment": {
-                "TURBOUTILS_ROOT": "$env{PKG_ROOT}/turboutils/release",
+                "ROCIDA_ROOT": "$env{PKG_ROOT}/rocida/release",
                 "TURBOPARSER_ROOT": "$env{PKG_ROOT}/turboparser/release",
-                "TURBONET_ROOT": "$env{PKG_ROOT}/turbonet/release",
-                "PATH": "${sourceDir}/build/Msvc-Release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{TURBOUTILS_ROOT}/bin${pathListSep}$env{TURBOPARSER_ROOT}/bin${pathListSep}$env{TURBONET_ROOT}/bin${pathListSep}$penv{PATH}"
+                "PATH": "${sourceDir}/build/Msvc-Release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{ROCIDA_ROOT}/bin${pathListSep}$env{TURBOPARSER_ROOT}/bin${pathListSep}$penv{PATH}"
             },
             "inherits": ["base-win-release-user", "win-paths"]
         },
@@ -116,10 +112,9 @@
                 "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/flowmq/debug"
             },
             "environment": {
-                "TURBOUTILS_ROOT": "$env{PKG_ROOT}/turboutils/debug",
+                "ROCIDA_ROOT": "$env{PKG_ROOT}/rocida/debug",
                 "TURBOPARSER_ROOT": "$env{PKG_ROOT}/turboparser/debug",
-                "TURBONET_ROOT": "$env{PKG_ROOT}/turbonet/debug",
-                "LD_LIBRARY_PATH": "${sourceDir}/build/linux-gcc-debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{TURBOUTILS_ROOT}/lib${pathListSep}$env{TURBOPARSER_ROOT}/lib${pathListSep}$env{TURBONET_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
+                "LD_LIBRARY_PATH": "${sourceDir}/build/linux-gcc-debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{ROCIDA_ROOT}/lib${pathListSep}$env{TURBOPARSER_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
             },
             "inherits": ["base-linux-dev-user", "linux-paths"]
         },
@@ -130,10 +125,9 @@
                 "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/flowmq/release"
             },
             "environment": {
-                "TURBOUTILS_ROOT": "$env{PKG_ROOT}/turboutils/release",
+                "ROCIDA_ROOT": "$env{PKG_ROOT}/rocida/release",
                 "TURBOPARSER_ROOT": "$env{PKG_ROOT}/turboparser/release",
-                "TURBONET_ROOT": "$env{PKG_ROOT}/turbonet/release",
-                "LD_LIBRARY_PATH": "${sourceDir}/build/linux-gcc-release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{TURBOUTILS_ROOT}/lib${pathListSep}$env{TURBOPARSER_ROOT}/lib${pathListSep}$env{TURBONET_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
+                "LD_LIBRARY_PATH": "${sourceDir}/build/linux-gcc-release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{ROCIDA_ROOT}/lib${pathListSep}$env{TURBOPARSER_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
             },
             "inherits": ["release-linux-ninja", "linux-paths"]
         },
@@ -148,9 +142,8 @@
                 "BUILD_EXAMPLES": "OFF"
             },
             "environment": {
-                "TURBOUTILS_ROOT": "$env{PKG_ROOT}/turboutils/release",
-                "TURBOPARSER_ROOT": "$env{PKG_ROOT}/turboparser/release",
-                "TURBONET_ROOT": "$env{PKG_ROOT}/turbonet/release"
+                "ROCIDA_ROOT": "$env{PKG_ROOT}/rocida/release",
+                "TURBOPARSER_ROOT": "$env{PKG_ROOT}/turboparser/release"
             },
             "inherits": ["release-linux-ninja", "linux-paths"]
         },

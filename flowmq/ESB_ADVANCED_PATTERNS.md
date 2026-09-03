@@ -1,6 +1,9 @@
 # FlowMQ ESB 高级模式与组合设计
 
-## 一、已实现模式总览
+## 一、模式设计资产总览
+
+本文件描述组合设计。ESB codec 与若干本地状态模块存在，但这些 pattern 尚未接入公开
+`flowmq_socket()` 的 TCP/TLS 数据路径，不能视为端到端可用能力。
 
 ### 基础 FlowMQ Pattern (1-11)
 1. **REQ/REP** - 请求/响应
@@ -9,7 +12,7 @@
 4. **PUSH/PULL** - 管道
 5. **PAIR** - 双向对等
 
-### ESB Pattern (12-21) - 已完整实现
+### ESB Pattern (12-21) - codec/local-state 设计
 6. **SCATTER/GATHER** - 请求分散与响应聚合
 7. **STREAM** - Kafka 风格分区流
 8. **SAGA** - 分布式事务补偿

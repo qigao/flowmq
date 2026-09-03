@@ -1,4 +1,8 @@
-# FlowMQ ESB 消息模式实现总结
+# FlowMQ ESB 协议与本地状态实现总结
+
+> 当前边界：本文记录的是 ESB TLV codec、兼容性判定和本地状态结构。公开
+> `flowmq_socket()` 只接受 ZeroMQ 风格 pattern 0..10，尚未 dispatch ESB pattern
+> 12..21 或 frame kind 7..19；因此下文的“支持/实现”不表示可通过 TCP/TLS socket 使用。
 
 ## 项目概述
 
@@ -6,7 +10,7 @@
 
 **实施时间**: 2025 年（设计 → 实现 → 测试 → 文档）
 
-**状态**: ✅ **Phase 1-4 设计与实现完成**（代码实现 + 单元测试 + 文档 + 集成测试规划）
+**状态**: codec 与本地状态测试已实现；socket/runtime 集成、端到端测试与 benchmark 未实现。
 
 ---
 
@@ -16,9 +20,9 @@
 
 #### 决策 1：TLV 编码方案
 **选择**: 使用 Type-Length-Value 格式嵌入 base frame payload  
-**拒绝**: 扩展 frame header（会破坏 FMQ v3 wire 兼容性）  
+**历史决策**: ESB 扩展没有占用 frame header；FMQ/5 保留 ZeroMQ multipart 的 `MORE` bit，并增加 SETTINGS/FLOW_UPDATE。
 **理由**: 
-- ✓ 保持与现有 FlowMQ v3 协议向后兼容
+- ✓ ESB TLV payload 本身保持稳定；FMQ/5 framing 不与旧 wire version 混连
 - ✓ 旧客户端可安全忽略 payload 内 TLV 字段
 - ✓ 新客户端透明解析 ESB 扩展字段
 - ✓ 未来可扩展更多 TLV 字段类型（12 种已定义）
@@ -50,7 +54,7 @@
 - ✗ 不保留历史分配（Sticky 需要额外状态持久化）
 
 #### 决策 5：数据结构选择
-**选择**: TurboUtils 容器（turbo_hash_map / turbo_deque / turbo_vec / turbo_set）  
+**选择**: Rocida STL 容器
 **拒绝**: 手写数据结构  
 **理由**:
 - ✓ 符合 AGENTS.md "标准库与成熟算法优先" 规范
@@ -267,7 +271,7 @@
 ✅ **简体中文输出**: 所有文档、注释使用简体中文  
 ✅ **Fail Fast 原则**: 无隐式 fallback，边界条件立即返回错误  
 ✅ **数据一致性**: 单一事实源（会话在管理器、消息在分区、offset 在消费者组）  
-✅ **标准库优先**: 使用 TurboUtils 容器，拒绝手写数据结构  
+✅ **公共库优先**: 使用 Rocida STL 容器，拒绝手写数据结构
 ✅ **代码完整性**: 无 TODO/FIXME、无占位返回值、无空函数体  
 ✅ **测试覆盖**: Protocol 层 11 测试、Core 层 22 测试，覆盖正常 / 边界 / 错误路径  
 
@@ -320,7 +324,7 @@
 **FlowMQ ESB 优势**:
 1. 纯 C API，低内存占用，嵌入式友好
 2. Scatter/Gather 原生支持（Kafka/RabbitMQ 需应用层实现）
-3. 向后兼容 FMQ v3 协议（旧客户端无感知）
+3. ESB payload 编码保持稳定；transport framing 统一使用 FMQ/5
 4. Fail fast 设计，错误边界清晰
 
 **FlowMQ ESB 劣势**:
@@ -332,7 +336,7 @@
 
 ## 八、验收结论
 
-### 8.1 功能完整性
+### 8.1 已完成的局部能力
 ✅ **Protocol 层**: TLV 编解码、5 种模式支持、兼容性验证  
 ✅ **Core 层**: Scatter/Gather 状态机、Stream 分区管理、消费者组  
 ✅ **测试覆盖**: 33+ 单元测试，覆盖正常 / 边界 / 错误路径  
@@ -342,7 +346,7 @@
 ✅ **Fail Fast**: 边界条件立即返回错误，无隐式 fallback  
 ✅ **数据一致性**: 单一事实源，明确所有权  
 ✅ **可扩展性**: 预留 pattern 12-31、TLV type 扩展空间  
-✅ **向后兼容**: 不破坏 FMQ v3 wire protocol，旧客户端无感知  
+✅ **Payload 稳定**: ESB TLV 未改变；所有 peer 必须整体使用 FMQ/5
 
 ### 8.3 代码质量
 ✅ **无 TODO/FIXME**: 所有代码功能完整  
@@ -350,7 +354,7 @@
 ✅ **无魔术数字**: 常量定义清晰（MAX_SESSIONS=512、MAX_PARTITIONS=256）  
 ✅ **资源管理清晰**: 初始化 / 销毁成对，内存所有权明确  
 
-### 8.4 待完成工作
+### 8.4 尚未接入的运行时能力
 ⏳ **集成测试**: 需依赖完整 endpoint 实现（参考 ESB_INTEGRATION_TEST_PLAN.md）  
 ⏳ **Benchmark**: 需运行环境支持（参考 ESB_INTEGRATION_TEST_PLAN.md）  
 ⏳ **编译验证**: 需配置 CMake 并构建（cmake --preset win-dev-user && cmake --build build）  
@@ -366,7 +370,7 @@
 
 ### 短期计划（1-2 周）
 4. ⏳ 修复编译错误（若有）
-5. ⏳ 实现 mock endpoint（隔离 CoroNet 依赖）
+5. ⏳ 使用 CNet TCP/TLS socket 集成测试覆盖真实 transport 边界
 6. ⏳ 实现高优先级集成测试（测试场景 1、5）
 
 ### 中期计划（1 个月）
@@ -383,8 +387,8 @@
 
 ## 十、致谢
 
-- **FlowMQ 基础设施**: 提供稳定的 v3 协议、pattern 抽象、frame 编解码
-- **TurboUtils**: 提供高性能容器（hash_map、deque、vec、set）
+- **FlowMQ 基础设施**: 提供 FMQ/5 协议、pattern 抽象、frame 编解码
+- **Rocida STL**: 提供通用容器能力
 - **TinyTest**: 提供轻量级测试框架
 - **AGENTS.md**: 提供清晰的开发规范与质量标准
 
@@ -430,4 +434,4 @@ flowmq/
 
 **最后更新**: 2025-08-19  
 **版本**: v0.1.0-alpha  
-**状态**: ✅ Phase 1-4 完成，等待集成测试与性能验证
+**状态**: codec/local-state 完成；socket runtime 未接入

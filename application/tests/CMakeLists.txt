@@ -2,7 +2,7 @@ cmake_add_test(
   test_flowmq_media_provider_schema
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flowmq_media_provider_schema.c
           ${FLOWMQ_MEDIA_PROVIDER_GENERATED_HEADER}
-  LIBS FlowMQ::FlowMQ TurboUtils::TinyTest
+  LIBS FlowMQ::FlowMQ Rocida::TinyTest
   INCLUDES ${FLOWMQ_MEDIA_PROVIDER_GENERATED_DIR}
   FOLDER "application/tests")
 

@@ -1,7 +1,7 @@
 cmake_add_test(
   test_flowmq_protocol
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flowmq_protocol.c
-  LIBS FlowMQ::Protocol TurboUtils::TinyTest
+  LIBS FlowMQ::Protocol Rocida::TinyTest
   FOLDER "flowmq/protocol/tests")
 
 set_tests_properties(test_flowmq_protocol PROPERTIES LABELS "fmq-release;flowmq-protocol")
@@ -9,7 +9,7 @@ set_tests_properties(test_flowmq_protocol PROPERTIES LABELS "fmq-release;flowmq-
 cmake_add_test(
   test_flowmq_protocol_esb
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flowmq_protocol_esb.c
-  LIBS FlowMQ::Protocol TurboUtils::TinyTest
+  LIBS FlowMQ::Protocol Rocida::TinyTest
   FOLDER "flowmq/protocol/tests")
 
 set_tests_properties(test_flowmq_protocol_esb PROPERTIES LABELS "fmq-release;flowmq-protocol;flowmq-esb")

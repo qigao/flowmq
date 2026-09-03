@@ -6,7 +6,7 @@
 #include <string.h>
 
 spec("flowmq_pattern") {
-  it("defines all FMQ v3 peer relationships") {
+  it("defines all FMQ/5 peer relationships") {
     check_equal(flowmq_core_pattern_validate(FLOWMQ_PROTOCOL_REQ), TURBO_OK);
     check_equal(flowmq_core_pattern_validate(0u), TURBO_EINVAL);
     check_true(flowmq_core_patterns_compatible(FLOWMQ_PROTOCOL_REQ, FLOWMQ_PROTOCOL_REP));
@@ -15,7 +15,11 @@ spec("flowmq_pattern") {
     check_true(flowmq_patterns_compatible(FLOWMQ_PROTOCOL_XPUB, FLOWMQ_PROTOCOL_SUB));
     check_true(flowmq_patterns_compatible(FLOWMQ_PROTOCOL_XPUB, FLOWMQ_PROTOCOL_XSUB));
     check_true(flowmq_patterns_compatible(FLOWMQ_PROTOCOL_REQ, FLOWMQ_PROTOCOL_REP));
+    check_true(flowmq_patterns_compatible(FLOWMQ_PROTOCOL_REQ, FLOWMQ_PROTOCOL_ROUTER));
+    check_true(flowmq_patterns_compatible(FLOWMQ_PROTOCOL_REP, FLOWMQ_PROTOCOL_DEALER));
     check_true(flowmq_patterns_compatible(FLOWMQ_PROTOCOL_ROUTER, FLOWMQ_PROTOCOL_DEALER));
+    check_true(flowmq_patterns_compatible(FLOWMQ_PROTOCOL_ROUTER, FLOWMQ_PROTOCOL_ROUTER));
+    check_true(flowmq_patterns_compatible(FLOWMQ_PROTOCOL_DEALER, FLOWMQ_PROTOCOL_DEALER));
     check_false(flowmq_patterns_compatible(FLOWMQ_PROTOCOL_REQ, FLOWMQ_PROTOCOL_DEALER));
   }
 
@@ -32,6 +36,28 @@ spec("flowmq_pattern") {
     check_equal(flowmq_pattern_hello_validate(FLOWMQ_PROTOCOL_ROUTER, &hello), TURBO_EPROTO);
   }
 
+  it("rejects an unbound FMS/3 envelope at the socket handshake boundary") {
+    flowmq_protocol_security_t security = {
+        .mode = FLOWMQ_PROTOCOL_SECURITY_AUTH,
+        .identity = vstr_from_cstr("worker-1"),
+        .method = vstr_from_cstr("token"),
+        .secret = vstr_from_cstr("unverified")};
+    flowmq_protocol_frame_t hello = {
+        .kind = FLOWMQ_PROTOCOL_FRAME_HELLO,
+        .pattern = FLOWMQ_PROTOCOL_DEALER,
+        .identity = {.data = "worker-1", .len = 8u}};
+    tstr payload = NULL;
+
+    check_equal(flowmq_protocol_security_encode(&security, &payload), TURBO_OK);
+    hello.payload = tstr_to_v(payload);
+    check_equal(flowmq_pattern_hello_validate(FLOWMQ_PROTOCOL_ROUTER, &hello),
+                TURBO_OK);
+    check_equal(flowmq_pattern_socket_hello_validate(FLOWMQ_PROTOCOL_ROUTER,
+                                                      &hello),
+                TURBO_EPROTO);
+    tstr_free(payload);
+  }
+
   it("rejects data received by send-only roles") {
     flowmq_protocol_frame_t frame;
     memset(&frame, 0, sizeof(frame));
@@ -41,6 +67,40 @@ spec("flowmq_pattern") {
     check_equal(flowmq_pattern_data_direction_validate(FLOWMQ_PROTOCOL_PUB, &frame), TURBO_EPROTO);
     frame.pattern = FLOWMQ_PROTOCOL_PUB;
     check_equal(flowmq_pattern_data_direction_validate(FLOWMQ_PROTOCOL_SUB, &frame), TURBO_OK);
+    frame.pattern = FLOWMQ_PROTOCOL_XSUB;
+    check_equal(flowmq_pattern_data_direction_validate(FLOWMQ_PROTOCOL_XPUB, &frame),
+                TURBO_EPROTO);
+  }
+
+  it("accepts subscription controls only on PUB and XPUB peers") {
+    flowmq_protocol_frame_t frame = {0};
+    frame.kind = FLOWMQ_PROTOCOL_FRAME_SUBSCRIBE;
+    frame.pattern = FLOWMQ_PROTOCOL_SUB;
+    frame.topic = vstr_from_cstr("orders.");
+
+    check_equal(flowmq_pattern_data_direction_validate(FLOWMQ_PROTOCOL_PUB, &frame), TURBO_OK);
+    check_equal(flowmq_pattern_data_direction_validate(FLOWMQ_PROTOCOL_XPUB, &frame), TURBO_OK);
+    check_equal(flowmq_pattern_data_direction_validate(FLOWMQ_PROTOCOL_PULL, &frame),
+                TURBO_EPROTO);
+    frame.pattern = FLOWMQ_PROTOCOL_XSUB;
+    check_equal(flowmq_pattern_data_direction_validate(FLOWMQ_PROTOCOL_XPUB, &frame), TURBO_OK);
+  }
+
+  it("accepts FMQ/5 negotiation controls for compatible peers") {
+    flowmq_protocol_frame_t settings = {
+        .kind = FLOWMQ_PROTOCOL_FRAME_SETTINGS,
+        .pattern = FLOWMQ_PROTOCOL_PAIR};
+    flowmq_protocol_frame_t update = {
+        .kind = FLOWMQ_PROTOCOL_FRAME_FLOW_UPDATE,
+        .pattern = FLOWMQ_PROTOCOL_PAIR};
+
+    check_equal(flowmq_pattern_data_direction_validate(
+                    FLOWMQ_PROTOCOL_PAIR, &settings), TURBO_OK);
+    check_equal(flowmq_pattern_data_direction_validate(
+                    FLOWMQ_PROTOCOL_PAIR, &update), TURBO_OK);
+    settings.pattern = FLOWMQ_PROTOCOL_PUSH;
+    check_equal(flowmq_pattern_data_direction_validate(
+                    FLOWMQ_PROTOCOL_PAIR, &settings), TURBO_EPROTO);
   }
 
   it("encodes client handshake and control commands") {

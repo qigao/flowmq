@@ -27,6 +27,167 @@ static tstr flowmq_protocol_test_flatten(
 }
 
 spec("flowmq_protocol") {
+  it("round trips FMQ/5 SETTINGS and FLOW_UPDATE payloads") {
+    flowmq_protocol_settings_t settings = {
+        .capabilities = FLOWMQ_PROTOCOL_CAP_FLOW_CREDIT,
+        .max_frame_size = 1024u * 1024u,
+        .session_generation = UINT64_C(0x0102030405060708),
+        .initial_max_data = UINT64_C(16) * 1024u * 1024u,
+        .flow_update_quantum = 64u * 1024u,
+        .flow_update_interval_ms = 10u};
+    flowmq_protocol_settings_t decoded_settings = {0};
+    flowmq_protocol_flow_update_t update = {
+        .session_generation = UINT64_C(0x0102030405060708),
+        .consumed_data = UINT64_C(0x1112131415161718),
+        .max_data = UINT64_C(0x2122232425262728)};
+    flowmq_protocol_flow_update_t decoded_update = {0};
+    unsigned char settings_payload[FLOWMQ_PROTOCOL_SETTINGS_PAYLOAD_SIZE];
+    unsigned char update_payload[FLOWMQ_PROTOCOL_FLOW_UPDATE_PAYLOAD_SIZE];
+
+    check_equal(flowmq_protocol_settings_encode(&settings, settings_payload), TURBO_OK);
+    check_equal(settings_payload[0], 0u);
+    check_equal(settings_payload[3], FLOWMQ_PROTOCOL_CAP_FLOW_CREDIT);
+    check_equal(settings_payload[8], 0x01u);
+    check_equal(settings_payload[15], 0x08u);
+    check_equal(flowmq_protocol_settings_decode(
+                    vstr_from_buf((const char *)settings_payload,
+                                  sizeof(settings_payload)),
+                    &decoded_settings),
+                TURBO_OK);
+    check_equal(decoded_settings.capabilities, settings.capabilities);
+    check_equal(decoded_settings.max_frame_size, settings.max_frame_size);
+    check_equal(decoded_settings.session_generation, settings.session_generation);
+    check_equal(decoded_settings.initial_max_data, settings.initial_max_data);
+    check_equal(decoded_settings.flow_update_quantum, settings.flow_update_quantum);
+    check_equal(decoded_settings.flow_update_interval_ms,
+                settings.flow_update_interval_ms);
+
+    check_equal(flowmq_protocol_flow_update_encode(&update, update_payload), TURBO_OK);
+    check_equal(update_payload[0], 0x01u);
+    check_equal(update_payload[7], 0x08u);
+    check_equal(flowmq_protocol_flow_update_decode(
+                    vstr_from_buf((const char *)update_payload,
+                                  sizeof(update_payload)),
+                    &decoded_update),
+                TURBO_OK);
+    check_equal(decoded_update.session_generation, update.session_generation);
+    check_equal(decoded_update.consumed_data, update.consumed_data);
+    check_equal(decoded_update.max_data, update.max_data);
+  }
+
+  it("rejects invalid FMQ/5 flow-control payloads") {
+    flowmq_protocol_settings_t settings = {
+        .capabilities = FLOWMQ_PROTOCOL_CAP_FLOW_CREDIT,
+        .max_frame_size = 1024u,
+        .session_generation = 1u,
+        .initial_max_data = 4096u,
+        .flow_update_quantum = 1024u,
+        .flow_update_interval_ms = 10u};
+    flowmq_protocol_flow_update_t update = {
+        .session_generation = 1u, .consumed_data = 20u, .max_data = 19u};
+    unsigned char settings_payload[FLOWMQ_PROTOCOL_SETTINGS_PAYLOAD_SIZE] = {0};
+    unsigned char update_payload[FLOWMQ_PROTOCOL_FLOW_UPDATE_PAYLOAD_SIZE] = {0};
+
+    settings.capabilities = 0u;
+    check_equal(flowmq_protocol_settings_encode(&settings, settings_payload),
+                TURBO_EPROTO);
+    settings.capabilities = FLOWMQ_PROTOCOL_CAP_FLOW_CREDIT << 1u;
+    check_equal(flowmq_protocol_settings_encode(&settings, settings_payload),
+                TURBO_EPROTO);
+    settings.capabilities = FLOWMQ_PROTOCOL_CAP_FLOW_CREDIT;
+    settings.flow_update_quantum = (uint32_t)settings.initial_max_data + 1u;
+    check_equal(flowmq_protocol_settings_encode(&settings, settings_payload),
+                TURBO_EPROTO);
+    settings.flow_update_quantum = 1024u;
+    settings.session_generation = 0u;
+    check_equal(flowmq_protocol_settings_encode(&settings, settings_payload),
+                TURBO_EPROTO);
+    check_equal(flowmq_protocol_settings_decode(vstr_from_buf((const char *)settings_payload, 31u),
+                                                 &settings),
+                TURBO_EPROTO);
+
+    check_equal(flowmq_protocol_flow_update_encode(&update, update_payload),
+                TURBO_EPROTO);
+    update.max_data = update.consumed_data;
+    update.session_generation = 0u;
+    check_equal(flowmq_protocol_flow_update_encode(&update, update_payload),
+                TURBO_EPROTO);
+    check_equal(flowmq_protocol_flow_update_decode(vstr_from_buf((const char *)update_payload, 23u),
+                                                    &update),
+                TURBO_EPROTO);
+  }
+
+  it("enforces FMQ/5 control-frame metadata") {
+    flowmq_protocol_settings_t settings = {
+        .capabilities = FLOWMQ_PROTOCOL_CAP_FLOW_CREDIT,
+        .max_frame_size = 1024u,
+        .session_generation = 1u,
+        .initial_max_data = 4096u,
+        .flow_update_quantum = 1024u,
+        .flow_update_interval_ms = 10u};
+    flowmq_protocol_frame_t frame = {0};
+    flowmq_protocol_frame_t decoded = {0};
+    unsigned char payload[FLOWMQ_PROTOCOL_SETTINGS_PAYLOAD_SIZE];
+    tstr encoded = NULL;
+    size_t consumed = 0u;
+
+    check_equal(flowmq_protocol_settings_encode(&settings, payload), TURBO_OK);
+    frame.kind = FLOWMQ_PROTOCOL_FRAME_SETTINGS;
+    frame.pattern = FLOWMQ_PROTOCOL_PAIR;
+    frame.payload = vstr_from_buf((const char *)payload, sizeof(payload));
+    check_equal(flowmq_protocol_encode_frame(&frame, 1024u, &encoded), TURBO_OK);
+    check_equal(flowmq_protocol_decode_frame(encoded, tstr_len(encoded), 1024u,
+                                              &decoded, &consumed),
+                TURBO_OK);
+    check_equal(decoded.kind, FLOWMQ_PROTOCOL_FRAME_SETTINGS);
+    flowmq_protocol_frame_cleanup(&decoded);
+    tstr_freep(&encoded);
+
+    frame.message_id = 1u;
+    check_equal(flowmq_protocol_encode_frame(&frame, 1024u, &encoded), TURBO_EPROTO);
+    frame.message_id = 0u;
+    frame.topic = vstr_from_cstr("forbidden");
+    check_equal(flowmq_protocol_encode_frame(&frame, 1024u, &encoded), TURBO_EPROTO);
+    frame.topic = vstr_from_buf(NULL, 0u);
+    frame.payload.len--;
+    check_equal(flowmq_protocol_encode_frame(&frame, 1024u, &encoded), TURBO_EPROTO);
+  }
+
+  it("preserves the multipart-more bit across encode and decode") {
+    flowmq_protocol_frame_t input = {0};
+    flowmq_protocol_frame_t output = {0};
+    tstr encoded = NULL;
+    size_t consumed = 0u;
+
+    input.kind = FLOWMQ_PROTOCOL_FRAME_DATA;
+    input.pattern = FLOWMQ_PROTOCOL_DEALER;
+    input.message_id = 1u;
+    input.more = 1;
+    input.payload = vstr_from_cstr("part-1");
+
+    check_equal(flowmq_protocol_encode_frame(&input, 1024u, &encoded), TURBO_OK);
+    check_equal(flowmq_protocol_decode_frame(encoded, tstr_len(encoded), 1024u,
+                                             &output, &consumed),
+                TURBO_OK);
+    check_equal(output.more, 1);
+    check_equal(consumed, tstr_len(encoded));
+    check_true(vstr_eq(output.payload, input.payload));
+
+    flowmq_protocol_frame_cleanup(&output);
+    tstr_freep(&encoded);
+  }
+
+  it("rejects multipart on protocol control frames") {
+    flowmq_protocol_frame_t input = {0};
+    tstr encoded = NULL;
+
+    input.kind = FLOWMQ_PROTOCOL_FRAME_HELLO;
+    input.pattern = FLOWMQ_PROTOCOL_PAIR;
+    input.more = 1;
+    check_equal(flowmq_protocol_encode_frame(&input, 1024u, &encoded), TURBO_EPROTO);
+    check_null(encoded);
+  }
+
   it("segments one packet without copying payload bytes") {
     static const char payload[] = {'z', '\0', 'c'};
     flowmq_protocol_frame_t input = {0};
@@ -157,7 +318,7 @@ spec("flowmq_protocol") {
     tstr_free(encoded);
   }
 
-  it("reassembles a fragmented v3 payload into owned storage") {
+  it("reassembles a fragmented FMQ/5 payload into owned storage") {
     static char payload[FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE + 17u];
     flowmq_protocol_frame_t input;
     flowmq_protocol_frame_t output;
@@ -183,7 +344,7 @@ spec("flowmq_protocol") {
     tstr_free(encoded);
   }
 
-  it("encodes and decodes v3 HELLO security with optional transport binding") {
+  it("encodes and decodes FMS/3 HELLO security with optional transport binding") {
     static const char binding[FLOWMQ_PROTOCOL_CHANNEL_BINDING_SIZE] = {1};
     flowmq_protocol_security_t input = {0};
     flowmq_protocol_security_t output;
@@ -241,7 +402,7 @@ spec("flowmq_protocol") {
     tstr_free(payload);
   }
 
-  it("rejects unknown wire versions and malformed v3 security envelopes") {
+  it("rejects unknown wire versions and malformed FMS/3 security envelopes") {
     static const char invalid_identity[] = {'c', 'l', 'i', 'e', 'n', 't', '\0', 'x'};
     static const char binding[FLOWMQ_PROTOCOL_CHANNEL_BINDING_SIZE] = {3};
     flowmq_protocol_security_t security = {0};
@@ -316,5 +477,40 @@ spec("flowmq_protocol") {
     check_equal(flowmq_protocol_heartbeat_deadlines_next(
                      &heartbeat, start_ns + UINT64_C(55000000), &wait_deadline_ns),
                  FLOWMQ_PROTOCOL_HEARTBEAT_RECV_EXPIRED);
+  }
+
+  it("starts the heartbeat timeout only after a ping is sent") {
+    flowmq_protocol_heartbeat_deadlines_t heartbeat;
+    uint64_t wait_deadline_ns = 0u;
+    const uint64_t start_ns = UINT64_C(1000000000);
+
+    flowmq_protocol_heartbeat_deadlines_init(&heartbeat, start_ns, 20u, 30u, 0u);
+    check_equal(flowmq_protocol_heartbeat_deadlines_next(
+                    &heartbeat, start_ns + UINT64_C(20000000),
+                    &wait_deadline_ns),
+                FLOWMQ_PROTOCOL_HEARTBEAT_SEND_PING);
+    flowmq_protocol_heartbeat_deadlines_on_ping(
+        &heartbeat, start_ns + UINT64_C(20000000));
+    check_equal(flowmq_protocol_heartbeat_deadlines_next(
+                    &heartbeat, start_ns + UINT64_C(40000000),
+                    &wait_deadline_ns),
+                FLOWMQ_PROTOCOL_HEARTBEAT_SEND_PING);
+    flowmq_protocol_heartbeat_deadlines_on_ping(
+        &heartbeat, start_ns + UINT64_C(40000000));
+    check_equal(flowmq_protocol_heartbeat_deadlines_next(
+                    &heartbeat, start_ns + UINT64_C(49000000),
+                    &wait_deadline_ns),
+                FLOWMQ_PROTOCOL_HEARTBEAT_WAIT);
+    check_equal(flowmq_protocol_heartbeat_deadlines_next(
+                    &heartbeat, start_ns + UINT64_C(50000000),
+                    &wait_deadline_ns),
+                FLOWMQ_PROTOCOL_HEARTBEAT_EXPIRED);
+
+    flowmq_protocol_heartbeat_deadlines_on_receive(
+        &heartbeat, start_ns + UINT64_C(55000000));
+    check_equal(flowmq_protocol_heartbeat_deadlines_next(
+                    &heartbeat, start_ns + UINT64_C(74000000),
+                    &wait_deadline_ns),
+                FLOWMQ_PROTOCOL_HEARTBEAT_WAIT);
   }
 }

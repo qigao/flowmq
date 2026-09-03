@@ -4,9 +4,9 @@
 
 **Goal:** Remove obsolete product-layer source, compatibility naming, examples, and documentation while retaining the current FlowMQ protocol/runtime and its supported benchmark.
 
-**Architecture:** The supported surface remains the root CMake target graph, public `flowmq_*` headers, protocol implementation, CoroNet runtime, and ORM-backed application layer. Historical source trees that are absent from target and install lists are deleted; the one compiled compatibility shim is folded into direct protocol names.
+**Architecture:** The supported surface remains the root CMake target graph, public `flowmq_*` headers, protocol implementation, caller-driven Rocida CNet runtime, and ORM-backed application layer. Historical source trees that are absent from target and install lists are deleted; the one compiled compatibility shim is folded into direct protocol names.
 
-**Tech Stack:** C11, CMake Presets, TurboUtils, TurboParser, TurboNet, TurboDB ORM, TinyTest.
+**Tech Stack:** C11, CMake Presets, Rocida CNet, TurboParser, TurboNet, TurboDB ORM, TinyTest.
 
 ---
 

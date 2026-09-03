@@ -1,37 +1,34 @@
-# FMQ/3 与 FMS/3 Wire Protocol
+# FMQ/5 与 FMS/3 Wire Protocol
 
-FMQ/3 是 FlowMQ 唯一 socket framing；FMS/3 是可选但不可降级的 HELLO security
+FMQ/5 是 FlowMQ 唯一 socket framing；FMS/3 是可选但不可降级的 HELLO security
 envelope。本文是 wire 字段、校验、分片、心跳、pattern、queue 和
 backpressure 边界的唯一详细正文。
 
 协议总索引见 [PROTOCOL_SPEC.md](PROTOCOL_SPEC.md)。本文定义 wire envelope，不定义应用 payload。
 
-KCP transport 的 TKSH/1、TKSR/1 与 TKF1/1 由
-[KCP_TRANSPORT_PROTOCOL.md](KCP_TRANSPORT_PROTOCOL.md) 定义。
-
 ## 1. 分层与版本
 
-FMQ/3 位于 CoroNet transport 之上，应用协议位于 FMQ `DATA` payload 之内：
+FMQ/5 位于 CNet TCP/TLS 有序字节流之上，应用协议位于 FMQ `DATA` payload 之内：
 
 ```text
      应用 payload
               |
-       FMQ/3 DATA payload
+       FMQ/5 DATA payload
               |
-  FMQ/3 frame + FMS/3 HELLO
+  FMQ/5 frame + FMS/3 HELLO
               |
-       CoroNet transport
+       CNet TCP / TLS
 ```
 
 整数使用 network byte order（big-endian）。文本是无 NUL 的有界 UTF-8，BYTES
 字段保持 binary-safe。decoder 必须拒绝版本错误、保留字段非零、长度不一致、
 越界、乱序分片、重叠分片和 trailing bytes。
 
-`TFMQ` 是固定 magic，version 固定为 `3`。version byte 不是 negotiation 字段；
+`TFMQ` 是固定 magic，version 固定为 `5`。version byte 不是 negotiation 字段；
 其他版本必须返回协议错误，不得协商、fallback 或静默接受旧版本。
 
-一次连接双方各发送一个 `HELLO`。只有 HELLO 完成且 pattern pairing 合法后才能
-接受 `DATA`。可信 v3 的 HELLO payload 必须为空；配置 security binding 时必须
+一次连接双方各发送一个 `HELLO` 和一个 `SETTINGS`。只有 HELLO、SETTINGS 完成且
+pattern pairing 合法后才能接受 `DATA`。可信 FMQ/5 的 HELLO payload 必须为空；配置 security binding 时必须
 使用 FMS/3，trusted 与 secure 两种模式不互相降级。
 
 ## 2. Frame layout
@@ -41,10 +38,10 @@ FMQ/3 位于 CoroNet transport 之上，应用协议位于 FMQ `DATA` payload �
 | Offset | Size | Field | Constraint |
 | ---: | ---: | --- | --- |
 | 0 | 4 | magic | `TFMQ` |
-| 4 | 1 | version | `3` |
-| 5 | 1 | kind | `HELLO`, `DATA`, `PING`, `PONG`, `SUBSCRIBE`, `UNSUBSCRIBE` |
+| 4 | 1 | version | `5` |
+| 5 | 1 | kind | core `1..6`, SETTINGS `32`, FLOW_UPDATE `33`；ESB 保留 `7..31` |
 | 6 | 1 | sender pattern | `1..11`，见第 4 节 |
-| 7 | 1 | packet flags | `FIRST=0x01`, `LAST=0x02`；其他 bit 必须为零 |
+| 7 | 1 | packet flags | `FIRST=0x01`, `LAST=0x02`, `MORE=0x04`；其他 bit 必须为零 |
 | 8 | 2 | identity length | 仅 FIRST 携带，最大 255 bytes |
 | 10 | 2 | topic length | 仅 FIRST 携带，最大 1024 bytes |
 | 12 | 4 | packet payload length | 最大 64 KiB |
@@ -58,18 +55,61 @@ payload 超过 64 KiB 时必须按连续 offset 分片；identity 和 topic 只�
 packet，后续 packet 必须为零长度。最后一个 packet 必须设置 LAST。空 payload 的
 单 packet DATA 仍必须满足完整 frame 规则。
 
-HELLO、PING、PONG、SUBSCRIBE 和 UNSUBSCRIBE 必须是单 packet。PING/PONG 不携带
+HELLO、PING、PONG、SUBSCRIBE、UNSUBSCRIBE、SETTINGS 和 FLOW_UPDATE 必须是单 packet。PING/PONG 不携带
 identity、topic 或 payload；SUBSCRIBE/UNSUBSCRIBE 只携带 topic，不携带 identity
-和 payload；所有 control frame 的 message ID 必须为零。
+和 payload；SETTINGS/FLOW_UPDATE 只携带各自的固定 payload，不携带 identity 或
+topic；所有 control frame 的 message ID 必须为零。
+
+`MORE` 只允许用于 DATA，并且同一 DATA 的所有 packet 必须一致。`MORE=1` 表示该
+application part 后还有 part；最后一个 part 使用 `MORE=0`。multipart 状态属于
+socket pattern FSM，不把 packet fragmentation 暴露成 application part。
 
 成功 decode 后，单 packet identity、topic 和 payload 是输入 buffer 的 borrowed view；
 fragmented payload 由 decoded frame 持有，调用方必须执行
 `flowmq_protocol_frame_cleanup()`。scatter/gather encode 只拥有 framing storage，
 payload backing 必须保持到 send 完成。
 
+### 2.1 SETTINGS 与 FLOW_UPDATE
+
+每个方向的状态顺序固定为：
+
+```text
+TCP/TLS connected -> HELLO -> SETTINGS -> READY -> DATA/FLOW_UPDATE
+```
+
+SETTINGS payload 为 32 bytes，全部字段使用 big-endian：
+
+| Offset | Size | Field | Constraint |
+| ---: | ---: | --- | --- |
+| 0 | 4 | capabilities | 当前必须等于 `FLOW_CREDIT=0x00000001` |
+| 4 | 4 | max frame size | 非零；发送方不得向该 peer 发送更大的 DATA part |
+| 8 | 8 | session generation | 非零 |
+| 16 | 8 | initial max data | 非零累计发送上限 |
+| 24 | 4 | update quantum | `1..initial max data` |
+| 28 | 4 | update interval ms | 非零 |
+
+FLOW_UPDATE payload 为 24 bytes：
+
+| Offset | Size | Field | Constraint |
+| ---: | ---: | --- | --- |
+| 0 | 8 | session generation | 必须匹配本方向 SETTINGS |
+| 8 | 8 | consumed data | 单调不减 |
+| 16 | 8 | max data | 单调不减且不小于 consumed data |
+
+发送方始终满足 `sent_data <= max_data`。接收方在应用释放 DATA payload 后按
+`max_data = consumed_data + receive_hwm_bytes` 推进窗口。控制帧、ROUTER 合成的
+identity part 和 XPUB 合成的 subscription event 不计 DATA credit。达到 quantum 或
+最早未公布消费达到 interval 时，owner 的下一次 `send`、`recv` 或 `poll` 进度发送
+累计 FLOW_UPDATE；控制帧优先于 queued DATA。
+
+默认 quantum 为 `min(window, max(window / 4, 64 KiB))`，默认 interval 为 10 ms；可在
+bind/connect 前通过 `FLOWMQ_FLOW_UPDATE_QUANTUM` 与 `FLOWMQ_FLOW_UPDATE_IVL` 调整。
+重复 SETTINGS、SETTINGS 前 DATA、generation 不匹配、累计值倒退和越过已公布
+`max_data` 都是协议错误。FMQ/5 不接受或回退到 FMQ/4。
+
 ## 3. FMS/3 security envelope
 
-FMS/3 只允许作为 FMQ/3 HELLO payload 出现，magic 为 `FMS3`。非空 envelope 的
+FMS/3 只允许作为 FMQ/5 HELLO payload 出现，magic 为 `FMS3`。非空 envelope 的
 12-byte header 为：
 
 | Offset | Size | Field |
@@ -93,12 +133,12 @@ message 前完成认证、claimed identity 与 principal 一致性以及 CONNECT
 SUBSCRIBE、READ、WRITE、EXECUTE 仍需 ACL 检查。credential 只在 provider lease 和
 HELLO 边界内存在，消费或释放前必须清零。
 
-TCP、UDP、Pipe、WS 的 FMS credential 需要可信网络或额外安全隧道。KCP 在 FMS/3
-之下强制执行 PSK 认证与 TKSR/1 AEAD，因此具备 transport confidentiality 和
-integrity；FMS/3 仍负责应用 principal 与 ACL，不能由 transport PSK 替代。TLS/WSS
-必须验证证书、协商 TLS 1.3，并使用 RFC 9266 exporter channel binding。任何认证、
-证书、exporter 或 binding 失败都必须关闭连接，不得回退到其他 transport 或 trusted
-session。
+明文 TCP 不提供 transport confidentiality；有保密或网络身份要求时必须选择 TLS。
+TLS client 必须验证证书链与主机名，TLS listener 必须显式提供 certificate/key；mTLS
+identity binding 还必须验证客户端证书，并将证书 SHA-256 fingerprint 与 HELLO claimed
+identity 绑定。任何证书或 identity binding 失败都必须关闭连接，不得回退到明文 TCP。
+当前 CNet endpoint 只接受空 HELLO security payload；FMS/3 provider binding 在接入 endpoint
+前不得宣称已启用。
 
 ## 4. Pattern registry
 
@@ -108,36 +148,47 @@ session。
 | 2 | SUB | PUB、XPUB | subscription receive |
 | 3 | PUSH | PULL | 单 peer work distribution |
 | 4 | PULL | PUSH | 单 peer receive |
-| 5 | ROUTER | DEALER | identity route、异步 reply |
-| 6 | DEALER | ROUTER | 异步 request/reply |
+| 5 | ROUTER | DEALER、REQ、ROUTER | identity route、异步 reply |
+| 6 | DEALER | ROUTER、REP、DEALER | 异步 request/reply |
 | 7 | PAIR | PAIR | 一对一双向 |
-| 8 | REQ | REP | 一个 outstanding request |
-| 9 | REP | REQ | 当前 dispatch 内同步 reply |
+| 8 | REQ | REP、ROUTER | 一个 outstanding request |
+| 9 | REP | REQ、DEALER | reply 绑定最后一个 requester |
 | 10 | XPUB | SUB、XSUB | 显式 subscription event |
 | 11 | XSUB | PUB、XPUB | subscription control/data |
 
-不兼容 pairing 必须在 HELLO 阶段失败。PUB 无匹配 peer 返回 `TURBO_ENOTCONN`；
-部分 fan-out 成功后失败不可回滚，也不得隐式重播。PUSH 选定 eligible peer 后，
+不兼容 pairing 必须在 HELLO 阶段失败。PUB/XPUB 无匹配 subscription 时成功丢弃；
+已经接纳的 fan-out 不得隐式重播。PUSH 选定 eligible peer 后，
 传输结果不确定时不得改投其他 peer。
 
-REQ 状态为 `READY -> WAIT_REPLY -> READY`。timeout 或断线后必须等待新 session
-HELLO，旧 generation reply 不得完成新 request。REP request context 只借用到当前
-dispatch 返回，不能 detach 或持久化。
+REQ 状态为 `READY -> WAIT_REPLY -> READY`。REP 状态为
+`WAIT_REQUEST -> SEND_REPLY -> WAIT_REQUEST`。timeout 或断线后必须等待新 session
+HELLO，旧 generation reply 不得完成新 request。状态迁移只在完整 multipart 的最后
+一个 part 成功 admission/receive 时提交。
 
-ROUTER delayed reply 可 detach，但 route 必须绑定
-`owner_instance_id + session_id + session_generation`。断线、同 identity 重连或
-ROUTER restart 后旧 route 返回 `TURBO_ENOTCONN`，不得写入 durable store 后重放。
+ROUTER routing envelope 与 ZeroMQ 一样只公开 peer claimed identity，它是当前 live
+session 的查找键，不是带 generation 的 opaque token。identity part 选中 peer 后，同一
+outbound multipart 会 pin 到该 session generation；该 peer 中途断线时整条 multipart
+取消，replacement 不会继承剩余 parts。跨消息的 delayed reply 若遇到同 identity 重连，
+会路由到新的 live session；需要 request-session 隔离的应用必须使用不复用的 identity 或
+在 payload 内携带并校验 correlation，不能只持久化 routing identity。当前 API 不提供
+detached route handle。
 
 XPUB/XSUB subscription state 属于 peer session。XSUB 可在 reconnect 后重放 desired
-subscriptions；完整 stop 会清除该状态。空 subscription prefix 匹配全部 topic，
+subscriptions；endpoint destroy 会清除该状态。空 subscription prefix 匹配全部 topic，
 session 断开会产生相应 UNSUBSCRIBE。
 
 ## 5. Heartbeat
 
-heartbeat 使用 monotonic clock deadline。接收任何合法 FMQ frame 都刷新 receive
-deadline；发送 PING 只推进下一次 PING deadline。下一动作只有 `WAIT`、`SEND_PING`、
-send-side `EXPIRED` 和 receive-side `RECV_EXPIRED`。心跳不改变业务 ACK、delivery
-或 completion 语义。
+heartbeat 使用 monotonic clock deadline。接收任何合法 FMQ frame 都取消当前未应答
+PING 的 send-side timeout，并刷新 receive 与下一次 PING deadline。PING 真正进入 transport
+后才启动 send-side timeout；后续 PING 不得延长同一个未应答 timeout。下一动作只有
+`WAIT`、`SEND_PING`、send-side `EXPIRED` 和 receive-side `RECV_EXPIRED`。心跳不改变业务
+ACK、delivery 或 completion 语义。
+
+FMQ/5 的 PING/PONG 没有 payload，因此不携带 ZeroMQ `HEARTBEAT_TTL` 或 PING context。
+socket facade 当前只提供 `FLOWMQ_HEARTBEAT_IVL` 与 `FLOWMQ_HEARTBEAT_TIMEOUT`；二者由
+调用 `send`、`recv` 或 `poll` 的 owner 线程推进，没有后台 timer。应用停止调用进度函数时，
+心跳和超时判定也会暂停。
 
 ## 6. ACK 与 ownership
 
@@ -147,91 +198,51 @@ send-side `EXPIRED` 和 receive-side `RECV_EXPIRED`。心跳不改变业务 ACK�
 | --- | --- |
 | graph publish success | 当前 graph attempt 成功 |
 | frame admission | 本地有界发送边界接管 encoded frame |
-| transport send success | CoroNet 完成一次写入 |
+| transport send success | CNet 完成一次完整有序写入 |
 | storage accept | durable owner transaction 已提交 |
 | delivery/completion | consumer/worker 完成且 storage settlement 成功 |
 
 FMQ HWM 只限制本地内存，不表示远端接收、处理或持久化。进入 graph、queue、worker
 或跨线程边界前，payload、topic、identity、correlation 和 FMQ metadata 必须转换为
-owned `mem_buffer_t`。raw socket bytes、decoder buffer 和 frame view 只能留在
-CoroNet owner lane。
+owned buffer。raw socket bytes、decoder buffer 和 frame view 只能留在 CNet owner lane。
 
 ## 7. Pattern queue 与 backpressure
 
-queue、credit 和 HWM 是本地 pattern/session 状态，不进入 FMQ/3 frame，也不改变
-第 2 节的 wire layout。所有 accepted frame 仍由全局 `frame_hwm_messages` /
+queue 和 HWM 是本地 pattern/session 状态；远端 DATA credit 由第 2.1 节的 SETTINGS /
+FLOW_UPDATE 协调，但不替代本地容量限制。所有 accepted frame 仍由全局 `frame_hwm_messages` /
 `frame_hwm_bytes` admission 计费；只有最终 completion、drop 或 shutdown cancel
 才能释放该全局 budget。
 
-### 7.1 PUB/XPUB：bounded per-peer fan-out queue
+TCP/TLS 已负责可靠有序传输与拥塞控制；FMQ/5 不在同一 TCP/TLS stream 内发送 FEC
+repair symbol。此类冗余不能绕过 TCP head-of-line blocking，只会消耗额外带宽和 CPU。
 
-通过 fan-out registration 启用的 PUB/XPUB 为每个 live SUB/XSUB peer 建立独立 FIFO
-和独立 writer coroutine。topic matching、READ ACL 和 queue capacity 在 enqueue
-前确定；同一 peer 内保持 publish order，一个慢 peer 的 transport wait 不阻塞其他
-peer writer。
+### 7.1 当前 socket queue 语义
 
-每个 peer 同时受 `peer_hwm_messages` 和 `peer_hwm_bytes` 约束。达到 HWM 时只执行配置
-的 `slow_peer_policy`：
+当前 socket facade 为每个 live peer 保留有界 FIFO、独立 write 状态、message/byte HWM
+和累计 credit。PUB/XPUB 在发送开始时冻结匹配 peer 集合；最终 part admission 时移除
+已经饱和的 peer，没有 `FAIL`、`DROP_OLDEST` 或 `DISCONNECT` 等可配置 slow-peer
+策略，也没有 READ/WRITE ACL。PUSH 直接从当前可写 PULL 中 round-robin 选择；不存在
+可重放的 global pending queue，全体 peer 不可写时返回 `TURBO_EBUSY` 或
+`TURBO_ENOBUFS`。
 
-| Policy | Admission 与 peer 结果 |
-| --- | --- |
-| `FAIL` | 当前 fan-out admission 失败；已取得的 peer reservation 全部回滚，不能先写 fast peer |
-| `DROP_OLDEST` | 只从饱和 peer 的队首取消足够旧 frame，再接纳当前 frame |
-| `DISCONNECT` | 关闭饱和 peer 并取消其 backlog；其他已接纳 peer 继续发送 |
+每个 transport write 当前只提交一个连续 encoded frame，没有 iovec batch。成功 send
+只表示 frame 已进入所选 peer 的本地有界队列，不表示远端接收或业务完成。peer 协议错误、
+断线或 write 失败只关闭对应 connection，不污染同一 listener 的其他 peer；已经绑定到该
+peer 且尚未发送的 frame 会随 peer 状态释放，不会改投。
 
-成功 publish 表示当前 frame 已进入所有仍被选中 peer 的 volatile queue，不表示任一
-peer 已收到、处理或持久化。一个 frame 对多个 peer 共享 immutable payload ownership，
-但每个 peer 独立报告 send/drop 结果；部分成功不可回滚，也不得自动重播。
+### 7.2 当前 shutdown 语义
 
-未启用 fan-out registration 的 PUB/XPUB 保持 transport-write completion 语义，不得
-静默切换为 queue-admission completion。启用 bounded fan-out 时，live peer identity
-必须非空且在当前 adapter 内唯一，以便事件和 slow-peer policy 有稳定归属。
-
-### 7.2 PUSH：global pending queue 与 per-peer write credit
-
-PUSH 的全局 FIFO 是尚未绑定 PULL 的唯一事实源。dispatcher 使用 round-robin 选择
-通过 READ ACL 且拥有 write credit 的 live PULL；每个 PULL 同时最多持有一个本地
-write credit。busy peer 不参与后续选择，因此 slow PULL 只占用自己的 credit，不会
-形成跨 peer head-of-line blocking。
-
-全体 eligible peer 都 busy 时，单 frame 或完整 explicit batch 必须按原顺序恢复到
-全局队首，等待任一 peer credit 释放或新 peer 加入。explicit batch 的候选 peer 数在
-该批次开始时冻结，避免连接变化改变已经计算的 round-robin 映射。
-
-frame 一旦离开全局 queue，必须绑定当前 adapter owner 内
-`session_id + session_generation` 对应的 live route。该 route 断线、generation
-改变或 transport write 结果不确定时，frame 失败为
-`TURBO_ENOTCONN` 或实际 transport error；不得恢复为 unassigned，也不得改投其他
-PULL。
-
-一个 peer credit 可连续发送同一批次中分配给该 peer 的多个 frame。TCP write group
-按 FIFO prefix 分块，每个 chunk 最多 64 个 iovec、目标上限 1 MiB，并进一步受
-`send_hwm_bytes` 限制。frame 不因内部 chunk 边界拆到不同 peer；单 frame 大于 1 MiB
-时仍作为一个有界于 `max_frame_size` 的 write，配置了 transport HWM 时 encoded
-frame 必须不大于该 HWM，否则返回 `TURBO_ENOBUFS`。每个 chunk 完成后即可释放其中
-frame 的 ownership，但 peer credit 直到该 peer queue drain 或失败后才释放。
-
-### 7.3 Failure 与 shutdown
-
-peer write 失败会关闭该 peer，已绑定在其 local queue 的 frame 以同一错误完成；
-这些 frame 不返回全局 queue。尚未绑定的 global pending frame 仍可由其他 eligible
-peer 获取。
-
-stop/shutdown 顺序固定为：
-
-1. 关闭全局 admission，唤醒并拒绝新的 BLOCK waiter。
-2. 按 `frame_linger_ms` drain，或以 `TURBO_ESHUTDOWN` 取消 global pending。
-3. interrupt live socket，使已绑定 peer lane 完成或取消。
-4. 等待所有 peer reader/writer lane quiesce。
-5. 清理 peer queue、route/session、budget 和 execution resources。
-
-任何阶段都不得在 lane 仍可能访问 payload、socket 或 peer state 时提前释放其 owner。
+`flowmq_close()` 立即停止 caller-driven progress、关闭 listener/client，并释放 peer queue、
+接收 queue、decoder、TLS 与 pool 资源。当前 API 没有 linger、drain 或 durable pending
+语义；应用若需要确认处理结果，必须在关闭前通过自己的业务协议完成确认。
 
 ## 8. Implementation evidence
 
 规范实现位于 `flowmq/protocol/include/flowmq_protocol.h`、
-`flowmq/protocol/src/flowmq_protocol.c` 和 `patterns/src/flowmq_pattern.c`。对应测试覆盖 encode/decode、
+`flowmq/protocol/src/flowmq_protocol.c`、`patterns/src/flowmq_flow_control.c` 和
+`patterns/src/flowmq_socket.c`。对应测试覆盖 encode/decode、
 fragmentation、security envelope、unknown version、malformed control frame、
-pattern pairing、heartbeat deadline、slow-subscriber policy、PUSH round-robin、
-route generation fencing 和 slow-PULL credit isolation，入口为
-`flowmq/protocol/tests/test_flowmq_protocol.c` 与 `patterns/tests/test_flowmq_pattern.c`。
+pattern pairing、heartbeat deadline、累计 credit、generation fencing、quantum/deadline
+更新、ROUTER identity 排除、TCP/TLS loopback 和 pattern HWM，入口为
+`flowmq/protocol/tests/test_flowmq_protocol.c`、`patterns/tests/test_flowmq_flow_control.c`
+与 `patterns/tests/test_flowmq_socket.c`。

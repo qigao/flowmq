@@ -14,10 +14,13 @@
 extern "C" {
 #endif
 
-#define FLOWMQ_PROTOCOL_API_VERSION 1u
-#define FLOWMQ_PROTOCOL_WIRE_VERSION 3u
+#define FLOWMQ_PROTOCOL_API_VERSION 3u
+#define FLOWMQ_PROTOCOL_WIRE_VERSION 5u
 #define FLOWMQ_PROTOCOL_HEADER_SIZE 32u
 #define FLOWMQ_PROTOCOL_SECURITY_HEADER_SIZE 12u
+#define FLOWMQ_PROTOCOL_SETTINGS_PAYLOAD_SIZE 32u
+#define FLOWMQ_PROTOCOL_FLOW_UPDATE_PAYLOAD_SIZE 24u
+#define FLOWMQ_PROTOCOL_CAP_FLOW_CREDIT 0x00000001u
 #define FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE (64u * 1024u)
 #define FLOWMQ_PROTOCOL_MAX_IDENTITY_SIZE 255u
 #define FLOWMQ_PROTOCOL_MAX_TOPIC_SIZE 1024u
@@ -26,6 +29,7 @@ extern "C" {
 #define FLOWMQ_PROTOCOL_CHANNEL_BINDING_SIZE 32u
 #define FLOWMQ_PROTOCOL_PACKET_FIRST 0x01u
 #define FLOWMQ_PROTOCOL_PACKET_LAST 0x02u
+#define FLOWMQ_PROTOCOL_MESSAGE_MORE 0x04u
 #define FLOWMQ_PROTOCOL_INCOMPLETE 1
 
 typedef uint8_t flowmq_protocol_pattern_t;
@@ -50,11 +54,45 @@ typedef enum flowmq_protocol_frame_kind_e {
   FLOWMQ_PROTOCOL_FRAME_PING,
   FLOWMQ_PROTOCOL_FRAME_PONG,
   FLOWMQ_PROTOCOL_FRAME_SUBSCRIBE,
-  FLOWMQ_PROTOCOL_FRAME_UNSUBSCRIBE
+  FLOWMQ_PROTOCOL_FRAME_UNSUBSCRIBE,
+  FLOWMQ_PROTOCOL_FRAME_SETTINGS = 32,
+  FLOWMQ_PROTOCOL_FRAME_FLOW_UPDATE = 33
 } flowmq_protocol_frame_kind_t;
 
+/** Strict FMQ/5 connection settings sent once after HELLO in each direction. */
+typedef struct flowmq_protocol_settings_s {
+  uint32_t capabilities;
+  uint32_t max_frame_size;
+  uint64_t session_generation;
+  uint64_t initial_max_data;
+  uint32_t flow_update_quantum;
+  uint32_t flow_update_interval_ms;
+} flowmq_protocol_settings_t;
+
+/** Cumulative receiver credit; values never decrease within one generation. */
+typedef struct flowmq_protocol_flow_update_s {
+  uint64_t session_generation;
+  uint64_t consumed_data;
+  uint64_t max_data;
+} flowmq_protocol_flow_update_t;
+
+/** Encode a validated SETTINGS value into its fixed-size big-endian payload. */
+FLOWMQ_C_API int flowmq_protocol_settings_encode(
+    const flowmq_protocol_settings_t *settings,
+    unsigned char payload[FLOWMQ_PROTOCOL_SETTINGS_PAYLOAD_SIZE]);
+/** Decode and validate an exact fixed-size SETTINGS payload. */
+FLOWMQ_C_API int flowmq_protocol_settings_decode(vstr payload,
+                                                 flowmq_protocol_settings_t *settings);
+/** Encode a validated FLOW_UPDATE value into its fixed-size big-endian payload. */
+FLOWMQ_C_API int flowmq_protocol_flow_update_encode(
+    const flowmq_protocol_flow_update_t *update,
+    unsigned char payload[FLOWMQ_PROTOCOL_FLOW_UPDATE_PAYLOAD_SIZE]);
+/** Decode and validate an exact fixed-size FLOW_UPDATE payload. */
+FLOWMQ_C_API int flowmq_protocol_flow_update_decode(
+    vstr payload, flowmq_protocol_flow_update_t *update);
+
 /**
- * Decoded FMQ v3 frame. Identity, topic, and single-packet payload are borrowed
+ * Decoded FMQ/5 frame. Identity, topic, and single-packet payload are borrowed
  * from the input buffer. Multi-packet payload is owned by this value and must
  * be released with flowmq_protocol_frame_cleanup().
  */
@@ -62,6 +100,8 @@ typedef struct flowmq_protocol_frame_s {
   flowmq_protocol_frame_kind_t kind;
   flowmq_protocol_pattern_t pattern;
   uint64_t message_id;
+  /** Non-zero when another application message part follows atomically. */
+  int more;
   vstr identity;
   vstr topic;
   vstr payload;
@@ -90,7 +130,7 @@ typedef struct flowmq_protocol_segmented_frame_s {
 #define FLOWMQ_PROTOCOL_SEGMENTED_FRAME_INIT                                                     \
   {sizeof(flowmq_protocol_segmented_frame_t), NULL, 0u, 0u, NULL}
 
-/** Optional security envelope carried only by an FMQ v3 HELLO payload. */
+/** Optional FMS/3 security envelope carried only by an FMQ/5 HELLO payload. */
 typedef enum flowmq_protocol_security_mode_e {
   FLOWMQ_PROTOCOL_SECURITY_NONE = 0,
   FLOWMQ_PROTOCOL_SECURITY_AUTH = 1,
@@ -112,11 +152,11 @@ typedef struct flowmq_protocol_security_s {
   vstr channel_binding;
 } flowmq_protocol_security_t;
 
-/** Encode one v3 HELLO security envelope. NONE produces an empty payload. */
+/** Encode one FMS/3 HELLO security envelope. NONE produces an empty payload. */
 FLOWMQ_C_API int flowmq_protocol_security_encode(const flowmq_protocol_security_t *security,
                                               tstr *payload);
 
-/** Decode and strictly validate one borrowed v3 HELLO security envelope. */
+/** Decode and strictly validate one borrowed FMS/3 HELLO security envelope. */
 FLOWMQ_C_API int flowmq_protocol_security_decode(vstr payload,
                                               flowmq_protocol_security_t *security);
 
@@ -138,15 +178,16 @@ typedef struct flowmq_protocol_heartbeat_deadlines_s {
 
 /**
  * Initialize heartbeat and receive deadlines from one monotonic timestamp.
- * Zero receive timeout disables only the receive deadline.
+ * Zero heartbeat timeout disables send-side expiry. Zero receive timeout
+ * disables only the receive deadline.
  */
 FLOWMQ_C_API void flowmq_protocol_heartbeat_deadlines_init(
     flowmq_protocol_heartbeat_deadlines_t *state, uint64_t now_ns, uint64_t interval_ms,
     uint64_t timeout_ms, uint64_t recv_timeout_ms);
-/** Advance all deadlines after receiving any valid FMQ frame. */
+/** Cancel an outstanding PING timeout and advance receive/next-PING deadlines. */
 FLOWMQ_C_API void flowmq_protocol_heartbeat_deadlines_on_receive(
     flowmq_protocol_heartbeat_deadlines_t *state, uint64_t now_ns);
-/** Advance only the next-ping deadline after sending a ping. */
+/** Arm the heartbeat timeout and advance the next-PING deadline after sending PING. */
 FLOWMQ_C_API void flowmq_protocol_heartbeat_deadlines_on_ping(
     flowmq_protocol_heartbeat_deadlines_t *state, uint64_t now_ns);
 /**

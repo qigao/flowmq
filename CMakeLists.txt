@@ -33,32 +33,14 @@ endif()
 include(Sanitizers)
 include(CmakeUtils)
 
-foreach(_flowmq_dependency_root IN ITEMS TURBOUTILS_ROOT TURBOPARSER_ROOT
-                                         TURBONET_ROOT)
-  if(NOT DEFINED ENV{${_flowmq_dependency_root}}
-     OR "$ENV{${_flowmq_dependency_root}}" STREQUAL "")
-    message(FATAL_ERROR
-            "Required dependency root is not defined: ${_flowmq_dependency_root}")
-  endif()
-  if(NOT IS_DIRECTORY "$ENV{${_flowmq_dependency_root}}")
-    message(FATAL_ERROR
-            "${_flowmq_dependency_root} is not a directory: "
-            "$ENV{${_flowmq_dependency_root}}")
-  endif()
-endforeach()
-unset(_flowmq_dependency_root)
 
 find_package(
-  TurboUtils CONFIG REQUIRED
-  PATHS "$ENV{TURBOUTILS_ROOT}"
+  Rocida CONFIG REQUIRED
+  PATHS "$ENV{ROCIDA_ROOT}"
   NO_DEFAULT_PATH)
 find_package(
   TurboParser CONFIG REQUIRED
   PATHS "$ENV{TURBOPARSER_ROOT}"
-  NO_DEFAULT_PATH)
-find_package(
-  TurboNet CONFIG REQUIRED
-  PATHS "$ENV{TURBONET_ROOT}"
   NO_DEFAULT_PATH)
 find_package(OpenSSL CONFIG REQUIRED)
 
@@ -73,10 +55,10 @@ if(NOT FLOWMQ_TBE_COMPILER_EXECUTABLE)
 endif()
 
 set(FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS
-    "PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboNet::CoroNet>"
+    "PATH=path_list_prepend:$<TARGET_FILE_DIR:Rocida::CNet>"
     "PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboParser::Parser>"
     "PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboParser::DataBind>"
-    "PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboUtils::Core>")
+    "PATH=path_list_prepend:$<TARGET_FILE_DIR:Rocida::Core>")
 if(WIN32)
   list(APPEND FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS
        "PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenSSL::SSL>")
@@ -126,10 +108,11 @@ target_include_directories(
          $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/flowmq/include>
          $<BUILD_INTERFACE:${FLOWMQ_MEDIA_PROVIDER_GENERATED_DIR}>
          $<INSTALL_INTERFACE:include>
-  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/patterns/src)
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/patterns/src
+          ${CMAKE_CURRENT_SOURCE_DIR}/flowmq/protocol/src)
 target_link_libraries(flowmq
-                      PUBLIC TurboUtils::Core TurboParser::Parser TurboParser::DataBind
-                      PRIVATE TurboUtils::STL TurboNet::CoroNet OpenSSL::SSL)
+                      PUBLIC Rocida::Core TurboParser::Parser TurboParser::DataBind
+                      PRIVATE Rocida::STL Rocida::CMeta Rocida::CNet)
 if(TARGET flowmq_media_provider_codegen)
   add_dependencies(flowmq flowmq_media_provider_codegen)
 endif()

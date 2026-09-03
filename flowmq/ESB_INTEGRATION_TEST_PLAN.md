@@ -447,9 +447,9 @@ Rebalance 耗时：<100ms
 
 ## 七、已知风险与缓解
 
-### 风险 1：依赖 CoroNet 未完成功能
+### 风险 1：依赖 CNet transport 边界
 **影响**: 集成测试需要完整的 endpoint 实现  
-**缓解**: 优先实现 mock endpoint，隔离 CoroNet 依赖
+**缓解**: 使用 TCP/TLS endpoint 集成测试覆盖 CNet ownership、关闭和错误传播
 
 ### 风险 2：性能未达预期
 **影响**: Benchmark 结果低于目标  
@@ -901,9 +901,9 @@ OPEN 状态（fail fast）：
 
 ## 七、已知风险与缓解（更新）
 
-### 风险 1：依赖 CoroNet 未完成功能
+### 风险 1：依赖 CNet transport 边界
 **影响**: 集成测试需要完整的 endpoint 实现  
-**缓解**: 优先实现 mock endpoint，隔离 CoroNet 依赖
+**缓解**: 使用 TCP/TLS endpoint 集成测试覆盖 CNet ownership、关闭和错误传播
 
 ### 风险 2：性能未达预期
 **影响**: Benchmark 结果低于目标  

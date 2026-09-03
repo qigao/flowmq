@@ -63,7 +63,7 @@ static void bench_protocol_roundtrip(size_t payload_size, size_t samples,
 }
 
 spec("standalone FlowMQ protocol benchmark") {
-  bench("contiguous FMQ v3 framing") {
+  bench("contiguous FMQ v4 framing") {
     bench_protocol_roundtrip(BENCH_SMALL_PAYLOAD_BYTES, BENCH_SMALL_SAMPLES,
                              "encode 64-byte payload",
                              "decode 64-byte payload");

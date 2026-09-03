@@ -6,8 +6,7 @@
 #include "flowmq_stream_partition.h"
 #include "flowmq_stl_error_internal.h"
 
-#include <turbostl/hash_map.h>
-#include <turbostl/hash_set.h>
+#include <rocida/stl.h>
 
 #include <stdlib.h>
 #include <stdint.h>

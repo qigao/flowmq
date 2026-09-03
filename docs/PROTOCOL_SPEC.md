@@ -1,67 +1,42 @@
-# FlowMQ 协议索引
+# FlowMQ protocol specifications
 
-本文是协议、持久化格式和配置契约的发布入口，只负责协议地图、分层关系和公共规则。
-每个协议的字段与状态机只在
-下表指定的唯一正文中维护，避免索引与专题文档产生两份不一致的规范。
+本目录的现行 wire 契约如下：
 
-## 1. 文档地图
-
-| 文档 | 唯一正文 | 范围 |
+| 文档 | Wire | 责任范围 |
 | --- | --- | --- |
-| [FMQ_WIRE_PROTOCOL.md](FMQ_WIRE_PROTOCOL.md) | FMQ/3、FMS/3 | socket frame、HELLO、分片、心跳、pattern、安全 envelope、queue/backpressure |
-| [KCP_TRANSPORT_PROTOCOL.md](KCP_TRANSPORT_PROTOCOL.md) | TKSH/1、TKSR/1、TKF1/1 | KCP PSK handshake、AEAD、replay、Reed-Solomon FEC、调优参数 |
+| [FMQ_WIRE_PROTOCOL.md](FMQ_WIRE_PROTOCOL.md) | FMQ/5 | frame、HELLO/SETTINGS、DATA、FLOW_UPDATE、订阅控制、heartbeat、fragmentation、multipart |
+| [media-provider schema](../application/schema/flowmq_media_provider_v1.schema) | FMS/1 | 应用 payload schema 与校验器；未接入 socket runtime |
 
-以下文档不是新的 wire protocol 正文：
-
-| 文档 | 归类 | 用途 |
-| --- | --- | --- |
-| [README.md](../README.md) | 产品概览 | package、pattern 选择和协议入口 |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | 架构说明 | owner、线程、生命周期和模块边界 |
-
-## 2. 协议清单
-
-| 名称 | 层级 | 载体 | 事实源/owner |
-| --- | --- | --- | --- |
-| FMQ/3 | socket framing | CoroNet endpoint 的字节流/报文 | FlowMQ protocol decoder 与 peer session |
-| FMS/3 | HELLO security envelope | FMQ/3 HELLO payload | security owner 与 BIND peer admission |
-| TKSH/1、TKSR/1、TKF1/1 | secure KCP transport | UDP datagram | CoroNet KCP session owner |
-
-只有 FMQ/3 定义 socket framing；应用 payload 不增加 frame kind。
-
-## 3. 分层关系
+## 分层
 
 ```text
-C API -> pattern/session owner -> FMQ/3 frame + FMS/3 HELLO + PING/PONG
-      -> CoroNet transport -> KCP: TKSH/1 -> TKSR/1 -> TKF1/1 -> UDP
+application payload / FMS/1
+        -> FMQ/5 frame
+        -> Rocida CNet TCP or verified TLS byte stream
 ```
 
-应用 owner 不得成为新的 socket framing owner；它们只能通过既有 pattern/session 边界发送
-pointer-free application payload。派生视图和指标不得反向推进协议事实源。
+FMQ/5 负责 framing、pattern/session、能力协商、receiver-driven credit 与错误边界；CNet 负责 TCP/TLS 连接、完整有序写入、
+receive view 和关闭完成。TLS 不改变 FMQ frame 格式。
 
-## 4. 公共编码与错误规则
+## 实现映射
 
-除专题正文另有明确规定，协议字段遵循以下共同约束：
-
-- 整数为 network byte order；文本为无 NUL、有界 UTF-8；BYTES 保持 binary-safe。
-- 所有 decoder 必须校验完整输入、版本、保留字段、长度、字段组合和资源上限。
-- 未知 critical 字段、无法恢复的 malformed 输入和协议版本不支持
-  必须 fail fast；不得静默修复或 fallback。
-- 本地 frame admission、transport send、storage accept、delivery/completion 是不同
-  ACK 边界，不能互相冒充。
-- raw socket bytes、decoder borrowed view 和临时 frame 不能跨 owner lane、graph、
-  queue 或线程保存；跨边界必须转换为拥有内存的消息/记录。
-- route、socket、coro、线程和 provider 指针不得进入任何网络或持久化格式；需要延迟
-  回复时使用专题正文定义的 generation-fenced logical identity。
-
-## 5. 协议集合
-
-FMQ/3 只接受 version 3；KCP 只接受 TKSH/1、TKSR/1 和 TKF1/1。没有旧 frame、raw KCP、
-version negotiation、兼容 wrapper 或自动 transport fallback。协议字段变化必须同步更新
-对应唯一正文、实现和测试。
-
-## 6. 实现与验证入口
-
-| 协议 | 实现入口 | 主要测试 |
+| Wire | Production implementation | Tests |
 | --- | --- | --- |
-| FMQ/3、FMS/3 | `flowmq/protocol/`、`patterns/` | `flowmq/protocol/tests/`、`patterns/tests/` |
-| TKSH/1、TKSR/1、TKF1/1 | CoroNet `src/turbo_kcp*.c` | CoroNet `tests/test_kcp.c`、`benchmarks/test_bench_kcp.c` |
+| FMQ/5 | `flowmq/protocol/src/flowmq_protocol.c`、`patterns/src/flowmq_flow_control.c`、`patterns/src/flowmq_socket.c` | `flowmq/protocol/tests/`、`patterns/tests/` |
+| FMS/1 | generated TBE binding 与 `application/src/flowmq_media_provider.c` | `application/tests/test_flowmq_media_provider.c` |
+| TCP/TLS binding | `patterns/src/flowmq_socket.c`、`flowmq_cnet_transport.c` | `patterns/tests/test_flowmq_socket.c`、`test_flowmq_transport.c` |
+
+任何 wire 或 socket 行为变更都必须同步更新对应文档与测试。未在此入口列出的旧 transport
+协议不属于当前 FlowMQ 支持面。
+
+## 已设计但未接入 socket runtime 的能力
+
+- ESB pattern 12..21、frame kind 7..19：已有 TLV codec 与本地状态结构，但公开
+  `flowmq_socket()` 只接受 ZeroMQ 风格 pattern 0..10，没有 ESB transport dispatch。
+- FMS/3 security envelope：已有 codec 与语法校验；当前 endpoint fail closed，只接受空
+  payload，尚无 credential provider、principal/ACL 或 TLS certificate identity binding。
+- FMS/1 media-provider：仅是可装入 DATA payload 的应用 schema/validator，不提供
+  dispatcher、worker 或 broker。
+- reconnect policy、receive-side heartbeat deadline 与 segmented frame encoder：已有独立
+  helper/codec 测试，但尚未由 socket facade 配置或调用。TCP/TLS socket 当前使用连续
+  scratch buffer 编码，并由调用者显式驱动重连策略。

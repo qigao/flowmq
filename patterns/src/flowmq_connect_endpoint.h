@@ -1,6 +1,0 @@
-#ifndef FLOWMQ_CONNECT_ENDPOINT_INTERNAL_FORWARD_H
-#define FLOWMQ_CONNECT_ENDPOINT_INTERNAL_FORWARD_H
-
-#include "../../include/flowmq_connect_endpoint.h"
-
-#endif /* FLOWMQ_CONNECT_ENDPOINT_INTERNAL_FORWARD_H */

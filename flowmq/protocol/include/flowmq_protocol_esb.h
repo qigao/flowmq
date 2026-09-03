@@ -7,7 +7,7 @@
  * @file flowmq_protocol_esb.h
  * FlowMQ ESB (Enterprise Service Bus) pattern extensions.
  * 
- * This file extends the base FlowMQ v3 protocol with ESB-specific patterns:
+ * This file extends the base FMQ/5 protocol with ESB-specific patterns:
  * - SCATTER/GATHER: Request fanout with response aggregation
  * - STREAM: Kafka-style partitioned streams with consumer groups
  * - PRIORITY_QUEUE: Priority-ordered message delivery
@@ -15,7 +15,7 @@
  * - CIRCUIT_BREAKER: Fault isolation and fast failure
  * 
  * ESB patterns use the reserved pattern range 12-31 and frame kinds 7-31.
- * All ESB extensions maintain wire compatibility with FMQ v3.
+ * ESB frame kinds use the FMQ/5 envelope and its reserved kind range.
  */
 
 #include "flowmq_protocol.h"
@@ -24,11 +24,11 @@
 extern "C" {
 #endif
 
-/* ESB Pattern value range: 12-31 (reserved in FMQ v3) */
+/* ESB Pattern value range: 12-31 (reserved in FMQ/5) */
 #define FLOWMQ_PROTOCOL_ESB_PATTERN_MIN 12u
 #define FLOWMQ_PROTOCOL_ESB_PATTERN_MAX 31u
 
-/* ESB Frame kind range: 7-31 (reserved in FMQ v3) */
+/* ESB Frame kind range: 7-31 (reserved in FMQ/5) */
 #define FLOWMQ_PROTOCOL_ESB_FRAME_MIN 7u
 #define FLOWMQ_PROTOCOL_ESB_FRAME_MAX 31u
 
@@ -145,7 +145,7 @@ typedef enum flowmq_protocol_esb_decode_mode_e {
  * Unused fields must be zero-initialized.
  */
 typedef struct flowmq_protocol_esb_frame_s {
-  /* Base FMQ v3 frame (must be first member for safe casting) */
+  /* Base FMQ/5 frame (must be first member for safe casting) */
   flowmq_protocol_frame_t base;
   
   /* SCATTER/GATHER fields */

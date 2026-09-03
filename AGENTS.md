@@ -13,7 +13,7 @@
 
 本文件保留核心约束与原则。详细技术规范已拆分为独立 skills，按需激活：
 
-- **`skills/turboutils.md`** - TurboUtils 完整 API 参考（内存管理、字符串、文件、日志、并发、无锁数据结构）
+- **`skills/rocida.md`** - TurboUtils 完整 API 参考（内存管理、字符串、文件、日志、并发、无锁数据结构）
 - **`skills/coronet.md`** - CoroNet 协程网络开发指南（coroutine、TCP/TLS/UDP/KCP/Pipe/WebSocket、SOCKS5/TProxy 边界）
 - **`skills/cmake_presets.md`** - CMake Presets 构建测试指南（configure/build/test preset、target 构建、build tree 恢复）
 - **`skills/c_design_patterns.md`** - C 语言设计模式实现指南（12 种模式、SOLID 原则、反模式警告）
@@ -204,11 +204,11 @@
 
 ### 标准库与成熟算法优先
 
-> **详细 API 参见**: `skills/turboutils.md`
+> **详细 API 参见**: `skills/rocida.md`
 
 #### 库优先级顺序（从高到低）
 
-1. **TurboUtils**（通过 `find_package(TurboUtils CONFIG REQUIRED)` 与 `TurboUtils::Core` 使用）— 最优先
+1. **TurboUtils**（通过 `find_package(TurboUtils CONFIG REQUIRED)` 与 `Rocida::Core` 使用）— 最优先
 2. **项目内模块**（`exprtk/`、`plugins/` 等）
 3. **vendor/ 库**（sds、croar、mir、monocypher、sha2、uuid、miniblas）
 4. **vcpkg 依赖**（xxhash、sqlite3、zstd、openssl、c-ares、aklomp-base64、simde）

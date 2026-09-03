@@ -2,7 +2,7 @@
 
 ## 概述
 
-FlowMQ ESB（Enterprise Service Bus）扩展为 FlowMQ 引入了五种企业级消息模式，用于支持微服务架构中的复杂交互场景。这些模式基于 FlowMQ v3 协议，通过 TLV（Type-Length-Value）编码扩展 payload，保持与基础 FlowMQ 协议的向后兼容性。
+FlowMQ ESB（Enterprise Service Bus）扩展为 FlowMQ 引入了五种企业级消息模式，用于支持微服务架构中的复杂交互场景。这些模式在 FMQ/5 framing 内通过 TLV（Type-Length-Value）扩展 payload；ESB payload 编码保持稳定，但旧 transport wire 不与 FMQ/5 混连。
 
 ### 设计原则
 

@@ -7,6 +7,8 @@ int flowmq_pattern_validate(flowmq_protocol_pattern_t pattern);
 int flowmq_patterns_compatible(flowmq_protocol_pattern_t local, flowmq_protocol_pattern_t remote);
 int flowmq_pattern_hello_validate(flowmq_protocol_pattern_t local,
                                   const flowmq_protocol_frame_t *hello);
+int flowmq_pattern_socket_hello_validate(flowmq_protocol_pattern_t local,
+                                         const flowmq_protocol_frame_t *hello);
 int flowmq_pattern_data_direction_validate(flowmq_protocol_pattern_t local,
                                            const flowmq_protocol_frame_t *frame);
 int flowmq_pattern_encode_hello(flowmq_protocol_pattern_t pattern, vstr identity, vstr topic,
