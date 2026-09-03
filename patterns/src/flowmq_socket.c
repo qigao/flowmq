@@ -5,6 +5,7 @@
 #include "flowmq_pattern.h"
 #include "flowmq_pattern_state.h"
 #include "flowmq_protocol_internal.h"
+#include "flowmq_reconnect.h"
 #include "flowmq_stream_decoder.h"
 #include "flowmq_subscription_set.h"
 #include "turbo_error.h"
@@ -21,11 +22,15 @@
 
 enum {
   FLOWMQ_SOCKET_PEER_CAPACITY = 4u,
+  FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY = FLOWMQ_SOCKET_PEER_CAPACITY,
+  FLOWMQ_SOCKET_ENDPOINT_NONE = FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY,
   FLOWMQ_SOCKET_INBOUND_CAPACITY = 1024u,
   FLOWMQ_SOCKET_OUTBOUND_CAPACITY = 1024u,
   FLOWMQ_SOCKET_MULTIPART_CAPACITY = 64u,
   FLOWMQ_SOCKET_DEFAULT_HWM = 1000u,
   FLOWMQ_SOCKET_DEFAULT_HWM_BYTES = 16u * 1024u * 1024u,
+  FLOWMQ_SOCKET_DEFAULT_RECONNECT_IVL_MS = 100,
+  FLOWMQ_SOCKET_DEFAULT_RECONNECT_IVL_MAX_MS = 0,
   FLOWMQ_SOCKET_HARD_HWM_BYTES = 64u * 1024u * 1024u,
   FLOWMQ_SOCKET_MAX_FRAME_SIZE = 1024u * 1024u,
   FLOWMQ_SOCKET_BLOCKING_SLICE_MS = 10u,
@@ -39,6 +44,16 @@ enum {
 };
 
 typedef struct flowmq_socket_peer_s flowmq_socket_peer_t;
+
+/* Endpoint policy survives a connection; all mutable wire/session state does not. */
+typedef struct flowmq_socket_endpoint_s {
+  flowmq_reconnect_t reconnect;
+  uint64_t next_attempt_ms;
+  char uri[FLOWMQ_SOCKET_ENDPOINT_CAPACITY];
+  unsigned used : 1;
+  unsigned active : 1;
+  unsigned retry_pending : 1;
+} flowmq_socket_endpoint_t;
 
 typedef struct flowmq_socket_message_s {
   mem_buffer_t *buffer;
@@ -67,6 +82,7 @@ struct flowmq_socket_peer_s {
   flowmq_socket_outbound_t *outbound;
   flowmq_protocol_pattern_t remote_pattern;
   size_t identity_size;
+  size_t endpoint_index;
   flowmq_socket_message_t staged[FLOWMQ_SOCKET_MULTIPART_CAPACITY];
   size_t staged_count;
   size_t staged_bytes;
@@ -113,6 +129,7 @@ struct flowmq_socket_s {
   mem_pool_t message_pool;
   flowmq_subscription_set_t subscriptions;
   flowmq_socket_peer_t *peers;
+  flowmq_socket_endpoint_t endpoints[FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY];
   flowmq_socket_message_t *inbound;
   flowmq_socket_outbound_t send_staged[FLOWMQ_SOCKET_MULTIPART_CAPACITY];
   unsigned char *send_scratch;
@@ -141,6 +158,8 @@ struct flowmq_socket_s {
   uint32_t flow_update_quantum;
   int heartbeat_interval_ms;
   int heartbeat_timeout_ms;
+  int reconnect_interval_ms;
+  int reconnect_interval_max_ms;
   int flow_update_interval_ms;
   int async_error;
   int send_cancel_error;
@@ -157,6 +176,7 @@ struct flowmq_socket_s {
   unsigned reply_peer_valid : 1;
   unsigned request_peer_valid : 1;
   unsigned heartbeat_timeout_set : 1;
+  unsigned reconnect_pending : 1;
   char last_endpoint[FLOWMQ_SOCKET_ENDPOINT_CAPACITY];
   char identity[FLOWMQ_PROTOCOL_MAX_IDENTITY_SIZE + 1u];
   size_t identity_size;
@@ -225,6 +245,7 @@ static flowmq_socket_peer_t *flowmq_socket_peer_acquire(flowmq_socket_t *socket)
     if (!peer->used) {
       memset(peer, 0, sizeof(*peer));
       peer->owner = socket;
+      peer->endpoint_index = FLOWMQ_SOCKET_ENDPOINT_NONE;
       peer->used = 1u;
       peer->outbound = (flowmq_socket_outbound_t *)calloc(
           FLOWMQ_SOCKET_OUTBOUND_CAPACITY, sizeof(*peer->outbound));
@@ -328,6 +349,26 @@ static void flowmq_socket_peer_retire(flowmq_socket_peer_t *peer) {
 
 static void flowmq_socket_fail(flowmq_socket_t *socket, int status) {
   if (socket->async_error == TURBO_OK) socket->async_error = status;
+}
+
+static int flowmq_socket_endpoint_schedule(flowmq_socket_t *socket,
+                                           flowmq_socket_endpoint_t *endpoint) {
+  uint64_t delay_ms = 0u;
+  uint64_t now_ms;
+  int status;
+  if (socket == NULL || endpoint == NULL || !endpoint->used)
+    return TURBO_EINVAL;
+  endpoint->active = 0u;
+  endpoint->retry_pending = 0u;
+  if (socket->reconnect_interval_ms < 0) return TURBO_OK;
+  status = flowmq_reconnect_next(&endpoint->reconnect, &delay_ms);
+  if (status != TURBO_OK) return status;
+  now_ms = turbo_monotonic_ms();
+  endpoint->next_attempt_ms =
+      delay_ms > UINT64_MAX - now_ms ? UINT64_MAX : now_ms + delay_ms;
+  endpoint->retry_pending = 1u;
+  socket->reconnect_pending = 1u;
+  return TURBO_OK;
 }
 
 static void flowmq_socket_peer_fail(flowmq_socket_peer_t *peer) {
@@ -933,6 +974,15 @@ static void flowmq_socket_on_state(void *user, cnet_connection connection,
   peer->connection = connection;
   if (state == CNET_CONNECTION_CONNECTED) {
     int flow_control_status;
+    if (peer->endpoint_index < FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY) {
+      flowmq_socket_endpoint_t *endpoint =
+          &socket->endpoints[peer->endpoint_index];
+      if (endpoint->used) {
+        endpoint->active = 1u;
+        endpoint->retry_pending = 0u;
+        flowmq_reconnect_reset(&endpoint->reconnect);
+      }
+    }
     peer->connected = 1u;
     if (socket->pattern.pattern == FLOWMQ_PROTOCOL_PAIR) {
       for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
@@ -966,6 +1016,13 @@ static void flowmq_socket_on_state(void *user, cnet_connection connection,
     }
   } else if (state == CNET_CONNECTION_CLOSED ||
              state == CNET_CONNECTION_FAILED) {
+    if (peer->endpoint_index < FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY) {
+      flowmq_socket_endpoint_t *endpoint =
+          &socket->endpoints[peer->endpoint_index];
+      int reconnect_status = flowmq_socket_endpoint_schedule(socket, endpoint);
+      if (reconnect_status != TURBO_OK)
+        flowmq_socket_fail(socket, reconnect_status);
+    }
     (void)error;
     flowmq_socket_peer_retire(peer);
   }
@@ -1017,6 +1074,80 @@ static cnet_observer flowmq_socket_observer(flowmq_socket_peer_t *peer) {
                          .on_receive = flowmq_socket_on_receive,
                          .user = peer,
                          .on_send = flowmq_socket_on_send};
+}
+
+static flowmq_socket_endpoint_t *flowmq_socket_endpoint_acquire(
+    flowmq_socket_t *socket, size_t *endpoint_index) {
+  if (socket == NULL || endpoint_index == NULL) return NULL;
+  for (size_t i = 0u; i < FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY; ++i) {
+    flowmq_socket_endpoint_t *endpoint = &socket->endpoints[i];
+    if (!endpoint->used) {
+      memset(endpoint, 0, sizeof(*endpoint));
+      endpoint->used = 1u;
+      *endpoint_index = i;
+      return endpoint;
+    }
+  }
+  return NULL;
+}
+
+static int flowmq_socket_endpoint_connect(flowmq_socket_t *socket,
+                                          size_t endpoint_index) {
+  flowmq_socket_endpoint_t *endpoint;
+  flowmq_socket_peer_t *peer;
+  cnet_connect_options options;
+  cnet_observer observer;
+  int status;
+  if (socket == NULL || endpoint_index >= FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY)
+    return TURBO_EINVAL;
+  endpoint = &socket->endpoints[endpoint_index];
+  if (!endpoint->used) return TURBO_ENOENT;
+  if (endpoint->active) return TURBO_EALREADY;
+  peer = flowmq_socket_peer_acquire(socket);
+  if (peer == NULL) return TURBO_ENOBUFS;
+  peer->endpoint_index = endpoint_index;
+  observer = flowmq_socket_observer(peer);
+  options = (cnet_connect_options){
+      .uri = endpoint->uri,
+      .observer = observer,
+      .tls = NULL,
+      .tls_client = socket->transport == FLOWMQ_TRANSPORT_TLS
+                        ? &socket->tls_client
+                        : NULL};
+  status = cnet_connect(&socket->client, &options, &peer->connection);
+  if (status != TURBO_OK) {
+    flowmq_socket_peer_release(peer);
+    return status;
+  }
+  endpoint->active = 1u;
+  endpoint->retry_pending = 0u;
+  return TURBO_OK;
+}
+
+static int flowmq_socket_reconnect_progress(flowmq_socket_t *socket) {
+  const uint64_t now_ms = turbo_monotonic_ms();
+  /* Keep established-connection progress at one predictable branch. */
+  if (!socket->reconnect_pending) return TURBO_OK;
+  socket->reconnect_pending = 0u;
+  for (size_t i = 0u; i < FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY; ++i) {
+    flowmq_socket_endpoint_t *endpoint = &socket->endpoints[i];
+    int status;
+    if (!endpoint->used || endpoint->active || !endpoint->retry_pending)
+      continue;
+    if (now_ms < endpoint->next_attempt_ms) {
+      socket->reconnect_pending = 1u;
+      continue;
+    }
+    status = flowmq_socket_endpoint_connect(socket, i);
+    if (status == TURBO_OK) continue;
+    if (status == TURBO_EBUSY || status == TURBO_ENOBUFS ||
+        status == TURBO_EALREADY) {
+      socket->reconnect_pending = 1u;
+      continue;
+    }
+    return status;
+  }
+  return TURBO_OK;
 }
 
 static int flowmq_socket_runtime_init(flowmq_socket_t *socket,
@@ -1230,6 +1361,9 @@ flowmq_socket_t *flowmq_socket(flowmq_ctx_t *ctx, int type) {
   socket->receive_hwm = FLOWMQ_SOCKET_DEFAULT_HWM;
   socket->send_hwm_bytes = FLOWMQ_SOCKET_DEFAULT_HWM_BYTES;
   socket->receive_hwm_bytes = FLOWMQ_SOCKET_DEFAULT_HWM_BYTES;
+  socket->reconnect_interval_ms = FLOWMQ_SOCKET_DEFAULT_RECONNECT_IVL_MS;
+  socket->reconnect_interval_max_ms =
+      FLOWMQ_SOCKET_DEFAULT_RECONNECT_IVL_MAX_MS;
   socket->flow_update_interval_ms =
       FLOWMQ_FLOW_CONTROL_DEFAULT_UPDATE_INTERVAL_MS;
   socket->peers = (flowmq_socket_peer_t *)calloc(
@@ -1386,10 +1520,10 @@ int flowmq_bind(flowmq_socket_t *socket, const char *endpoint) {
 
 int flowmq_connect(flowmq_socket_t *socket, const char *endpoint) {
   flowmq_endpoint_parts_t parts;
-  flowmq_socket_peer_t *peer;
-  cnet_connect_options options;
-  cnet_observer observer;
+  flowmq_socket_endpoint_t *owned_endpoint;
+  size_t endpoint_index = FLOWMQ_SOCKET_ENDPOINT_NONE;
   size_t endpoint_size;
+  uint64_t reconnect_max_ms;
   int status;
   if (socket == NULL || socket->ctx == NULL) return TURBO_EINVAL;
   status = flowmq_endpoint_parse(endpoint, 0, &parts);
@@ -1398,30 +1532,38 @@ int flowmq_connect(flowmq_socket_t *socket, const char *endpoint) {
     for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
       if (socket->peers[i].used) return TURBO_EBUSY;
     }
+    for (size_t i = 0u; i < FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY; ++i) {
+      if (socket->endpoints[i].used) return TURBO_EBUSY;
+    }
   }
+  endpoint_size = strlen(endpoint) + 1u;
+  if (endpoint_size > FLOWMQ_SOCKET_ENDPOINT_CAPACITY) return TURBO_EMSGSIZE;
   status = flowmq_socket_runtime_init(socket, parts.transport);
   if (status != TURBO_OK) return status;
   if (parts.transport == FLOWMQ_TRANSPORT_TLS) {
     status = flowmq_socket_tls_client_init(socket);
     if (status != TURBO_OK) return status;
   }
-  peer = flowmq_socket_peer_acquire(socket);
-  if (peer == NULL) return TURBO_ENOBUFS;
-  observer = flowmq_socket_observer(peer);
-  options = (cnet_connect_options){
-      .uri = endpoint,
-      .observer = observer,
-      .tls = NULL,
-      .tls_client = parts.transport == FLOWMQ_TRANSPORT_TLS
-                        ? &socket->tls_client
-                        : NULL};
-  status = cnet_connect(&socket->client, &options, &peer->connection);
+  owned_endpoint = flowmq_socket_endpoint_acquire(socket, &endpoint_index);
+  if (owned_endpoint == NULL) return TURBO_ENOBUFS;
+  memcpy(owned_endpoint->uri, endpoint, endpoint_size);
+  reconnect_max_ms =
+      socket->reconnect_interval_max_ms >= socket->reconnect_interval_ms &&
+              socket->reconnect_interval_ms >= 0
+          ? (uint64_t)socket->reconnect_interval_max_ms
+          : 0u;
+  status = flowmq_reconnect_init(
+      &owned_endpoint->reconnect,
+      socket->reconnect_interval_ms >= 0
+          ? (uint64_t)socket->reconnect_interval_ms
+          : 0u,
+      reconnect_max_ms, turbo_hrtime() ^ (uint64_t)(endpoint_index + 1u));
+  if (status == TURBO_OK)
+    status = flowmq_socket_endpoint_connect(socket, endpoint_index);
   if (status != TURBO_OK) {
-    flowmq_socket_peer_release(peer);
+    memset(owned_endpoint, 0, sizeof(*owned_endpoint));
     return status;
   }
-  endpoint_size = strlen(endpoint) + 1u;
-  if (endpoint_size > sizeof(socket->last_endpoint)) return TURBO_EMSGSIZE;
   memcpy(socket->last_endpoint, endpoint, endpoint_size);
   return TURBO_OK;
 }
@@ -1490,6 +1632,20 @@ int flowmq_setsockopt(flowmq_socket_t *socket, int option, const void *value,
     }
     return TURBO_OK;
   }
+  case FLOWMQ_RECONNECT_IVL:
+  case FLOWMQ_RECONNECT_IVL_MAX: {
+    int value_int;
+    if (value == NULL || size != sizeof(value_int)) return TURBO_EINVAL;
+    value_int = *(const int *)value;
+    if ((option == FLOWMQ_RECONNECT_IVL && value_int < -1) ||
+        (option == FLOWMQ_RECONNECT_IVL_MAX && value_int < 0))
+      return TURBO_EINVAL;
+    if (option == FLOWMQ_RECONNECT_IVL)
+      socket->reconnect_interval_ms = value_int;
+    else
+      socket->reconnect_interval_max_ms = value_int;
+    return TURBO_OK;
+  }
   case FLOWMQ_FLOW_UPDATE_IVL: {
     int value_int;
     if (value == NULL || size != sizeof(value_int)) return TURBO_EINVAL;
@@ -1556,6 +1712,18 @@ int flowmq_getsockopt(const flowmq_socket_t *socket, int option, void *value,
   if (socket == NULL || socket->ctx == NULL || size == NULL)
     return TURBO_EINVAL;
   switch (option) {
+  case FLOWMQ_RECONNECT_IVL:
+  case FLOWMQ_RECONNECT_IVL_MAX:
+    required = sizeof(int);
+    if (value == NULL || *size < required) {
+      *size = required;
+      return value == NULL ? TURBO_EINVAL : TURBO_EMSGSIZE;
+    }
+    *(int *)value = option == FLOWMQ_RECONNECT_IVL
+                        ? socket->reconnect_interval_ms
+                        : socket->reconnect_interval_max_ms;
+    *size = required;
+    return TURBO_OK;
   case FLOWMQ_RCVMORE:
     required = sizeof(int);
     if (value == NULL || *size < required) {
@@ -2008,6 +2176,8 @@ static int flowmq_socket_drive(flowmq_socket_t *socket, uint32_t timeout_ms,
     }
   }
   status = cnet_client_poll(&socket->client, timeout_ms, &client_events);
+  if (status != TURBO_OK) return status;
+  status = flowmq_socket_reconnect_progress(socket);
   if (status != TURBO_OK) return status;
   for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
     flowmq_socket_peer_t *peer = &socket->peers[i];

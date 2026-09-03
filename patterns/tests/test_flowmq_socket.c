@@ -568,6 +568,157 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_ctx_term(ctx), TURBO_OK);
   }
 
+  it("exposes ZeroMQ-compatible reconnect policy defaults and validation") {
+    int value = 0;
+    int disabled = -1;
+    int invalid = -2;
+    int interval_ms = 25;
+    int maximum_ms = 100;
+    size_t value_size = sizeof(value);
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *socket = flowmq_socket(ctx, FLOWMQ_PAIR);
+
+    check_equal(flowmq_getsockopt(socket, FLOWMQ_RECONNECT_IVL, &value,
+                                 &value_size), TURBO_OK);
+    check_equal(value, 100);
+    value_size = sizeof(value);
+    check_equal(flowmq_getsockopt(socket, FLOWMQ_RECONNECT_IVL_MAX, &value,
+                                 &value_size), TURBO_OK);
+    check_equal(value, 0);
+
+    check_equal(flowmq_setsockopt(socket, FLOWMQ_RECONNECT_IVL, &interval_ms,
+                                 sizeof(interval_ms)), TURBO_OK);
+    check_equal(flowmq_setsockopt(socket, FLOWMQ_RECONNECT_IVL_MAX, &maximum_ms,
+                                 sizeof(maximum_ms)), TURBO_OK);
+    check_equal(flowmq_setsockopt(socket, FLOWMQ_RECONNECT_IVL, &disabled,
+                                 sizeof(disabled)), TURBO_OK);
+    check_equal(flowmq_setsockopt(socket, FLOWMQ_RECONNECT_IVL, &invalid,
+                                 sizeof(invalid)), TURBO_EINVAL);
+    check_equal(flowmq_setsockopt(socket, FLOWMQ_RECONNECT_IVL_MAX, &disabled,
+                                 sizeof(disabled)), TURBO_EINVAL);
+
+    value_size = sizeof(value);
+    check_equal(flowmq_getsockopt(socket, FLOWMQ_RECONNECT_IVL, &value,
+                                 &value_size), TURBO_OK);
+    check_equal(value, -1);
+
+    check_equal(flowmq_close(socket), TURBO_OK);
+    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+  }
+
+  it("reconnects a caller-driven TCP endpoint after the listener restarts") {
+    static const char before[] = "before-restart";
+    static const char after[] = "after-restart";
+    char endpoint[128] = {0};
+    char received[32] = {0};
+    size_t endpoint_size = 0u;
+    size_t received_size = 0u;
+    int reconnect_ms = 1;
+    int sent_before = 0;
+    int received_before = 0;
+    int received_after = 0;
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *server = flowmq_socket(ctx, FLOWMQ_PAIR);
+    flowmq_socket_t *client = flowmq_socket(ctx, FLOWMQ_PAIR);
+
+    check_equal(flowmq_setsockopt(client, FLOWMQ_RECONNECT_IVL,
+                                 &reconnect_ms, sizeof(reconnect_ms)),
+                TURBO_OK);
+    check_equal(flowmq_setsockopt(client, FLOWMQ_RECONNECT_IVL_MAX,
+                                 &reconnect_ms, sizeof(reconnect_ms)),
+                TURBO_OK);
+    check_equal(flowmq_bind(server, "tcp://127.0.0.1:0"), TURBO_OK);
+    check_equal(flowmq_last_endpoint(server, endpoint, sizeof(endpoint),
+                                     &endpoint_size), TURBO_OK);
+    check_equal(flowmq_connect(client, endpoint), TURBO_OK);
+
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && !received_before;
+         ++i) {
+      check_equal(progress_pair(client, server), TURBO_OK);
+      if (!sent_before &&
+          flowmq_send(client, before, sizeof(before) - 1u,
+                      FLOWMQ_DONTWAIT) == TURBO_OK)
+        sent_before = 1;
+      if (sent_before &&
+          flowmq_recv(server, received, sizeof(received), &received_size,
+                      FLOWMQ_DONTWAIT) == TURBO_OK)
+        received_before = 1;
+    }
+    check_true(received_before);
+    check_equal(received_size, sizeof(before) - 1u);
+    check_equal(memcmp(received, before, sizeof(before) - 1u), 0);
+    check_equal(flowmq_close(server), TURBO_OK);
+
+    server = flowmq_socket(ctx, FLOWMQ_PAIR);
+    check_not_null(server);
+    check_equal(flowmq_bind(server, endpoint), TURBO_OK);
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && !received_after;
+         ++i) {
+      check_equal(progress_pair(client, server), TURBO_OK);
+      (void)flowmq_send(client, after, sizeof(after) - 1u, FLOWMQ_DONTWAIT);
+      if (flowmq_recv(server, received, sizeof(received), &received_size,
+                      FLOWMQ_DONTWAIT) == TURBO_OK)
+        received_after = 1;
+    }
+    check_true(received_after);
+    check_equal(received_size, sizeof(after) - 1u);
+    check_equal(memcmp(received, after, sizeof(after) - 1u), 0);
+
+    check_equal(flowmq_close(client), TURBO_OK);
+    check_equal(flowmq_close(server), TURBO_OK);
+    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+  }
+
+  it("does not reconnect an endpoint when its interval is disabled") {
+    static const char payload[] = "disabled-reconnect";
+    char endpoint[128] = {0};
+    char received[32] = {0};
+    size_t endpoint_size = 0u;
+    size_t received_size = 0u;
+    size_t ready = 0u;
+    int disabled = -1;
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *server = flowmq_socket(ctx, FLOWMQ_PAIR);
+    flowmq_socket_t *client = flowmq_socket(ctx, FLOWMQ_PAIR);
+    flowmq_pollitem_t items[] = {{.socket = client}, {.socket = server}};
+
+    check_equal(flowmq_setsockopt(client, FLOWMQ_RECONNECT_IVL, &disabled,
+                                 sizeof(disabled)), TURBO_OK);
+    check_equal(flowmq_bind(server, "tcp://127.0.0.1:0"), TURBO_OK);
+    check_equal(flowmq_last_endpoint(server, endpoint, sizeof(endpoint),
+                                     &endpoint_size), TURBO_OK);
+    check_equal(flowmq_connect(client, endpoint), TURBO_OK);
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT; ++i) {
+      check_equal(progress_pair(client, server), TURBO_OK);
+      if (flowmq_send(client, payload, sizeof(payload) - 1u,
+                      FLOWMQ_DONTWAIT) == TURBO_OK)
+        break;
+    }
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT; ++i) {
+      check_equal(progress_pair(client, server), TURBO_OK);
+      if (flowmq_recv(server, received, sizeof(received), &received_size,
+                      FLOWMQ_DONTWAIT) == TURBO_OK)
+        break;
+    }
+    check_equal(received_size, sizeof(payload) - 1u);
+    check_equal(flowmq_close(server), TURBO_OK);
+
+    server = flowmq_socket(ctx, FLOWMQ_PAIR);
+    check_not_null(server);
+    check_equal(flowmq_bind(server, endpoint), TURBO_OK);
+    items[1].socket = server;
+    check_equal(flowmq_poll(items, 2u, 50u, &ready), TURBO_OK);
+    check_equal(flowmq_send(client, payload, sizeof(payload) - 1u,
+                            FLOWMQ_DONTWAIT), TURBO_EBUSY);
+    check_equal(flowmq_poll(items, 2u, 20u, &ready), TURBO_OK);
+    check_equal(flowmq_recv(server, received, sizeof(received), &received_size,
+                            FLOWMQ_DONTWAIT), TURBO_EBUSY);
+
+    check_equal(flowmq_close(client), TURBO_OK);
+    check_equal(flowmq_close(server), TURBO_OK);
+    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+  }
+
   it("keeps a heartbeat-enabled connection open while both peers progress") {
     static const char payload[] = "heartbeat-alive";
     char endpoint[128] = {0};
@@ -749,8 +900,9 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_ctx_term(ctx), TURBO_OK);
   }
 
-  it("uses the same socket path over verified TLS") {
+  it("uses verified TLS for initial and reconnected sessions") {
     static const char payload[] = "verified-tls";
+    static const char reconnected_payload[] = "verified-tls-reconnected";
     char endpoint[128] = {0};
     char received[64] = {0};
     size_t endpoint_size = 0u;
@@ -760,6 +912,7 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_ctx_t *ctx = flowmq_ctx_new();
     flowmq_socket_t *server = flowmq_socket(ctx, FLOWMQ_PAIR);
     flowmq_socket_t *client = flowmq_socket(ctx, FLOWMQ_PAIR);
+    int reconnect_ms = 1;
     int status = TURBO_EBUSY;
 
     check_not_null(cert_path);
@@ -776,6 +929,12 @@ spec("flowmq_socket lifecycle and pattern surface") {
                                  strlen(cert_path)), TURBO_OK);
     check_equal(flowmq_setsockopt(client, FLOWMQ_TLS_SERVER_NAME, "localhost",
                                  strlen("localhost")), TURBO_OK);
+    check_equal(flowmq_setsockopt(client, FLOWMQ_RECONNECT_IVL,
+                                 &reconnect_ms, sizeof(reconnect_ms)),
+                TURBO_OK);
+    check_equal(flowmq_setsockopt(client, FLOWMQ_RECONNECT_IVL_MAX,
+                                 &reconnect_ms, sizeof(reconnect_ms)),
+                TURBO_OK);
     check_equal(flowmq_bind(server, "tls://127.0.0.1:0"), TURBO_OK);
     check_equal(flowmq_last_endpoint(server, endpoint, sizeof(endpoint), &endpoint_size),
                 TURBO_OK);
@@ -795,6 +954,27 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(status, TURBO_OK);
     check_equal(received_size, sizeof(payload) - 1u);
     check_equal(memcmp(received, payload, received_size), 0);
+
+    check_equal(flowmq_close(server), TURBO_OK);
+    server = flowmq_socket(ctx, FLOWMQ_PAIR);
+    check_not_null(server);
+    check_equal(flowmq_setsockopt(server, FLOWMQ_TLS_CERT_FILE, cert_path,
+                                 strlen(cert_path)), TURBO_OK);
+    check_equal(flowmq_setsockopt(server, FLOWMQ_TLS_KEY_FILE, key_path,
+                                 strlen(key_path)), TURBO_OK);
+    check_equal(flowmq_bind(server, endpoint), TURBO_OK);
+    status = TURBO_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status != TURBO_OK;
+         ++i) {
+      check_equal(progress_pair(client, server), TURBO_OK);
+      (void)flowmq_send(client, reconnected_payload,
+                        sizeof(reconnected_payload) - 1u, FLOWMQ_DONTWAIT);
+      status = flowmq_recv(server, received, sizeof(received), &received_size,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, TURBO_OK);
+    check_equal(received_size, sizeof(reconnected_payload) - 1u);
+    check_equal(memcmp(received, reconnected_payload, received_size), 0);
 
     check_equal(flowmq_close(client), TURBO_OK);
     check_equal(flowmq_close(server), TURBO_OK);
@@ -1895,6 +2075,59 @@ spec("flowmq_socket lifecycle and pattern surface") {
                 TURBO_OK);
     check_equal(flowmq_connect(xsub, endpoint), TURBO_OK);
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY; ++i) {
+      check_equal(progress_pair(xsub, xpub), TURBO_OK);
+      status = flowmq_recv(xpub, event, sizeof(event), &event_size,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, TURBO_OK);
+    check_equal(event_size, sizeof(topic));
+    check_equal(event[0], 1u);
+    check_equal(memcmp(event + 1u, topic, sizeof(topic) - 1u), 0);
+
+    check_equal(flowmq_close(xsub), TURBO_OK);
+    check_equal(flowmq_close(xpub), TURBO_OK);
+    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+  }
+
+  it("replays desired XSUB subscriptions into a reconnected session") {
+    static const char topic[] = "events.";
+    char endpoint[128] = {0};
+    unsigned char event[32] = {0};
+    size_t endpoint_size = 0u;
+    size_t event_size = 0u;
+    int reconnect_ms = 1;
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *xpub = flowmq_socket(ctx, FLOWMQ_XPUB);
+    flowmq_socket_t *xsub = flowmq_socket(ctx, FLOWMQ_XSUB);
+    int status = TURBO_EBUSY;
+
+    check_equal(flowmq_setsockopt(xsub, FLOWMQ_RECONNECT_IVL,
+                                 &reconnect_ms, sizeof(reconnect_ms)),
+                TURBO_OK);
+    check_equal(flowmq_setsockopt(xsub, FLOWMQ_RECONNECT_IVL_MAX,
+                                 &reconnect_ms, sizeof(reconnect_ms)),
+                TURBO_OK);
+    check_equal(flowmq_setsockopt(xsub, FLOWMQ_SUBSCRIBE, topic,
+                                 sizeof(topic) - 1u), TURBO_OK);
+    check_equal(flowmq_bind(xpub, "tcp://127.0.0.1:0"), TURBO_OK);
+    check_equal(flowmq_last_endpoint(xpub, endpoint, sizeof(endpoint),
+                                     &endpoint_size), TURBO_OK);
+    check_equal(flowmq_connect(xsub, endpoint), TURBO_OK);
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY;
+         ++i) {
+      check_equal(progress_pair(xsub, xpub), TURBO_OK);
+      status = flowmq_recv(xpub, event, sizeof(event), &event_size,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, TURBO_OK);
+    check_equal(flowmq_close(xpub), TURBO_OK);
+
+    xpub = flowmq_socket(ctx, FLOWMQ_XPUB);
+    check_not_null(xpub);
+    check_equal(flowmq_bind(xpub, endpoint), TURBO_OK);
+    status = TURBO_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY;
+         ++i) {
       check_equal(progress_pair(xsub, xpub), TURBO_OK);
       status = flowmq_recv(xpub, event, sizeof(event), &event_size,
                            FLOWMQ_DONTWAIT);

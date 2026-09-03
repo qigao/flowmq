@@ -30,6 +30,12 @@ CNet 仍由 socket owner 线程直接推进，不创建 worker/progress thread�
 包装成 MPSC、Actor 或 Reactive stream。TCP 与 verified TLS 使用同一 peer、decoder、FSM
 和 message queue 路径；TLS 只在连接适配层增加证书与主机名验证。
 
+`FLOWMQ_RECONNECT_IVL=18` 与 `FLOWMQ_RECONNECT_IVL_MAX=21` 采用 ZeroMQ 的编号和
+连接级退避语义：IVL 默认 100ms，`-1` 禁止重连，`0` 表示下一轮 owner progress 立即
+尝试；IVL_MAX 默认 `0`，表示固定 IVL，设置为不小于 IVL 的正值后按上限做指数退避。
+实际间隔会随机化以降低重连风暴。断线只调度 endpoint，真正的 TCP/TLS connect、
+HELLO/SETTINGS 与订阅重放仍由应用后续调用 `send/recv/poll` 推进，不创建 timer thread。
+
 `FLOWMQ_SNDHWM`/`FLOWMQ_RCVHWM` 使用 `int` 消息数，扩展选项
 `FLOWMQ_SNDHWM_BYTES`/`FLOWMQ_RCVHWM_BYTES` 使用 `size_t` payload 字节数。四项都必须在
 首次 bind/connect 前设置且不能为零；普通发送达到 HWM 返回 `TURBO_ENOBUFS`，PUB/XPUB
@@ -45,6 +51,10 @@ bind/connect 前设置。IVL 默认为 `0`（禁用）；启用 IVL 且未显式
 FMQ/6 PING 不携带对端 TTL，因此当前没有伪装提供 `FLOWMQ_HEARTBEAT_TTL`。
 FMQ/6 在 HELLO 后强制 SETTINGS，并以 receiver-driven cumulative credit 协调 DATA；
 TCP/TLS 不发送同流 FEC repair symbol。credit 与 heartbeat 都由调用线程推进。
+
+重连创建全新的 peer session：generation、credit、decoder 与 multipart 状态不会跨连接
+继承；旧 peer 尚未完成的 outbound 数据也不会自动重播。需要业务级确认或重试时，应在
+DATA payload 层携带 correlation/idempotency 信息。
 
 multipart 接收后可用 `flowmq_getsockopt(socket, FLOWMQ_RCVMORE, ...)` 判断是否还有下一
 part。该查询返回最近一次成功 `flowmq_recv()` 的 `MORE` 状态，不推进网络或 pattern FSM。

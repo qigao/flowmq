@@ -27,13 +27,10 @@ int flowmq_reconnect_next(flowmq_reconnect_t *reconnect, uint64_t *delay_ms) {
   uint64_t minimum_delay_ms;
   uint64_t span_ms;
   if (!reconnect || !delay_ms) return TURBO_EINVAL;
-  if (reconnect->initial_delay_ms == 0u) return TURBO_ENOENT;
   if (reconnect->current_delay_ms == 0u) {
     reconnect->current_delay_ms = reconnect->initial_delay_ms;
   } else if (reconnect->max_delay_ms == 0u) {
-    reconnect->current_delay_ms = reconnect->current_delay_ms > UINT64_MAX / 2u
-                                      ? UINT64_MAX
-                                      : reconnect->current_delay_ms * 2u;
+    reconnect->current_delay_ms = reconnect->initial_delay_ms;
   } else if (reconnect->current_delay_ms >= reconnect->max_delay_ms ||
              reconnect->current_delay_ms > reconnect->max_delay_ms / 2u) {
     reconnect->current_delay_ms = reconnect->max_delay_ms;

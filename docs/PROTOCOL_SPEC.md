@@ -45,6 +45,7 @@ transport extension、relaxed ESB decoder 和 `FMS/1` media 旧称均不属于�
   breaker 模块仍是本地状态 primitive，不提供新的 socket type 或 broker runtime。
 - FMP/1 是可装入 DATA payload 的 typed application contract，不提供 dispatcher、worker 或
   durable broker。
-- reconnect policy、receive-side heartbeat deadline 与 segmented frame encoder 已有独立
-  helper/codec 测试，但尚未由 socket facade 全部配置或调用。TCP/TLS socket 当前使用连续
-  scratch buffer 编码，并由调用者显式驱动进度与重连策略。
+- reconnect policy 与 receive-side heartbeat deadline 已由 socket facade 配置和调用；
+  endpoint 断线后会在后续 caller progress 中创建全新 peer session。segmented frame encoder
+  仍只提供 codec，因为当前 CNet send 契约要求连续输入并复制到有界 command storage；
+  TCP/TLS socket 因此继续使用连续 scratch buffer 编码。

@@ -176,9 +176,23 @@ outbound multipart 会 pin 到该 session generation；该 peer 中途断线时�
 在 payload 内携带并校验 correlation，不能只持久化 routing identity。当前 API 不提供
 detached route handle。
 
-XPUB/XSUB subscription state 属于 peer session。XSUB 可在 reconnect 后重放 desired
-subscriptions；endpoint destroy 会清除该状态。空 subscription prefix 匹配全部 topic，
+XPUB/XSUB subscription snapshot 属于 peer session；XSUB desired subscriptions 属于 socket。
+新 session 完成 HELLO/SETTINGS 后从 socket 状态重放 desired subscriptions；`flowmq_close()`
+清除该状态。空 subscription prefix 匹配全部 topic，
 session 断开会产生相应 UNSUBSCRIBE。
+
+### 4.1 Reconnect session boundary
+
+`FLOWMQ_RECONNECT_IVL` 与 `FLOWMQ_RECONNECT_IVL_MAX` 只协调 TCP/TLS connection attempt，
+不改变 FMQ/6 wire。每次 reconnect 都必须重新执行 `HELLO -> SETTINGS -> READY`，生成新的
+session generation、credit window、decoder 和 pattern peer state。旧 session 未完成的
+outbound frame 不得自动移交或重播到新 session；需要 delivery guarantee 的应用协议必须
+自行定义 correlation、确认与幂等处理。
+
+重连 deadline 和 attempt 仅在 socket owner 调用 `send`、`recv` 或 `poll` 时推进。
+IVL 默认 100ms，`-1` 禁用，`0` 允许下一轮 progress 立即尝试；IVL_MAX 默认 `0`，表示不做
+指数增长。正值只有在不小于 IVL 时才启用有界指数退避，实际 delay 可随机化以避免重连风暴。
+这些语义对应 [libzmq reconnect socket options](https://libzmq.readthedocs.io/en/latest/zmq_setsockopt.html#zmq-reconnect-ivl-set-reconnection-interval)。
 
 ## 5. Heartbeat
 
@@ -246,6 +260,7 @@ peer 且尚未发送的 frame 会随 peer 状态释放，不会改投。
 `patterns/src/flowmq_socket.c`。对应测试覆盖 encode/decode、
 fragmentation、security envelope、unknown version、malformed control frame、
 pattern pairing、heartbeat deadline、累计 credit、generation fencing、quantum/deadline
-更新、ROUTER identity 排除、TCP/TLS loopback 和 pattern HWM，入口为
+更新、ROUTER identity 排除、TCP/TLS loopback/reconnect、XSUB subscription replay 和
+pattern HWM，入口为
 `flowmq/protocol/tests/test_flowmq_protocol.c`、`patterns/tests/test_flowmq_flow_control.c`
 与 `patterns/tests/test_flowmq_socket.c`。

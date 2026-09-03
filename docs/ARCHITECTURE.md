@@ -25,6 +25,8 @@ CNet 是调用者驱动的单-owner协程池，不是线程池。FlowMQ 不创�
 
 - `start/bind/connect` 负责同步验证、资源创建与异步 I/O admission；
 - `send/recv/poll` 在调用者线程推进 socket 和 CNet 状态；
+- outbound endpoint 的重连 deadline 也只在这些调用中检查；到期后最多执行一次固定容量
+  endpoint 表扫描并向 CNet admission 新 session，不创建 timer/progress thread；
 - `DONTWAIT` 只尝试一次；普通 `send/recv` 遇到 would-block 时在当前调用栈分片推进所属
   socket，直到成功或 CNet progress 返回错误；
 - 多 socket `poll` 对整个列表重复执行非阻塞 progress，以 1ms 有界间隔等待，直到请求的
@@ -38,6 +40,13 @@ CNet 是调用者驱动的单-owner协程池，不是线程池。FlowMQ 不创�
 FLOW_UPDATE 优先使用同一个串行 CNet write lane，不进入应用 outbound FIFO；收到任意合法
 FMQ frame 会取消未应答 PING 的 timeout。所有 deadline 只在 owner 调用
 `send/recv/poll` 时检查，不创建 timer thread，也不把 socket 变成 MPSC。
+
+Outbound endpoint 是 URI 与重连退避的主事实源；peer 是一次 CNet connection session。
+终止回调先解除 endpoint 的 active session，再按既有 generation fencing 退休 peer，并为
+endpoint 安排下一次 caller-driven attempt。旧 peer 的 decoder、credit、subscription snapshot、
+multipart staging 与 outbound queue 都不会转移到新 peer；socket-owned XSUB desired
+subscriptions 会从事实源重放。`FLOWMQ_RECONNECT_IVL` 默认 100ms，`-1` 禁用；
+`FLOWMQ_RECONNECT_IVL_MAX=0` 使用固定间隔，正值启用有上限的指数退避。
 
 CFlow/CMeta 可服务于控制面配置、类型描述和 executor 组合，不参与逐消息数据热路径。
 
@@ -89,7 +98,8 @@ buffer；完整 multipart 提交前只存在于对应 peer staging。完整消�
 - PUSH/DEALER/REQ：eligible peer round-robin；peer busy 时不形成跨 peer HOL。
 - PULL/SUB/DEALER/ROUTER：当前按网络完成顺序进入全局队列；严格 per-peer fair queue 尚未完成。
 - PUB/XPUB：按 subscription prefix fan-out；每个 peer 独立 HWM/drop；SUB/XSUB 的动态
-  subscribe/unsubscribe 通过每个 peer 的同步快照增量传播。
+  subscribe/unsubscribe 通过每个 peer 的同步快照增量传播，新 session 从 socket desired
+  subscription 集重放。
 - ROUTER：receive 暴露 routing-id 首 part；send 消费 routing-id 首 part。
 - multipart：sender 的 `SNDMORE` parts 先复制到 socket-owned 有界 staging，final part 对完整
   payload size、part slots 和 message HWM 做一次 admission，再原子转移到选定 peer outbound；
@@ -102,7 +112,9 @@ buffer；完整 multipart 提交前只存在于对应 peer staging。完整消�
 
 旧的 connect/router callback endpoint 已删除，不再作为迁移层或公开事实源。新的 socket
 runtime 直接拥有 CNet client/listener、peer registry、decoder、pattern FSM 与有界消息队列；
-bind/connect 只决定连接方向，不决定消息模式。
+bind/connect 只决定连接方向，不决定消息模式。每次成功 `flowmq_connect()` 还建立一个固定
+容量的 outbound endpoint 记录；初次 admission 失败会直接返回错误且不保留记录，后续异步
+FAILED/CLOSED 才进入自动重连。
 
 ## Shutdown
 
@@ -116,7 +128,8 @@ drain 策略；未完成的本地消息随 socket close 取消。
 
 当前验证覆盖 TCP、verified TLS、FMQ/6 SETTINGS/FLOW_UPDATE、累计 credit 耗尽与恢复、
 deadline 更新、ROUTER identity、multipart 接收原子可见性、REQ/REP FSM、
-PUB/SUB filter/fan-out、动态 XPUB/XSUB subscription event、发送/接收 message/byte HWM、
+PUB/SUB filter/fan-out、动态 XPUB/XSUB subscription event 与 reconnect replay、TCP/TLS
+listener restart 后的 caller-driven reconnect、发送/接收 message/byte HWM、
 阻塞/DONTWAIT 分流、多 socket timeout poll、RCVMORE、peer failure isolation、session
 generation fencing 和 multipart 整体发送 admission。下一阶段继续覆盖严格 receive
 fair-queue、可配置 shutdown 边界和更多 pattern benchmark。

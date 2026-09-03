@@ -38,6 +38,8 @@ typedef enum flowmq_socket_option_e {
   FLOWMQ_SUBSCRIBE = 6,
   FLOWMQ_UNSUBSCRIBE = 7,
   FLOWMQ_RCVMORE = 13,
+  FLOWMQ_RECONNECT_IVL = 18,
+  FLOWMQ_RECONNECT_IVL_MAX = 21,
   FLOWMQ_SNDHWM = 23,
   FLOWMQ_RCVHWM = 24,
   FLOWMQ_HEARTBEAT_IVL = 75,
@@ -78,7 +80,11 @@ FLOWMQ_C_API int flowmq_close(flowmq_socket_t *socket);
 /** Bind one TCP/TLS endpoint. Port zero selects an ephemeral listener port. */
 FLOWMQ_C_API int flowmq_bind(flowmq_socket_t *socket, const char *endpoint);
 
-/** Admit one asynchronous TCP/TLS connection. */
+/**
+ * Admit one asynchronous TCP/TLS connection. A terminal connection state is
+ * retried according to FLOWMQ_RECONNECT_IVL while the owner continues to call
+ * flowmq_send(), flowmq_recv(), or flowmq_poll().
+ */
 FLOWMQ_C_API int flowmq_connect(flowmq_socket_t *socket, const char *endpoint);
 
 /** Copy the most recently bound or connected endpoint including its trailing NUL. */
@@ -86,25 +92,31 @@ FLOWMQ_C_API int flowmq_last_endpoint(const flowmq_socket_t *socket, char *buffe
                                       size_t capacity, size_t *size);
 
 /**
- * Set a socket option. HWM message options and heartbeat options use `int`;
+ * Set a socket option. HWM message, heartbeat, and reconnect options use `int`;
  * HWM byte options and FLOWMQ_FLOW_UPDATE_QUANTUM use `size_t`;
  * FLOWMQ_FLOW_UPDATE_IVL uses positive integer milliseconds. HWM values must
  * be positive. Heartbeat values are milliseconds and must be nonnegative.
  * FLOWMQ_HEARTBEAT_IVL defaults to
  * zero (disabled); once enabled, FLOWMQ_HEARTBEAT_TIMEOUT defaults to the
  * interval unless explicitly set, and zero disables local timeout detection.
+ * FLOWMQ_RECONNECT_IVL defaults to 100 ms; -1 disables reconnect and zero
+ * schedules the next attempt without an interval. FLOWMQ_RECONNECT_IVL_MAX
+ * defaults to zero (fixed interval); a value at least as large as IVL enables
+ * bounded exponential backoff, while a smaller positive value is ignored.
+ * Reconnect intervals may be randomized to avoid synchronized retries.
  * FLOW_UPDATE quantum defaults to one quarter of receive byte HWM with a
  * bounded 64 KiB floor, and its interval defaults to 10 ms. These options are
- * fixed before bind/connect. Heartbeat and flow-credit progress are
+ * fixed before bind/connect. Reconnect, heartbeat, and flow-credit progress are
  * caller-driven by flowmq_send(), flowmq_recv(), or flowmq_poll().
  */
 FLOWMQ_C_API int flowmq_setsockopt(flowmq_socket_t *socket, int option,
                                    const void *value, size_t size);
 
 /**
- * Read a socket option into caller storage. FLOWMQ_RCVMORE returns an `int`
- * describing whether another part follows the most recently received part.
- * `size` is both input capacity and output size.
+ * Read a socket option into caller storage. FLOWMQ_RECONNECT_IVL and
+ * FLOWMQ_RECONNECT_IVL_MAX return their configured `int` millisecond values.
+ * FLOWMQ_RCVMORE returns an `int` describing whether another part follows the
+ * most recently received part. `size` is both input capacity and output size.
  */
 FLOWMQ_C_API int flowmq_getsockopt(const flowmq_socket_t *socket, int option,
                                    void *value, size_t *size);
