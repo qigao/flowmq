@@ -161,9 +161,11 @@ identity 绑定。任何证书或 identity binding 失败都必须关闭连接�
 传输结果不确定时不得改投其他 peer。
 
 REQ 状态为 `READY -> WAIT_REPLY -> READY`。REP 状态为
-`WAIT_REQUEST -> SEND_REPLY -> WAIT_REQUEST`。timeout 或断线后必须等待新 session
-HELLO，旧 generation reply 不得完成新 request。状态迁移只在完整 multipart 的最后
-一个 part 成功 admission/receive 时提交。
+`WAIT_REQUEST -> SEND_REPLY -> WAIT_REQUEST`。绑定当前 transaction 的 peer 断线时，
+socket 取消 transaction；下一个受影响的 send/receive 一次性返回 `TURBO_ENOTCONN`，
+`flowmq_poll()` 在错误被消费前报告 `FLOWMQ_POLLERR`。新 session 完成 HELLO 后可继续，
+旧 generation reply 不得完成新 request。状态迁移只在完整 multipart 的最后一个 part
+成功 admission/receive 时提交。
 
 ROUTER routing envelope 与 ZeroMQ 一样只公开 peer claimed identity，它是当前 live
 session 的查找键，不是带 generation 的 opaque token。identity part 选中 peer 后，同一

@@ -241,8 +241,8 @@ spec("flowmq_socket lifecycle and pattern surface") {
                            sizeof(replacement_request) - 1u, FLOWMQ_DONTWAIT);
     }
     check_equal(status, TURBO_OK);
-    check_equal(flowmq_send(server, reply, sizeof(reply) - 1u,
-                            FLOWMQ_DONTWAIT), TURBO_EBUSY);
+    check_equal(flowmq_send(server, reply, sizeof(reply) - 1u, 0),
+                TURBO_ENOTCONN);
     status = TURBO_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
                         status == TURBO_EBUSY;
@@ -327,8 +327,8 @@ spec("flowmq_socket lifecycle and pattern surface") {
                            sizeof(replacement_request) - 1u, FLOWMQ_DONTWAIT);
     }
     check_equal(status, TURBO_OK);
-    check_equal(flowmq_send(server, old_final, sizeof(old_final) - 1u,
-                            FLOWMQ_DONTWAIT), TURBO_EBUSY);
+    check_equal(flowmq_send(server, old_final, sizeof(old_final) - 1u, 0),
+                TURBO_ENOTCONN);
     status = TURBO_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
                         status == TURBO_EBUSY;
@@ -392,6 +392,16 @@ spec("flowmq_socket lifecycle and pattern surface") {
       size_t ready = 0u;
       check_equal(flowmq_poll(&item, 1u, 0u, &ready), TURBO_OK);
     }
+    {
+      flowmq_pollitem_t cancelled = {
+          .socket = client, .events = FLOWMQ_POLLIN};
+      size_t ready = 0u;
+      check_equal(flowmq_poll(&cancelled, 1u, 0u, &ready), TURBO_OK);
+      check_equal(ready, 1u);
+      check_equal(cancelled.revents, FLOWMQ_POLLERR);
+    }
+    check_equal(flowmq_recv(client, received, sizeof(received), &received_size,
+                            0), TURBO_ENOTCONN);
 
     check_equal(flowmq_bind(next, "tcp://127.0.0.1:0"), TURBO_OK);
     check_equal(flowmq_last_endpoint(next, next_endpoint, sizeof(next_endpoint),
@@ -976,8 +986,8 @@ spec("flowmq_socket lifecycle and pattern surface") {
                            sizeof(next_request) - 1u, FLOWMQ_DONTWAIT);
     }
     check_equal(status, TURBO_OK);
-    check_equal(flowmq_send(router, old_reply, sizeof(old_reply) - 1u,
-                            FLOWMQ_DONTWAIT), TURBO_EINVAL);
+    check_equal(flowmq_send(router, old_reply, sizeof(old_reply) - 1u, 0),
+                TURBO_ENOTCONN);
     status = TURBO_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
                         status == TURBO_EBUSY;

@@ -143,6 +143,8 @@ struct flowmq_socket_s {
   int heartbeat_timeout_ms;
   int flow_update_interval_ms;
   int async_error;
+  int send_cancel_error;
+  int recv_cancel_error;
   int transport;
   int last_rcvmore;
   unsigned runtime_initialized : 1;
@@ -294,10 +296,15 @@ static void flowmq_socket_peer_retire(flowmq_socket_peer_t *peer) {
     socket->publish_peer_generations[peer_index] = 0u;
   }
   if (socket->send_peer_active && socket->send_peer_index == peer_index &&
-      socket->send_peer_generation == generation)
+      socket->send_peer_generation == generation) {
+    if (socket->send_cancel_error == TURBO_OK)
+      socket->send_cancel_error = TURBO_ENOTCONN;
     flowmq_socket_cancel_send_route(socket);
+  }
   if (socket->reply_peer_valid && socket->reply_peer_index == peer_index &&
       socket->reply_peer_generation == generation) {
+    if (socket->send_cancel_error == TURBO_OK)
+      socket->send_cancel_error = TURBO_ENOTCONN;
     socket->reply_peer_valid = 0u;
     socket->reply_peer_generation = 0u;
     flowmq_pattern_state_cancel_transaction(&socket->pattern);
@@ -305,6 +312,8 @@ static void flowmq_socket_peer_retire(flowmq_socket_peer_t *peer) {
   if (socket->request_peer_valid && socket->request_peer_index == peer_index &&
       socket->request_peer_generation == generation &&
       peer->queued_parts == 0u) {
+    if (socket->recv_cancel_error == TURBO_OK)
+      socket->recv_cancel_error = TURBO_ENOTCONN;
     socket->request_peer_valid = 0u;
     socket->request_peer_generation = 0u;
     flowmq_pattern_state_cancel_transaction(&socket->pattern);
@@ -1692,6 +1701,7 @@ static int flowmq_socket_try_send_multipart(flowmq_socket_t *socket, const void 
       socket->request_peer_generation =
           peer->flow_control.local_generation;
       socket->request_peer_valid = 1u;
+      socket->recv_cancel_error = TURBO_OK;
     }
     if (socket->pattern.pattern == FLOWMQ_PROTOCOL_REP) {
       socket->reply_peer_valid = 0u;
@@ -1718,6 +1728,11 @@ static int flowmq_socket_try_send(flowmq_socket_t *socket, const void *data,
   if (socket == NULL || (data == NULL && size != 0u) ||
       (flags & ~(FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE)) != 0)
     return TURBO_EINVAL;
+  if (socket->send_cancel_error != TURBO_OK) {
+    status = socket->send_cancel_error;
+    socket->send_cancel_error = TURBO_OK;
+    return status;
+  }
   status = flowmq_pattern_state_send_validate(&socket->pattern);
   if (status != TURBO_OK) return status;
   if (size > FLOWMQ_SOCKET_MAX_FRAME_SIZE) return TURBO_EMSGSIZE;
@@ -1857,6 +1872,7 @@ static int flowmq_socket_try_send(flowmq_socket_t *socket, const void *data,
     socket->request_peer_index = socket->send_peer_index;
     socket->request_peer_generation = peer->flow_control.local_generation;
     socket->request_peer_valid = 1u;
+    socket->recv_cancel_error = TURBO_OK;
   }
   if (socket->pattern.pattern == FLOWMQ_PROTOCOL_REP &&
       (flags & FLOWMQ_SNDMORE) == 0) {
@@ -1881,6 +1897,11 @@ static int flowmq_socket_try_recv(flowmq_socket_t *socket, void *data,
   if (socket == NULL || received == NULL || (data == NULL && capacity != 0u) ||
       (flags & ~FLOWMQ_DONTWAIT) != 0)
     return TURBO_EINVAL;
+  if (socket->recv_cancel_error != TURBO_OK) {
+    status = socket->recv_cancel_error;
+    socket->recv_cancel_error = TURBO_OK;
+    return status;
+  }
   status = flowmq_pattern_state_receive_validate(&socket->pattern);
   if (status != TURBO_OK) return status;
   if (socket->inbound_count == 0u) return TURBO_EBUSY;
@@ -1916,6 +1937,8 @@ static int flowmq_socket_try_recv(flowmq_socket_t *socket, void *data,
   flowmq_pattern_state_receive_commit(&socket->pattern, message_more);
   if (!message_more && socket->pattern.pattern == FLOWMQ_PROTOCOL_REP) {
     if (peer->retired) {
+      if (socket->send_cancel_error == TURBO_OK)
+        socket->send_cancel_error = TURBO_ENOTCONN;
       socket->reply_peer_valid = 0u;
       socket->reply_peer_generation = 0u;
       flowmq_pattern_state_cancel_transaction(&socket->pattern);
@@ -1923,6 +1946,7 @@ static int flowmq_socket_try_recv(flowmq_socket_t *socket, void *data,
       socket->reply_peer_index = message->peer_index;
       socket->reply_peer_generation = message->peer_generation;
       socket->reply_peer_valid = 1u;
+      socket->send_cancel_error = TURBO_OK;
     }
   }
   if (!message_more && socket->pattern.pattern == FLOWMQ_PROTOCOL_REQ) {
@@ -2144,6 +2168,9 @@ int flowmq_poll(flowmq_pollitem_t *items, size_t item_count,
         }
         return status;
       }
+      if (socket->send_cancel_error != TURBO_OK ||
+          socket->recv_cancel_error != TURBO_OK)
+        items[i].revents |= FLOWMQ_POLLERR;
       if ((items[i].events & FLOWMQ_POLLIN) &&
           flowmq_socket_pollin_ready(socket))
         items[i].revents |= FLOWMQ_POLLIN;

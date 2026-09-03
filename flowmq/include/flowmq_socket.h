@@ -115,7 +115,9 @@ FLOWMQ_C_API int flowmq_getsockopt(const flowmq_socket_t *socket, int option,
  * complete multipart message to its selected peer queue atomically. Success
  * never means remote receipt. Without FLOWMQ_DONTWAIT, a runtime-backed
  * would-block condition advances this socket on the calling thread until the
- * message can be admitted or progress fails. Returns a Turbo status.
+ * message can be admitted or progress fails. If the peer bound to an active
+ * transaction disconnects, the next affected send returns TURBO_ENOTCONN once
+ * instead of retrying the cancelled transaction. Returns a Turbo status.
  */
 FLOWMQ_C_API int flowmq_send(flowmq_socket_t *socket, const void *data,
                              size_t size, int flags);
@@ -123,14 +125,18 @@ FLOWMQ_C_API int flowmq_send(flowmq_socket_t *socket, const void *data,
 /**
  * Copy one available message part into caller storage. Without
  * FLOWMQ_DONTWAIT, advance this socket on the calling thread until a part is
- * available or progress fails. Returns a Turbo status.
+ * available or progress fails. If the peer bound to an active transaction
+ * disconnects, the next affected receive returns TURBO_ENOTCONN once instead
+ * of retrying the cancelled transaction. Returns a Turbo status.
  */
 FLOWMQ_C_API int flowmq_recv(flowmq_socket_t *socket, void *data,
                              size_t capacity, size_t *received, int flags);
 
 /**
  * Drive all listed sockets on the calling thread until an item is ready or the
- * timeout expires, then report the level-triggered ready items.
+ * timeout expires, then report the level-triggered ready items. A pending
+ * transaction-cancellation error is reported as FLOWMQ_POLLERR until the
+ * affected send or receive consumes it.
  */
 FLOWMQ_C_API int flowmq_poll(flowmq_pollitem_t *items, size_t item_count,
                              uint32_t timeout_ms, size_t *ready);
