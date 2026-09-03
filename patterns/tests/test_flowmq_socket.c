@@ -10,6 +10,8 @@
 
 enum {
   FLOWMQ_TEST_PROGRESS_LIMIT = 10000u,
+  FLOWMQ_TEST_SEGMENTED_PAYLOAD_SIZE = 64u * 1024u + 37u,
+  FLOWMQ_TEST_QUEUED_MESSAGES = 8u,
   FLOWMQ_TEST_HEARTBEAT_IVL_MS = 20,
   FLOWMQ_TEST_HEARTBEAT_TIMEOUT_MS = 200,
   FLOWMQ_TEST_HEARTBEAT_ALIVE_OBSERVE_MS = 300,
@@ -133,6 +135,106 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_close(second), TURBO_OK);
     check_equal(flowmq_close(first), TURBO_OK);
     check_equal(flowmq_close(sender), TURBO_OK);
+    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+  }
+
+  it("preserves a multi-packet payload after send returns") {
+    static unsigned char payload[FLOWMQ_TEST_SEGMENTED_PAYLOAD_SIZE];
+    static unsigned char expected[FLOWMQ_TEST_SEGMENTED_PAYLOAD_SIZE];
+    static unsigned char received[FLOWMQ_TEST_SEGMENTED_PAYLOAD_SIZE];
+    char endpoint[128] = {0};
+    size_t endpoint_size = 0u;
+    size_t received_size = 0u;
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *sender = flowmq_socket(ctx, FLOWMQ_PAIR);
+    flowmq_socket_t *receiver = flowmq_socket(ctx, FLOWMQ_PAIR);
+    int status = TURBO_EBUSY;
+
+    for (size_t i = 0u; i < sizeof(payload); ++i)
+      payload[i] = (unsigned char)((i * 31u + 7u) & 0xffu);
+    memcpy(expected, payload, sizeof(payload));
+    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), TURBO_OK);
+    check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
+                                     &endpoint_size), TURBO_OK);
+    check_equal(flowmq_connect(sender, endpoint), TURBO_OK);
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == TURBO_EBUSY;
+         ++i) {
+      check_equal(progress_pair(sender, receiver), TURBO_OK);
+      status = flowmq_send(sender, payload, sizeof(payload), FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, TURBO_OK);
+    memset(payload, 0xa5, sizeof(payload));
+
+    status = TURBO_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == TURBO_EBUSY;
+         ++i) {
+      check_equal(progress_pair(sender, receiver), TURBO_OK);
+      status = flowmq_recv(receiver, received, sizeof(received), &received_size,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, TURBO_OK);
+    check_equal(received_size, sizeof(expected));
+    check_equal(memcmp(received, expected, sizeof(expected)), 0);
+
+    check_equal(flowmq_close(sender), TURBO_OK);
+    check_equal(flowmq_close(receiver), TURBO_OK);
+    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+  }
+
+  it("preserves queued frame boundaries and order") {
+    char endpoint[128] = {0};
+    unsigned char payloads[FLOWMQ_TEST_QUEUED_MESSAGES][16] = {0};
+    unsigned char received[16] = {0};
+    size_t endpoint_size = 0u;
+    size_t received_size = 0u;
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *sender = flowmq_socket(ctx, FLOWMQ_PAIR);
+    flowmq_socket_t *receiver = flowmq_socket(ctx, FLOWMQ_PAIR);
+    int status = TURBO_EBUSY;
+
+    for (size_t message = 0u; message < FLOWMQ_TEST_QUEUED_MESSAGES;
+         ++message) {
+      memset(payloads[message], (int)(message + 1u),
+             sizeof(payloads[message]));
+    }
+    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), TURBO_OK);
+    check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
+                                     &endpoint_size), TURBO_OK);
+    check_equal(flowmq_connect(sender, endpoint), TURBO_OK);
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == TURBO_EBUSY;
+         ++i) {
+      check_equal(progress_pair(sender, receiver), TURBO_OK);
+      status = flowmq_send(sender, payloads[0], sizeof(payloads[0]),
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, TURBO_OK);
+    for (size_t message = 1u; message < FLOWMQ_TEST_QUEUED_MESSAGES;
+         ++message) {
+      check_equal(flowmq_send(sender, payloads[message],
+                              sizeof(payloads[message]), FLOWMQ_DONTWAIT),
+                  TURBO_OK);
+    }
+
+    for (size_t message = 0u; message < FLOWMQ_TEST_QUEUED_MESSAGES;
+         ++message) {
+      status = TURBO_EBUSY;
+      for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                          status == TURBO_EBUSY;
+           ++i) {
+        check_equal(progress_pair(sender, receiver), TURBO_OK);
+        status = flowmq_recv(receiver, received, sizeof(received),
+                             &received_size, FLOWMQ_DONTWAIT);
+      }
+      check_equal(status, TURBO_OK);
+      check_equal(received_size, sizeof(payloads[message]));
+      check_equal(memcmp(received, payloads[message], received_size), 0);
+    }
+
+    check_equal(flowmq_close(sender), TURBO_OK);
+    check_equal(flowmq_close(receiver), TURBO_OK);
     check_equal(flowmq_ctx_term(ctx), TURBO_OK);
   }
 

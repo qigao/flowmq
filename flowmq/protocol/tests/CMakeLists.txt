@@ -3,6 +3,8 @@ cmake_add_test(
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flowmq_protocol.c
   LIBS FlowMQ::Protocol Rocida::TinyTest
   FOLDER "flowmq/protocol/tests")
+target_include_directories(test_flowmq_protocol PRIVATE
+                           ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 
 set_tests_properties(test_flowmq_protocol PROPERTIES LABELS "fmq-release;flowmq-protocol")
 

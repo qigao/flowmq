@@ -33,6 +33,14 @@ enum {
   FLOWMQ_SOCKET_DEFAULT_RECONNECT_IVL_MAX_MS = 0,
   FLOWMQ_SOCKET_HARD_HWM_BYTES = 64u * 1024u * 1024u,
   FLOWMQ_SOCKET_MAX_FRAME_SIZE = 1024u * 1024u,
+  FLOWMQ_SOCKET_FRAME_PACKET_CAPACITY =
+      (FLOWMQ_SOCKET_MAX_FRAME_SIZE + FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE - 1u) /
+      FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE,
+  FLOWMQ_SOCKET_FRAME_SEGMENT_CAPACITY =
+      FLOWMQ_SOCKET_FRAME_PACKET_CAPACITY * 2u,
+  FLOWMQ_SOCKET_FRAMING_CAPACITY =
+      FLOWMQ_SOCKET_FRAME_PACKET_CAPACITY * FLOWMQ_PROTOCOL_HEADER_SIZE +
+      FLOWMQ_PROTOCOL_MAX_IDENTITY_SIZE + FLOWMQ_PROTOCOL_MAX_TOPIC_SIZE,
   FLOWMQ_SOCKET_BLOCKING_SLICE_MS = 10u,
   FLOWMQ_SOCKET_SHUTDOWN_TIMEOUT_MS = 1000u,
   FLOWMQ_SOCKET_DEFAULT_TIMEOUT_MS = 1000u,
@@ -42,6 +50,10 @@ enum {
   FLOWMQ_SOCKET_TLS_PATH_CAPACITY = 1024u,
   FLOWMQ_SOCKET_TLS_PASSWORD_CAPACITY = 512u
 };
+
+_Static_assert(FLOWMQ_SOCKET_FRAME_SEGMENT_CAPACITY <=
+                   FLOWMQ_SOCKET_OUTBOUND_CAPACITY,
+               "frame descriptors must fit the reusable CNet vector");
 
 typedef struct flowmq_socket_peer_s flowmq_socket_peer_t;
 
@@ -132,8 +144,10 @@ struct flowmq_socket_s {
   flowmq_socket_endpoint_t endpoints[FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY];
   flowmq_socket_message_t *inbound;
   flowmq_socket_outbound_t send_staged[FLOWMQ_SOCKET_MULTIPART_CAPACITY];
-  unsigned char *send_scratch;
-  size_t send_scratch_capacity;
+  flowmq_protocol_segment_t frame_segments[FLOWMQ_SOCKET_FRAME_SEGMENT_CAPACITY];
+  cnet_const_buffer send_segments[FLOWMQ_SOCKET_OUTBOUND_CAPACITY];
+  unsigned char framing_scratch[FLOWMQ_SOCKET_FRAMING_CAPACITY];
+  size_t max_encoded_size;
   size_t inbound_read;
   size_t inbound_write;
   size_t inbound_count;
@@ -386,21 +400,62 @@ static void flowmq_socket_peer_fail(flowmq_socket_peer_t *peer) {
   flowmq_socket_fail(peer->owner, status);
 }
 
+static int flowmq_socket_encode_frame_segments(
+    flowmq_socket_t *socket, const flowmq_protocol_frame_t *frame,
+    size_t *segment_count, size_t *encoded_size) {
+  int status = flowmq_protocol_encode_frame_segmented_into_internal(
+      frame, FLOWMQ_SOCKET_MAX_FRAME_SIZE, socket->frame_segments,
+      FLOWMQ_SOCKET_FRAME_SEGMENT_CAPACITY, socket->framing_scratch,
+      sizeof(socket->framing_scratch), segment_count, encoded_size);
+  if (status != TURBO_OK) return status;
+  for (size_t i = 0u; i < *segment_count; ++i) {
+    socket->send_segments[i] = (cnet_const_buffer){
+        .data = socket->frame_segments[i].data,
+        .size = socket->frame_segments[i].size};
+  }
+  return TURBO_OK;
+}
+
+static int flowmq_socket_copy_segments(const cnet_const_buffer *segments,
+                                       size_t segment_count,
+                                       size_t encoded_size, void *storage,
+                                       size_t storage_size) {
+  unsigned char *destination = (unsigned char *)storage;
+  size_t offset = 0u;
+  if (segments == NULL || segment_count == 0u || storage == NULL)
+    return TURBO_EINVAL;
+  for (size_t i = 0u; i < segment_count; ++i) {
+    if (segments[i].data == NULL || segments[i].size == 0u)
+      return TURBO_EPROTO;
+    if (segments[i].size > storage_size - offset) return TURBO_ENOSPC;
+    memcpy(destination + offset, segments[i].data, segments[i].size);
+    offset += segments[i].size;
+  }
+  return offset == encoded_size ? TURBO_OK : TURBO_EPROTO;
+}
+
+static int flowmq_socket_send_frame(flowmq_socket_t *socket,
+                                    cnet_connection connection,
+                                    const flowmq_protocol_frame_t *frame) {
+  size_t segment_count = 0u;
+  size_t encoded_size = 0u;
+  int status = flowmq_socket_encode_frame_segments(
+      socket, frame, &segment_count, &encoded_size);
+  if (status != TURBO_OK) return status;
+  if (encoded_size > socket->max_encoded_size) return TURBO_EMSGSIZE;
+  return cnet_sendv(&socket->client, connection, socket->send_segments,
+                    segment_count);
+}
+
 static int flowmq_socket_send_hello(flowmq_socket_peer_t *peer) {
   flowmq_socket_t *socket = peer->owner;
   flowmq_protocol_frame_t frame = {0};
-  size_t encoded_size = 0u;
   vstr identity = {.data = socket->identity, .len = socket->identity_size};
   int status;
   frame.kind = FLOWMQ_PROTOCOL_FRAME_HELLO;
   frame.pattern = socket->pattern.pattern;
   frame.identity = identity;
-  status = flowmq_protocol_encode_frame_into_internal(
-      &frame, FLOWMQ_SOCKET_MAX_FRAME_SIZE, socket->send_scratch,
-      socket->send_scratch_capacity, &encoded_size);
-  if (status == TURBO_OK)
-    status = cnet_send(&socket->client, peer->connection,
-                       socket->send_scratch, encoded_size);
+  status = flowmq_socket_send_frame(socket, peer->connection, &frame);
   if (status == TURBO_OK) {
     peer->write_busy = 1u;
     peer->writing_hello = 1u;
@@ -431,7 +486,6 @@ static int flowmq_socket_send_settings(flowmq_socket_peer_t *peer) {
   flowmq_protocol_settings_t settings;
   flowmq_protocol_frame_t frame = {0};
   unsigned char payload[FLOWMQ_PROTOCOL_SETTINGS_PAYLOAD_SIZE];
-  size_t encoded_size = 0u;
   int status;
   if (!peer->connected || !peer->hello_sent || peer->settings_sent ||
       peer->writing_settings || peer->write_busy) {
@@ -445,12 +499,7 @@ static int flowmq_socket_send_settings(flowmq_socket_peer_t *peer) {
   frame.pattern = socket->pattern.pattern;
   frame.payload = vstr_from_buf((const char *)payload, sizeof(payload));
   if (status == TURBO_OK)
-    status = flowmq_protocol_encode_frame_into_internal(
-        &frame, FLOWMQ_SOCKET_MAX_FRAME_SIZE, socket->send_scratch,
-        socket->send_scratch_capacity, &encoded_size);
-  if (status == TURBO_OK)
-    status = cnet_send(&socket->client, peer->connection,
-                       socket->send_scratch, encoded_size);
+    status = flowmq_socket_send_frame(socket, peer->connection, &frame);
   if (status == TURBO_OK) {
     peer->write_busy = 1u;
     peer->writing_settings = 1u;
@@ -516,15 +565,21 @@ static int flowmq_socket_prepare_outbound(flowmq_socket_t *socket, const void *d
                                    .more = more != 0,
                                    .payload = {.data = (char *)data, .len = size}};
   mem_buffer_t *buffer;
+  size_t segment_count = 0u;
   size_t encoded_size = 0u;
   int status;
-  status = flowmq_protocol_encode_frame_into_internal(&frame, FLOWMQ_SOCKET_MAX_FRAME_SIZE,
-                                                      socket->send_scratch,
-                                                      socket->send_scratch_capacity, &encoded_size);
+  status = flowmq_socket_encode_frame_segments(socket, &frame, &segment_count,
+                                               &encoded_size);
   if (status != TURBO_OK) return status;
   buffer = mem_get_buffer(&socket->message_pool, encoded_size);
   if (buffer == NULL) return TURBO_ENOMEM;
-  memcpy(mem_buffer_data(buffer), socket->send_scratch, encoded_size);
+  status = flowmq_socket_copy_segments(
+      socket->send_segments, segment_count, encoded_size,
+      mem_buffer_data(buffer), encoded_size);
+  if (status != TURBO_OK) {
+    mem_buffer_release(buffer);
+    return status;
+  }
   mem_set_used(buffer, encoded_size);
   *outbound = (flowmq_socket_outbound_t){.buffer = buffer,
                                          .encoded_size = encoded_size,
@@ -570,7 +625,8 @@ static int flowmq_socket_peer_admit_staged(flowmq_socket_peer_t *peer,
 }
 
 static int flowmq_socket_peer_admit(flowmq_socket_peer_t *peer,
-                                    const void *encoded, size_t encoded_size,
+                                    const cnet_const_buffer *segments,
+                                    size_t segment_count, size_t encoded_size,
                                     size_t payload_size, int message_end) {
   flowmq_socket_t *socket = peer->owner;
   flowmq_socket_outbound_t *outbound;
@@ -579,7 +635,8 @@ static int flowmq_socket_peer_admit(flowmq_socket_peer_t *peer,
   if (!flowmq_socket_peer_can_admit(peer, payload_size, message_end))
     return TURBO_ENOBUFS;
   if (!peer->write_busy && peer->outbound_count == 0u) {
-    status = cnet_send(&socket->client, peer->connection, encoded, encoded_size);
+    status = cnet_sendv(&socket->client, peer->connection, segments,
+                        segment_count);
     if (status != TURBO_OK) return status;
     peer->write_busy = 1u;
     peer->writing_data = 1u;
@@ -589,7 +646,12 @@ static int flowmq_socket_peer_admit(flowmq_socket_peer_t *peer,
     outbound = &peer->outbound[peer->outbound_write];
     buffer = mem_get_buffer(&socket->message_pool, encoded_size);
     if (buffer == NULL) return TURBO_ENOMEM;
-    memcpy(mem_buffer_data(buffer), encoded, encoded_size);
+    status = flowmq_socket_copy_segments(segments, segment_count, encoded_size,
+                                         mem_buffer_data(buffer), encoded_size);
+    if (status != TURBO_OK) {
+      mem_buffer_release(buffer);
+      return status;
+    }
     mem_set_used(buffer, encoded_size);
     *outbound = (flowmq_socket_outbound_t){.buffer = buffer,
                                            .encoded_size = encoded_size,
@@ -610,11 +672,10 @@ static int flowmq_socket_peer_admit(flowmq_socket_peer_t *peer,
 }
 
 static int flowmq_socket_peer_flush(flowmq_socket_peer_t *peer) {
-  /* CNet permits one pending write per connection, so one admission batches
-   * complete encoded frames. cnet_send copies the batch before returning. */
+  /* CNet permits one pending write per connection. A vector admission copies
+   * queued frames directly into that final command slot before returning. */
   flowmq_socket_t *socket = peer->owner;
   flowmq_socket_outbound_t *outbound;
-  const void *send_data;
   size_t batch_count = 0u;
   size_t batch_encoded_size = 0u;
   size_t batch_payload_size = 0u;
@@ -623,33 +684,24 @@ static int flowmq_socket_peer_flush(flowmq_socket_peer_t *peer) {
   if (!peer->used || !peer->connected || peer->write_busy ||
       peer->outbound_count == 0u)
     return TURBO_OK;
-  if (peer->outbound_count == 1u) {
-    outbound = &peer->outbound[peer->outbound_read];
-    send_data = mem_buffer_const_data(outbound->buffer);
-    batch_count = 1u;
-    batch_encoded_size = outbound->encoded_size;
-    batch_payload_size = outbound->payload_size;
-    batch_messages = outbound->message_end ? 1u : 0u;
-  } else {
-    while (batch_count < peer->outbound_count) {
-      size_t index = (peer->outbound_read + batch_count) %
-                     FLOWMQ_SOCKET_OUTBOUND_CAPACITY;
-      outbound = &peer->outbound[index];
-      if (outbound->encoded_size >
-          socket->send_scratch_capacity - batch_encoded_size)
-        break;
-      memcpy(socket->send_scratch + batch_encoded_size,
-             mem_buffer_const_data(outbound->buffer), outbound->encoded_size);
-      batch_encoded_size += outbound->encoded_size;
-      batch_payload_size += outbound->payload_size;
-      if (outbound->message_end) ++batch_messages;
-      ++batch_count;
-    }
-    if (batch_count == 0u) return TURBO_EMSGSIZE;
-    send_data = socket->send_scratch;
+  while (batch_count < peer->outbound_count) {
+    size_t index = (peer->outbound_read + batch_count) %
+                   FLOWMQ_SOCKET_OUTBOUND_CAPACITY;
+    outbound = &peer->outbound[index];
+    if (outbound->encoded_size >
+        socket->max_encoded_size - batch_encoded_size)
+      break;
+    socket->send_segments[batch_count] = (cnet_const_buffer){
+        .data = mem_buffer_const_data(outbound->buffer),
+        .size = outbound->encoded_size};
+    batch_encoded_size += outbound->encoded_size;
+    batch_payload_size += outbound->payload_size;
+    if (outbound->message_end) ++batch_messages;
+    ++batch_count;
   }
-  status = cnet_send(&socket->client, peer->connection, send_data,
-                     batch_encoded_size);
+  if (batch_count == 0u) return TURBO_EMSGSIZE;
+  status = cnet_sendv(&socket->client, peer->connection,
+                      socket->send_segments, batch_count);
   if (status != TURBO_OK) return status;
   peer->write_busy = 1u;
   peer->writing_data = 1u;
@@ -764,19 +816,13 @@ static int flowmq_socket_peer_admit_control(
     vstr payload) {
   flowmq_socket_t *socket = peer->owner;
   flowmq_protocol_frame_t frame = {0};
-  size_t encoded_size = 0u;
   int status;
   if (!flowmq_socket_peer_ready(peer) || peer->write_busy)
     return TURBO_ENOBUFS;
   frame.kind = kind;
   frame.pattern = socket->pattern.pattern;
   frame.payload = payload;
-  status = flowmq_protocol_encode_frame_into_internal(
-      &frame, FLOWMQ_SOCKET_MAX_FRAME_SIZE, socket->send_scratch,
-      socket->send_scratch_capacity, &encoded_size);
-  if (status != TURBO_OK) return status;
-  status = cnet_send(&socket->client, peer->connection, socket->send_scratch,
-                     encoded_size);
+  status = flowmq_socket_send_frame(socket, peer->connection, &frame);
   if (status == TURBO_OK) peer->write_busy = 1u;
   return status;
 }
@@ -1165,7 +1211,7 @@ static int flowmq_socket_runtime_init(flowmq_socket_t *socket,
   flowmq_timeouts_resolve(&timeouts, FLOWMQ_SOCKET_DEFAULT_TIMEOUT_MS);
   status = flowmq_cnet_client_config(
       &io, &timeouts, transport, FLOWMQ_SOCKET_PEER_CAPACITY,
-      socket->send_scratch_capacity, &config);
+      socket->max_encoded_size, &config);
   if (status == TURBO_OK) status = cnet_client_init(&socket->client, &config);
   if (status != TURBO_OK) return status;
   socket->transport = (int)transport;
@@ -1377,18 +1423,14 @@ flowmq_socket_t *flowmq_socket(flowmq_ctx_t *ctx, int type) {
     free(socket);
     return NULL;
   }
-  socket->send_scratch = (unsigned char *)malloc(encoded_limit);
-  socket->send_scratch_capacity = encoded_limit;
-  if (socket->peers == NULL || socket->inbound == NULL ||
-      socket->send_scratch == NULL) {
-    free(socket->send_scratch);
+  socket->max_encoded_size = encoded_limit;
+  if (socket->peers == NULL || socket->inbound == NULL) {
     free(socket->inbound);
     free(socket->peers);
     free(socket);
     return NULL;
   }
   if (mem_init(&socket->message_pool, 0u) != 0) {
-    free(socket->send_scratch);
     free(socket->inbound);
     free(socket->peers);
     free(socket);
@@ -1397,7 +1439,6 @@ flowmq_socket_t *flowmq_socket(flowmq_ctx_t *ctx, int type) {
   socket->pool_initialized = 1u;
   if (flowmq_subscription_set_init(&socket->subscriptions) != TURBO_OK) {
     mem_destroy(&socket->message_pool);
-    free(socket->send_scratch);
     free(socket->inbound);
     free(socket->peers);
     free(socket);
@@ -1406,7 +1447,6 @@ flowmq_socket_t *flowmq_socket(flowmq_ctx_t *ctx, int type) {
   if (flowmq_pattern_state_init(&socket->pattern, pattern) != TURBO_OK) {
     mem_destroy(&socket->message_pool);
     flowmq_subscription_set_destroy(&socket->subscriptions);
-    free(socket->send_scratch);
     free(socket->inbound);
     free(socket->peers);
     free(socket);
@@ -1421,7 +1461,6 @@ flowmq_socket_t *flowmq_socket(flowmq_ctx_t *ctx, int type) {
     if (written < 0 || (size_t)written >= sizeof(socket->identity)) {
       mem_destroy(&socket->message_pool);
       flowmq_subscription_set_destroy(&socket->subscriptions);
-      free(socket->send_scratch);
       free(socket->inbound);
       free(socket->peers);
       free(socket);
@@ -1475,7 +1514,6 @@ int flowmq_close(flowmq_socket_t *socket) {
                              sizeof(socket->tls_key_password));
   free(socket->inbound);
   free(socket->peers);
-  free(socket->send_scratch);
   --socket->ctx->socket_count;
   socket->ctx = NULL;
   free(socket);
@@ -1888,6 +1926,7 @@ static int flowmq_socket_try_send(flowmq_socket_t *socket, const void *data,
                                   size_t size, int flags) {
   flowmq_protocol_frame_t frame;
   flowmq_socket_peer_t *peer = NULL;
+  size_t segment_count = 0u;
   size_t encoded_size = 0u;
   int starting_message;
   int message_end;
@@ -1959,15 +1998,15 @@ static int flowmq_socket_try_send(flowmq_socket_t *socket, const void *data,
           .message_id = socket->next_message_id + 1u,
           .more = (flags & FLOWMQ_SNDMORE) != 0,
           .payload = {.data = (char *)data, .len = size}};
-      status = flowmq_protocol_encode_frame_into_internal(
-          &frame, FLOWMQ_SOCKET_MAX_FRAME_SIZE, socket->send_scratch,
-          socket->send_scratch_capacity, &encoded_size);
+      status = flowmq_socket_encode_frame_segments(
+          socket, &frame, &segment_count, &encoded_size);
       if (status != TURBO_OK) return status;
       for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
         flowmq_socket_peer_t *candidate = &socket->peers[i];
         if ((peer_mask & (UINT32_C(1) << i)) == 0u) continue;
-        status = flowmq_socket_peer_admit(candidate, socket->send_scratch,
-                                          encoded_size, size, message_end);
+        status = flowmq_socket_peer_admit(
+            candidate, socket->send_segments, segment_count, encoded_size,
+            size, message_end);
         if (status != TURBO_OK) break;
       }
       if (status != TURBO_OK) return status;
@@ -2028,12 +2067,12 @@ static int flowmq_socket_try_send(flowmq_socket_t *socket, const void *data,
       .message_id = socket->next_message_id + 1u,
       .more = (flags & FLOWMQ_SNDMORE) != 0,
       .payload = {.data = (char *)data, .len = size}};
-  status = flowmq_protocol_encode_frame_into_internal(
-      &frame, FLOWMQ_SOCKET_MAX_FRAME_SIZE, socket->send_scratch,
-      socket->send_scratch_capacity, &encoded_size);
+  status = flowmq_socket_encode_frame_segments(
+      socket, &frame, &segment_count, &encoded_size);
   if (status == TURBO_OK)
-    status = flowmq_socket_peer_admit(peer, socket->send_scratch, encoded_size,
-                                      size, message_end);
+    status = flowmq_socket_peer_admit(
+        peer, socket->send_segments, segment_count, encoded_size, size,
+        message_end);
   if (status != TURBO_OK) return status;
   ++socket->next_message_id;
   if (socket->pattern.pattern == FLOWMQ_PROTOCOL_REQ && starting_message) {

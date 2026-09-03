@@ -358,48 +358,48 @@ int flowmq_protocol_encode_frame_into_internal(const flowmq_protocol_frame_t *fr
   return TURBO_OK;
 }
 
-int flowmq_protocol_encode_frame_segmented(const flowmq_protocol_frame_t *frame,
-                                           size_t max_frame_size,
-                                           flowmq_protocol_segmented_frame_t *out) {
-  flowmq_protocol_segment_t *segments;
-  unsigned char *framing;
+typedef struct flowmq_protocol_segmented_layout_s {
   size_t encoded_size;
   size_t packet_count;
   size_t segment_count;
-  size_t segment_bytes;
   size_t framing_size;
-  size_t allocation_size;
+} flowmq_protocol_segmented_layout_t;
+
+static int flowmq_protocol_segmented_layout(
+    const flowmq_protocol_frame_t *frame, size_t max_frame_size,
+    flowmq_protocol_segmented_layout_t *layout) {
+  int rc;
+  if (!layout) return TURBO_EINVAL;
+  memset(layout, 0, sizeof(*layout));
+  rc = flowmq_protocol_frame_lengths(frame, max_frame_size,
+                                     &layout->encoded_size);
+  if (rc != TURBO_OK) return rc;
+  layout->packet_count =
+      frame->kind == FLOWMQ_PROTOCOL_FRAME_DATA && frame->payload.len > 0u
+          ? (frame->payload.len - 1u) /
+                    FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE +
+                1u
+          : 1u;
+  if (frame->payload.len > 0u && layout->packet_count > SIZE_MAX / 2u)
+    return TURBO_ERANGE;
+  layout->segment_count =
+      frame->payload.len > 0u ? layout->packet_count * 2u : 1u;
+  if (layout->packet_count >
+      (SIZE_MAX - frame->identity.len - frame->topic.len) /
+          FLOWMQ_PROTOCOL_HEADER_SIZE)
+    return TURBO_ERANGE;
+  layout->framing_size =
+      layout->packet_count * FLOWMQ_PROTOCOL_HEADER_SIZE +
+      frame->identity.len + frame->topic.len;
+  return TURBO_OK;
+}
+
+static void flowmq_protocol_fill_segments(
+    const flowmq_protocol_frame_t *frame,
+    flowmq_protocol_segment_t *segments, unsigned char *framing) {
   size_t framing_offset = 0u;
   size_t payload_offset = 0u;
   size_t segment_index = 0u;
-  void *storage;
-  int rc;
-
-  if (!out || out->size != sizeof(*out) || out->segments || out->segment_count != 0u ||
-      out->encoded_size != 0u || out->storage) {
-    return TURBO_EINVAL;
-  }
-  rc = flowmq_protocol_frame_lengths(frame, max_frame_size, &encoded_size);
-  if (rc != TURBO_OK) return rc;
-  packet_count = frame->kind == FLOWMQ_PROTOCOL_FRAME_DATA && frame->payload.len > 0u
-                     ? (frame->payload.len - 1u) / FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE + 1u
-                     : 1u;
-  if (frame->payload.len > 0u && packet_count > SIZE_MAX / 2u) return TURBO_ERANGE;
-  segment_count = frame->payload.len > 0u ? packet_count * 2u : 1u;
-  if (segment_count > SIZE_MAX / sizeof(*segments)) return TURBO_ERANGE;
-  segment_bytes = segment_count * sizeof(*segments);
-  if (packet_count >
-      (SIZE_MAX - frame->identity.len - frame->topic.len) / FLOWMQ_PROTOCOL_HEADER_SIZE) {
-    return TURBO_ERANGE;
-  }
-  framing_size =
-      packet_count * FLOWMQ_PROTOCOL_HEADER_SIZE + frame->identity.len + frame->topic.len;
-  if (segment_bytes > SIZE_MAX - framing_size) return TURBO_ERANGE;
-  allocation_size = segment_bytes + framing_size;
-  storage = mem_alloc(mem_global(), allocation_size);
-  if (!storage) return TURBO_ENOMEM;
-  segments = (flowmq_protocol_segment_t *)storage;
-  framing = (unsigned char *)storage + segment_bytes;
 
   do {
     unsigned char *header = framing + framing_offset;
@@ -434,10 +434,61 @@ int flowmq_protocol_encode_frame_segmented(const flowmq_protocol_frame_t *frame,
       payload_offset += chunk_len;
     }
   } while (payload_offset < frame->payload.len);
+}
+
+int flowmq_protocol_encode_frame_segmented_into_internal(
+    const flowmq_protocol_frame_t *frame, size_t max_frame_size,
+    flowmq_protocol_segment_t *segments, size_t segment_capacity,
+    void *framing, size_t framing_capacity, size_t *segment_count,
+    size_t *encoded_size) {
+  flowmq_protocol_segmented_layout_t layout;
+  int rc;
+  if (!segment_count || !encoded_size) return TURBO_EINVAL;
+  *segment_count = 0u;
+  *encoded_size = 0u;
+  if (!segments || !framing || segment_capacity == 0u ||
+      framing_capacity == 0u)
+    return TURBO_EINVAL;
+  rc = flowmq_protocol_segmented_layout(frame, max_frame_size, &layout);
+  if (rc != TURBO_OK) return rc;
+  if (segment_capacity < layout.segment_count ||
+      framing_capacity < layout.framing_size)
+    return TURBO_ENOSPC;
+  flowmq_protocol_fill_segments(frame, segments, (unsigned char *)framing);
+  *segment_count = layout.segment_count;
+  *encoded_size = layout.encoded_size;
+  return TURBO_OK;
+}
+
+int flowmq_protocol_encode_frame_segmented(const flowmq_protocol_frame_t *frame,
+                                           size_t max_frame_size,
+                                           flowmq_protocol_segmented_frame_t *out) {
+  flowmq_protocol_segmented_layout_t layout;
+  flowmq_protocol_segment_t *segments;
+  unsigned char *framing;
+  size_t segment_bytes;
+  size_t allocation_size;
+  void *storage;
+  int rc;
+
+  if (!out || out->size != sizeof(*out) || out->segments ||
+      out->segment_count != 0u || out->encoded_size != 0u || out->storage)
+    return TURBO_EINVAL;
+  rc = flowmq_protocol_segmented_layout(frame, max_frame_size, &layout);
+  if (rc != TURBO_OK) return rc;
+  if (layout.segment_count > SIZE_MAX / sizeof(*segments)) return TURBO_ERANGE;
+  segment_bytes = layout.segment_count * sizeof(*segments);
+  if (segment_bytes > SIZE_MAX - layout.framing_size) return TURBO_ERANGE;
+  allocation_size = segment_bytes + layout.framing_size;
+  storage = mem_alloc(mem_global(), allocation_size);
+  if (!storage) return TURBO_ENOMEM;
+  segments = (flowmq_protocol_segment_t *)storage;
+  framing = (unsigned char *)storage + segment_bytes;
+  flowmq_protocol_fill_segments(frame, segments, framing);
 
   out->segments = segments;
-  out->segment_count = segment_index;
-  out->encoded_size = encoded_size;
+  out->segment_count = layout.segment_count;
+  out->encoded_size = layout.encoded_size;
   out->storage = storage;
   return TURBO_OK;
 }

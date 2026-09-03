@@ -1,5 +1,6 @@
 #include "flowmq_protocol.h"
 #include "flowmq_protocol_catalog.h"
+#include "flowmq_protocol_internal.h"
 #include "flowmq_security.h"
 #include "tinytest.h"
 #include "turbo_error.h"
@@ -271,6 +272,69 @@ spec("flowmq_protocol") {
     tstr_free(flat);
     tstr_free(contiguous);
     flowmq_protocol_segmented_frame_cleanup(&segmented);
+  }
+
+  it("writes segmented framing into caller-provided bounded storage") {
+    static char payload[FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE + 19u];
+    enum {
+      SEGMENT_CAPACITY = 4u,
+      FRAMING_CAPACITY = 2u * FLOWMQ_PROTOCOL_HEADER_SIZE + 4u + 5u
+    };
+    flowmq_protocol_frame_t input = {0};
+    flowmq_protocol_segment_t segments[SEGMENT_CAPACITY];
+    unsigned char framing[FRAMING_CAPACITY];
+    flowmq_protocol_segmented_frame_t view = FLOWMQ_PROTOCOL_SEGMENTED_FRAME_INIT;
+    tstr contiguous = NULL;
+    tstr flat = NULL;
+    size_t segment_count = 99u;
+    size_t encoded_size = 99u;
+
+    for (size_t i = 0u; i < sizeof(payload); ++i)
+      payload[i] = (char)(i % 239u);
+    input.kind = FLOWMQ_PROTOCOL_FRAME_DATA;
+    input.pattern = FLOWMQ_PROTOCOL_PUSH;
+    input.message_id = 10u;
+    input.identity = vstr_from_cstr("node");
+    input.topic = vstr_from_cstr("event");
+    input.payload = vstr_from_buf(payload, sizeof(payload));
+    check_equal(flowmq_protocol_encode_frame(&input, sizeof(payload) + 9u,
+                                             &contiguous),
+                TURBO_OK);
+    check_equal(flowmq_protocol_encode_frame_segmented_into_internal(
+                    &input, sizeof(payload) + 9u, segments, SEGMENT_CAPACITY,
+                    framing, sizeof(framing), &segment_count, &encoded_size),
+                TURBO_OK);
+    check_equal(segment_count, (size_t)SEGMENT_CAPACITY);
+    check_equal(encoded_size, tstr_len(contiguous));
+    check_true(segments[1].data == payload);
+    check_true(segments[3].data ==
+               payload + FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE);
+    view.segments = segments;
+    view.segment_count = segment_count;
+    view.encoded_size = encoded_size;
+    flat = flowmq_protocol_test_flatten(&view);
+    check_not_null(flat);
+    check_equal(flat, contiguous, tstr_len(contiguous));
+
+    segment_count = 99u;
+    encoded_size = 99u;
+    check_equal(flowmq_protocol_encode_frame_segmented_into_internal(
+                    &input, sizeof(payload) + 9u, segments,
+                    SEGMENT_CAPACITY - 1u, framing, sizeof(framing),
+                    &segment_count, &encoded_size),
+                TURBO_ENOSPC);
+    check_equal(segment_count, 0u);
+    check_equal(encoded_size, 0u);
+    check_equal(flowmq_protocol_encode_frame_segmented_into_internal(
+                    &input, sizeof(payload) + 9u, segments, SEGMENT_CAPACITY,
+                    framing, sizeof(framing) - 1u, &segment_count,
+                    &encoded_size),
+                TURBO_ENOSPC);
+    check_equal(segment_count, 0u);
+    check_equal(encoded_size, 0u);
+
+    tstr_free(flat);
+    tstr_free(contiguous);
   }
 
   it("segments zero-length payload as one complete framing segment") {

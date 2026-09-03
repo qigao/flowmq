@@ -59,6 +59,25 @@ socket owner lane，pattern FSM 与网络 peer 使用同一事实源。
 progress，并以 1ms 有界间隔重复检查，因而具备统一 timeout 语义。CNet 后续若提供可组合
 readiness/wait-set，可替换该等待策略以降低空闲唤醒延迟，但不得用隐藏线程掩盖这一边界。
 
+## 发送内存与所有权
+
+`flowmq_send` 使用 FMQ/6 分段编码：协议头写入 socket 自有的有界 framing storage，payload
+只在本次普通函数调用期间借用。`cnet_sendv` 校验分段总长，并在成功返回前按顺序复制到
+CNet 已有的固定 command slot；因此调用者可在 `flowmq_send` 返回后立即修改或释放输入。
+一次 frame 最多 16 个 packet、32 个 segment；排队 flush 最多引用 1024 个已持有 frame，
+并受同一个 `max_encoded_size` 总字节上限约束。
+
+立即发送的数据路径从 `payload -> FlowMQ 1MiB scratch -> CNet slot` 缩短为
+`payload -> CNet slot`，payload copy 从两次减为一次。需要排队的完整 frame 只平铺一次到
+其 `mem_buffer_t`；flush 时这些 buffer 直接组成一个 CNet vector，所以排队路径从四次
+payload copy 减为两次。原来的每 socket 约 1MiB 连续 scratch allocation 已删除，替换为
+固定 framing 和 descriptor storage。
+
+这不是跨 poll 的 borrowed-send，也不改变完成语义。CNet command slot 在 TCP NativeIO 写入
+完成前保持有效；TLS 还必须让 OpenSSL 接受连续 plaintext 并刷出 ciphertext。因此 owner、
+NativeIO 与 TLS 状态机仍使用连续内部 storage，且本次改动没有把用户 buffer 生命周期扩展到
+网络完成。admission 失败时 peer credit/HWM 状态不提交，排队 buffer 仍由原 owner 持有。
+
 ## TLS
 
 - TLS client 始终验证证书链与 hostname/IP，不提供 insecure fallback。
@@ -73,8 +92,8 @@ readiness/wait-set，可替换该等待策略以降低空闲唤醒延迟，但�
 REQ/REP FSM、PUB/SUB、动态 subscription 增量同步、multipart receive staging、可配置
 message/byte HWM、阻塞/DONTWAIT 分流、多 socket timeout poll 与 multipart 整体发送
 admission、peer failure isolation、PAIR/ROUTER 唯一性和 session generation fencing。
-Release libzmq 同 workload benchmark 已接入；后续重点是严格 receive fair queue 与明确的
-可配置关闭语义。
+caller-owned segmented framing、CNet bounded vector admission 与 Release libzmq 同 workload
+benchmark 亦已接入；后续重点是严格 receive fair queue 与明确的可配置关闭语义。
 
 验证至少包括：同线程 callback 证据、无 thread-create 符号、TCP 与 verified TLS
 round trip、完整 pattern compatibility matrix、REQ/REP FSM、PUB/SUB filtering、

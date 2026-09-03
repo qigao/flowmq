@@ -10,7 +10,9 @@
 
 enum {
   BENCH_PAYLOAD_BYTES = 64u,
+  BENCH_LARGE_PAYLOAD_BYTES = 64u * 1024u,
   BENCH_SAMPLES = 100000u,
+  BENCH_LARGE_SAMPLES = 5000u,
   BENCH_BATCH_SAMPLES = 10000u,
   BENCH_BATCH_MESSAGES = 64u,
   BENCH_PROGRESS_LIMIT = 10000u
@@ -55,7 +57,7 @@ static void bench_pair_close(bench_pair_t *pair) {
 
 static int bench_exchange(bench_pair_t *pair, const void *payload,
                           size_t payload_size) {
-  unsigned char received[BENCH_PAYLOAD_BYTES];
+  static unsigned char received[BENCH_LARGE_PAYLOAD_BYTES];
   size_t received_size = 0u;
   int status = flowmq_send(pair->sender, payload, payload_size,
                            FLOWMQ_DONTWAIT);
@@ -82,7 +84,7 @@ static int bench_exchange(bench_pair_t *pair, const void *payload,
 
 static int bench_exchange_batch(bench_pair_t *pair, const void *payload,
                                 size_t payload_size) {
-  unsigned char received[BENCH_PAYLOAD_BYTES];
+  static unsigned char received[BENCH_LARGE_PAYLOAD_BYTES];
   size_t received_size = 0u;
   int status;
   for (size_t i = 0u; i < BENCH_BATCH_MESSAGES; ++i) {
@@ -135,7 +137,7 @@ static int bench_zmq_open(bench_zmq_pair_t *pair) {
 
 static int bench_zmq_exchange(bench_zmq_pair_t *pair, const void *payload,
                               size_t payload_size) {
-  unsigned char received[BENCH_PAYLOAD_BYTES];
+  static unsigned char received[BENCH_LARGE_PAYLOAD_BYTES];
   int sent = zmq_send(pair->sender, payload, payload_size, 0);
   int read;
   if (sent != (int)payload_size) return -1;
@@ -149,7 +151,7 @@ static int bench_zmq_exchange(bench_zmq_pair_t *pair, const void *payload,
 static int bench_zmq_exchange_batch(bench_zmq_pair_t *pair,
                                     const void *payload,
                                     size_t payload_size) {
-  unsigned char received[BENCH_PAYLOAD_BYTES];
+  static unsigned char received[BENCH_LARGE_PAYLOAD_BYTES];
   for (size_t i = 0u; i < BENCH_BATCH_MESSAGES; ++i) {
     if (zmq_send(pair->sender, payload, payload_size, 0) != (int)payload_size)
       return -1;
@@ -174,9 +176,11 @@ static void bench_zmq_close(bench_zmq_pair_t *pair) {
 spec("FlowMQ direct socket benchmark") {
   bench("caller-driven loopback TCP") {
     static unsigned char payload[BENCH_PAYLOAD_BYTES];
+    static unsigned char large_payload[BENCH_LARGE_PAYLOAD_BYTES];
     bench_pair_t pair;
     int status;
     memset(payload, 0x5a, sizeof(payload));
+    memset(large_payload, 0xa5, sizeof(large_payload));
     status = bench_pair_open(&pair);
     check_equal(status, TURBO_OK);
     check_equal(bench_exchange(&pair, payload, sizeof(payload)), TURBO_OK);
@@ -184,6 +188,14 @@ spec("FlowMQ direct socket benchmark") {
     benchmark_bytes("PAIR 64-byte one-way", BENCH_SAMPLES,
                     BENCH_PAYLOAD_BYTES) {
       status = bench_exchange(&pair, payload, sizeof(payload));
+    }
+    check_equal(status, TURBO_OK);
+
+    check_equal(bench_exchange(&pair, large_payload, sizeof(large_payload)),
+                TURBO_OK);
+    benchmark_bytes("PAIR 64-KiB one-way", BENCH_LARGE_SAMPLES,
+                    BENCH_LARGE_PAYLOAD_BYTES) {
+      status = bench_exchange(&pair, large_payload, sizeof(large_payload));
     }
     check_equal(status, TURBO_OK);
 
@@ -199,9 +211,11 @@ spec("FlowMQ direct socket benchmark") {
 #if defined(FLOWMQ_BENCH_WITH_ZMQ)
   bench("libzmq loopback TCP reference") {
     static unsigned char payload[BENCH_PAYLOAD_BYTES];
+    static unsigned char large_payload[BENCH_LARGE_PAYLOAD_BYTES];
     bench_zmq_pair_t pair;
     int status;
     memset(payload, 0x5a, sizeof(payload));
+    memset(large_payload, 0xa5, sizeof(large_payload));
     status = bench_zmq_open(&pair);
     check_equal(status, 0);
     check_equal(bench_zmq_exchange(&pair, payload, sizeof(payload)), 0);
@@ -209,6 +223,15 @@ spec("FlowMQ direct socket benchmark") {
     benchmark_bytes("PAIR 64-byte one-way", BENCH_SAMPLES,
                     BENCH_PAYLOAD_BYTES) {
       status = bench_zmq_exchange(&pair, payload, sizeof(payload));
+    }
+    check_equal(status, 0);
+
+    check_equal(bench_zmq_exchange(&pair, large_payload,
+                                   sizeof(large_payload)), 0);
+    benchmark_bytes("PAIR 64-KiB one-way", BENCH_LARGE_SAMPLES,
+                    BENCH_LARGE_PAYLOAD_BYTES) {
+      status = bench_zmq_exchange(&pair, large_payload,
+                                  sizeof(large_payload));
     }
     check_equal(status, 0);
 
