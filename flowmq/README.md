@@ -3,7 +3,7 @@
 本目录承载独立 `FlowMQ::FlowMQ` 的 protocol、runtime 与公开头文件；仓库根目录是唯一 CMake
 入口。
 
-- `flowmq/protocol`：FMQ/5 codec、SETTINGS/FLOW_UPDATE、fragmentation、multipart、security envelope、heartbeat deadline。
+- `flowmq/protocol`：全局协议目录、FMQ/6 transport、FMS/3 security、FES/1 application envelope 与 heartbeat deadline。
 - `patterns`：pattern/session、bounded decoder 与 caller-driven CNet TCP/TLS primitive。
 - `flowmq/include`：独立 C API；聚合头为 `flowmq.h`。
 - 唯一安装 target：`FlowMQ::FlowMQ`。
@@ -15,6 +15,6 @@
 [根 README](../README.md)，所有权与数据路径见
 [ARCHITECTURE.md](../docs/ARCHITECTURE.md)。
 
-ESB、FMS/1/FMS/3、reconnect 与 segmented encoder 中有一部分仅提供 codec、本地状态或
-helper，并不等于 socket runtime 已接入；准确边界见
+FES/1、FMP/1、FMS/3、reconnect 与 segmented encoder 中有一部分仅提供 codec、本地状态
+或 helper，并不等于 socket runtime 已接入；准确边界见
 [PROTOCOL_SPEC.md](../docs/PROTOCOL_SPEC.md)。

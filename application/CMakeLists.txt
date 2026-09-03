@@ -22,7 +22,7 @@ add_custom_command(
           --output "${FLOWMQ_MEDIA_PROVIDER_GENERATED_HEADER}"
           --source-output "${FLOWMQ_MEDIA_PROVIDER_GENERATED_SOURCE}"
   DEPENDS "${FLOWMQ_MEDIA_PROVIDER_SCHEMA}"
-  COMMENT "Generating FlowMQ media-provider v1 typed contract"
+  COMMENT "Generating FlowMQ media-provider FMP/1 typed contract"
   VERBATIM)
 
 set_source_files_properties("${FLOWMQ_MEDIA_PROVIDER_GENERATED_HEADER}"

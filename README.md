@@ -1,6 +1,6 @@
 # FlowMQ
 
-FlowMQ 是 C11 的 pattern-oriented messaging library。它提供 FMQ/5 wire codec、pattern/session
+FlowMQ 是 C11 的 pattern-oriented messaging library。它提供 FMQ/6 wire codec、pattern/session
 状态、应用层能力，以及基于 Rocida CNet 的 TCP/TLS socket runtime。
 
 当前 transport 范围是明确且封闭的：
@@ -13,7 +13,7 @@ FlowMQ 是 C11 的 pattern-oriented messaging library。它提供 FMQ/5 wire cod
 
 | Target | 用途 |
 | --- | --- |
-| `FlowMQ::Protocol` | build-tree FMQ/5 codec、SETTINGS/FLOW_UPDATE、fragmentation 与 multipart 标记 |
+| `FlowMQ::Protocol` | build-tree FMQ/6、FMS/3、FES/1 codec 与全局协议目录 |
 | `FlowMQ::Core` | build-tree pattern/session 与应用核心 |
 | `FlowMQ::Transport` | build-tree ZeroMQ-style socket 与 CNet TCP/TLS runtime |
 | `FlowMQ::FlowMQ` | 唯一安装 target；合并上述公开能力 |
@@ -42,8 +42,8 @@ CNet 仍由 socket owner 线程直接推进，不创建 worker/progress thread�
 `FLOWMQ_HEARTBEAT_IVL`/`FLOWMQ_HEARTBEAT_TIMEOUT` 使用非负 `int` 毫秒值，也必须在首次
 bind/connect 前设置。IVL 默认为 `0`（禁用）；启用 IVL 且未显式设置 TIMEOUT 时，TIMEOUT
 等于 IVL。心跳与断线检测没有后台线程，只在 owner 调用 `send`、`recv` 或 `poll` 时推进。
-FMQ/5 PING 不携带对端 TTL，因此当前没有伪装提供 `FLOWMQ_HEARTBEAT_TTL`。
-FMQ/5 在 HELLO 后强制 SETTINGS，并以 receiver-driven cumulative credit 协调 DATA；
+FMQ/6 PING 不携带对端 TTL，因此当前没有伪装提供 `FLOWMQ_HEARTBEAT_TTL`。
+FMQ/6 在 HELLO 后强制 SETTINGS，并以 receiver-driven cumulative credit 协调 DATA；
 TCP/TLS 不发送同流 FEC repair symbol。credit 与 heartbeat 都由调用线程推进。
 
 multipart 接收后可用 `flowmq_getsockopt(socket, FLOWMQ_RCVMORE, ...)` 判断是否还有下一
@@ -132,4 +132,4 @@ ZeroMQ 由 `vcpkg.json` 安装；公平对比必须使用 Release preset，使 F
 libzmq 都链接 Release 产物。
 
 详细所有权和关闭顺序见 [架构说明](docs/ARCHITECTURE.md)，wire 契约见
-[FMQ/5 协议](docs/FMQ_WIRE_PROTOCOL.md)。
+[FMQ/6 协议](docs/FMQ_WIRE_PROTOCOL.md)。

@@ -11,7 +11,7 @@ pattern FSM + routing + bounded message queues
     |
 caller-driven TCP/TLS primitives
     |
-FMQ/5 codec + Rocida CNet
+FMQ/6 codec + Rocida CNet
 ```
 
 `FlowMQ::Protocol` 不依赖网络；`FlowMQ::Core` 保存 pattern/session 规则；
@@ -47,7 +47,7 @@ CFlow/CMeta 可服务于控制面配置、类型描述和 executor 组合，不�
 application message
   -> pattern FSM / peer selection
   -> local HWM + peer remote max_data admission
-  -> FMQ/5 encode into socket-owned reusable scratch
+  -> FMQ/6 encode into socket-owned reusable scratch
   -> multipart parts retained in bounded socket-owned staging until final
   -> complete message transferred to peer-owned fixed descriptor ring
   -> single-part fast path may use direct cnet_send() when the peer is writable
@@ -68,7 +68,7 @@ PUB/XPUB 的 mute peer 按 ZeroMQ 语义丢弃，PUSH/DEALER/REQ 等模式不静
 ```text
 CNet borrowed receive view
   -> peer-owned bounded stream decoder
-  -> FMQ/5 frame validation + SETTINGS/FLOW_UPDATE credit
+  -> FMQ/6 frame validation + SETTINGS/FLOW_UPDATE credit
   -> per-peer multipart staging
   -> socket-owned complete message
   -> recv/msg_recv
@@ -114,7 +114,7 @@ drain 策略；未完成的本地消息随 socket close 取消。
 
 ## 验证
 
-当前验证覆盖 TCP、verified TLS、FMQ/5 SETTINGS/FLOW_UPDATE、累计 credit 耗尽与恢复、
+当前验证覆盖 TCP、verified TLS、FMQ/6 SETTINGS/FLOW_UPDATE、累计 credit 耗尽与恢复、
 deadline 更新、ROUTER identity、multipart 接收原子可见性、REQ/REP FSM、
 PUB/SUB filter/fan-out、动态 XPUB/XSUB subscription event、发送/接收 message/byte HWM、
 阻塞/DONTWAIT 分流、多 socket timeout poll、RCVMORE、peer failure isolation、session

@@ -1,6 +1,6 @@
-# FMQ/5 与 FMS/3 Wire Protocol
+# FMQ/6 与 FMS/3 Wire Protocol
 
-FMQ/5 是 FlowMQ 唯一 socket framing；FMS/3 是可选但不可降级的 HELLO security
+FMQ/6 是 FlowMQ 唯一 socket framing；FMS/3 是可选但不可降级的 HELLO security
 envelope。本文是 wire 字段、校验、分片、心跳、pattern、queue 和
 backpressure 边界的唯一详细正文。
 
@@ -8,14 +8,14 @@ backpressure 边界的唯一详细正文。
 
 ## 1. 分层与版本
 
-FMQ/5 位于 CNet TCP/TLS 有序字节流之上，应用协议位于 FMQ `DATA` payload 之内：
+FMQ/6 位于 CNet TCP/TLS 有序字节流之上，应用协议位于 FMQ `DATA` payload 之内：
 
 ```text
      应用 payload
               |
-       FMQ/5 DATA payload
+       FMQ/6 DATA payload
               |
-  FMQ/5 frame + FMS/3 HELLO
+  FMQ/6 frame + FMS/3 HELLO
               |
        CNet TCP / TLS
 ```
@@ -24,11 +24,11 @@ FMQ/5 位于 CNet TCP/TLS 有序字节流之上，应用协议位于 FMQ `DATA` 
 字段保持 binary-safe。decoder 必须拒绝版本错误、保留字段非零、长度不一致、
 越界、乱序分片、重叠分片和 trailing bytes。
 
-`TFMQ` 是固定 magic，version 固定为 `5`。version byte 不是 negotiation 字段；
+`TFMQ` 是固定 magic，version 固定为 `6`。version byte 不是 negotiation 字段；
 其他版本必须返回协议错误，不得协商、fallback 或静默接受旧版本。
 
 一次连接双方各发送一个 `HELLO` 和一个 `SETTINGS`。只有 HELLO、SETTINGS 完成且
-pattern pairing 合法后才能接受 `DATA`。可信 FMQ/5 的 HELLO payload 必须为空；配置 security binding 时必须
+pattern pairing 合法后才能接受 `DATA`。可信 FMQ/6 的 HELLO payload 必须为空；配置 security binding 时必须
 使用 FMS/3，trusted 与 secure 两种模式不互相降级。
 
 ## 2. Frame layout
@@ -38,8 +38,8 @@ pattern pairing 合法后才能接受 `DATA`。可信 FMQ/5 的 HELLO payload �
 | Offset | Size | Field | Constraint |
 | ---: | ---: | --- | --- |
 | 0 | 4 | magic | `TFMQ` |
-| 4 | 1 | version | `5` |
-| 5 | 1 | kind | core `1..6`, SETTINGS `32`, FLOW_UPDATE `33`；ESB 保留 `7..31` |
+| 4 | 1 | version | `6` |
+| 5 | 1 | kind | core `1..6`, SETTINGS `32`, FLOW_UPDATE `33`；其他值非法 |
 | 6 | 1 | sender pattern | `1..11`，见第 4 节 |
 | 7 | 1 | packet flags | `FIRST=0x01`, `LAST=0x02`, `MORE=0x04`；其他 bit 必须为零 |
 | 8 | 2 | identity length | 仅 FIRST 携带，最大 255 bytes |
@@ -105,11 +105,11 @@ identity part 和 XPUB 合成的 subscription event 不计 DATA credit。达到 
 默认 quantum 为 `min(window, max(window / 4, 64 KiB))`，默认 interval 为 10 ms；可在
 bind/connect 前通过 `FLOWMQ_FLOW_UPDATE_QUANTUM` 与 `FLOWMQ_FLOW_UPDATE_IVL` 调整。
 重复 SETTINGS、SETTINGS 前 DATA、generation 不匹配、累计值倒退和越过已公布
-`max_data` 都是协议错误。FMQ/5 不接受或回退到 FMQ/4。
+`max_data` 都是协议错误。FMQ/6 不接受或回退到 FMQ/5。
 
 ## 3. FMS/3 security envelope
 
-FMS/3 只允许作为 FMQ/5 HELLO payload 出现，magic 为 `FMS3`。非空 envelope 的
+FMS/3 只允许作为 FMQ/6 HELLO payload 出现，magic 为 `FMS3`。非空 envelope 的
 12-byte header 为：
 
 | Offset | Size | Field |
@@ -188,7 +188,7 @@ PING 的 send-side timeout，并刷新 receive 与下一次 PING deadline。PING
 `WAIT`、`SEND_PING`、send-side `EXPIRED` 和 receive-side `RECV_EXPIRED`。心跳不改变业务
 ACK、delivery 或 completion 语义。
 
-FMQ/5 的 PING/PONG 没有 payload，因此不携带 ZeroMQ `HEARTBEAT_TTL` 或 PING context。
+FMQ/6 的 PING/PONG 没有 payload，因此不携带 ZeroMQ `HEARTBEAT_TTL` 或 PING context。
 socket facade 当前只提供 `FLOWMQ_HEARTBEAT_IVL` 与 `FLOWMQ_HEARTBEAT_TIMEOUT`；二者由
 调用 `send`、`recv` 或 `poll` 的 owner 线程推进，没有后台 timer。应用停止调用进度函数时，
 心跳和超时判定也会暂停。
@@ -216,7 +216,7 @@ FLOW_UPDATE 协调，但不替代本地容量限制。所有 accepted frame 仍�
 `frame_hwm_bytes` admission 计费；只有最终 completion、drop 或 shutdown cancel
 才能释放该全局 budget。
 
-TCP/TLS 已负责可靠有序传输与拥塞控制；FMQ/5 不在同一 TCP/TLS stream 内发送 FEC
+TCP/TLS 已负责可靠有序传输与拥塞控制；FMQ/6 不在同一 TCP/TLS stream 内发送 FEC
 repair symbol。此类冗余不能绕过 TCP head-of-line blocking，只会消耗额外带宽和 CPU。
 
 ### 7.1 当前 socket queue 语义

@@ -1,7 +1,7 @@
 // FlowMQ media-provider v1 canonical application contract.
 //
-// This schema is transport-neutral application data carried inside an FMQ v3
-// DATA frame. FlowMQ admission is not a durable receipt: ProviderReceiptV1,
+// FMP/1 is transport-neutral application data carried inside an FMQ/6 DATA
+// frame. FlowMQ admission is not a durable receipt: ProviderReceiptV1,
 // ProviderCompletionAckV1, and ProviderEventAckV1 close the application-level
 // delivery states. Ack sequence fields identify the committed session inbox
 // event. All values that can exceed JSON's exact integer range are

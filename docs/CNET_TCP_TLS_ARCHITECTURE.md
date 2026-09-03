@@ -3,7 +3,7 @@
 ## 决策
 
 FlowMQ 的公开目标是 ZeroMQ 的 context/socket 调用方式和消息模式语义，不采用
-Actor、Reactive 或 callback-first API。FMQ/5 仍是独立 wire protocol，因此不承诺与
+Actor、Reactive 或 callback-first API。FMQ/6 仍是独立 wire protocol，因此不承诺与
 ZMTP/libzmq 二进制互通。
 
 CNet 是 caller-driven、单 owner 的协程网络库。FlowMQ 不为 CNet 创建 progress

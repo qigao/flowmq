@@ -13,15 +13,11 @@
 /* Hash map for correlation_id -> session* */
 
 /* Internal helpers */
-static int flowmq_scatter_session_init(flowmq_scatter_session_t *session,
-                                       uint64_t correlation_id,
+static int flowmq_scatter_session_init(flowmq_scatter_session_t *session, uint64_t correlation_id,
                                        uint32_t expected_responses,
-                                       flowmq_protocol_gather_policy_t policy,
-                                       uint64_t deadline_ns,
-                                       void *client_context,
-                                       uint64_t created_ns) {
-  if (!session || expected_responses == 0 ||
-      expected_responses > FLOWMQ_PROTOCOL_ESB_MAX_FANOUT_COUNT) {
+                                       flowmq_esb_gather_policy_t policy, uint64_t deadline_ns,
+                                       void *client_context, uint64_t created_ns) {
+  if (!session || expected_responses == 0 || expected_responses > FLOWMQ_ESB_MAX_FANOUT_COUNT) {
     return TURBO_EINVAL;
   }
 
@@ -35,10 +31,8 @@ static int flowmq_scatter_session_init(flowmq_scatter_session_t *session,
   session->client_context = client_context;
 
   /* Pre-allocate partial results vector */
-  if (vec_init_bytes(&session->partial_results,
-                           sizeof(flowmq_scatter_partial_response_t),
-                           _Alignof(flowmq_scatter_partial_response_t),
-                           expected_responses) != STL_OK) {
+  if (vec_init_bytes(&session->partial_results, sizeof(flowmq_scatter_partial_response_t),
+                     _Alignof(flowmq_scatter_partial_response_t), expected_responses) != STL_OK) {
     return TURBO_ENOMEM;
   }
   if (vec_reserve(&session->partial_results, expected_responses) != 0) {
@@ -49,9 +43,8 @@ static int flowmq_scatter_session_init(flowmq_scatter_session_t *session,
   return TURBO_OK;
 }
 
-static int flowmq_scatter_gather_calculate_deadline(uint64_t now_ns,
-                                                   uint64_t timeout_ms,
-                                                   uint64_t *deadline_ns) {
+static int flowmq_scatter_gather_calculate_deadline(uint64_t now_ns, uint64_t timeout_ms,
+                                                    uint64_t *deadline_ns) {
   if (!deadline_ns) return TURBO_EINVAL;
 
   if (timeout_ms == 0u) {
@@ -74,9 +67,8 @@ static int flowmq_scatter_gather_calculate_deadline(uint64_t now_ns,
 
 static int flowmq_scatter_gather_create_session_impl(flowmq_scatter_gather_manager_t *manager,
                                                      uint32_t expected_responses,
-                                                     flowmq_protocol_gather_policy_t policy,
-                                                     uint64_t deadline_ns,
-                                                     void *client_context,
+                                                     flowmq_esb_gather_policy_t policy,
+                                                     uint64_t deadline_ns, void *client_context,
                                                      uint64_t *correlation_id) {
   if (!manager || !correlation_id) {
     return TURBO_EINVAL;
@@ -88,7 +80,7 @@ static int flowmq_scatter_gather_create_session_impl(flowmq_scatter_gather_manag
   }
 
   /* Validate policy */
-  if (policy > FLOWMQ_GATHER_QUORUM) {
+  if (policy > FLOWMQ_ESB_GATHER_QUORUM) {
     return TURBO_EINVAL;
   }
 
@@ -107,8 +99,8 @@ static int flowmq_scatter_gather_create_session_impl(flowmq_scatter_gather_manag
   }
 
   uint64_t now_ns = turbo_hrtime();
-  int rc = flowmq_scatter_session_init(session, id, expected_responses, policy,
-                                       deadline_ns, client_context, now_ns);
+  int rc = flowmq_scatter_session_init(session, id, expected_responses, policy, deadline_ns,
+                                       client_context, now_ns);
   if (rc != TURBO_OK) {
     free(session);
     return rc;
@@ -151,45 +143,41 @@ static int flowmq_scatter_check_completion(flowmq_scatter_session_t *session) {
   }
 
   switch (session->policy) {
-    case FLOWMQ_GATHER_ALL:
-      /* Need all responses */
-      return session->received_responses >= session->expected_responses;
+  case FLOWMQ_ESB_GATHER_ALL:
+    /* Need all responses */
+    return session->received_responses >= session->expected_responses;
 
-    case FLOWMQ_GATHER_FIRST_N:
-      /* Already complete if we have expected count */
-      return session->received_responses >= session->expected_responses;
+  case FLOWMQ_ESB_GATHER_FIRST_N:
+    /* Already complete if we have expected count */
+    return session->received_responses >= session->expected_responses;
 
-    case FLOWMQ_GATHER_QUORUM:
-      /* Need majority (N/2 + 1) */
-      {
-        uint32_t quorum = (session->expected_responses / 2) + 1;
-        return session->received_responses >= quorum;
-      }
+  case FLOWMQ_ESB_GATHER_QUORUM:
+    /* Need majority (N/2 + 1) */
+    {
+      uint32_t quorum = (session->expected_responses / 2) + 1;
+      return session->received_responses >= quorum;
+    }
 
-    default:
-      return 0;
+  default:
+    return 0;
   }
 }
 
 int flowmq_scatter_gather_manager_init(flowmq_scatter_gather_manager_t *manager,
-                                       uint32_t max_sessions,
-                                       uint64_t default_timeout_ms) {
-  if (!manager || max_sessions == 0 ||
-      max_sessions > FLOWMQ_SCATTER_GATHER_MAX_SESSIONS) {
+                                       uint32_t max_sessions, uint64_t default_timeout_ms) {
+  if (!manager || max_sessions == 0 || max_sessions > FLOWMQ_SCATTER_GATHER_MAX_SESSIONS) {
     return TURBO_EINVAL;
   }
 
   memset(manager, 0, sizeof(*manager));
   manager->max_sessions = max_sessions;
   manager->default_timeout_ms = default_timeout_ms;
-  manager->next_correlation_id = 1;  /* Start from 1, 0 reserved for invalid */
+  manager->next_correlation_id = 1; /* Start from 1, 0 reserved for invalid */
 
   /* Initialize session map */
-  if (hash_map_init_bytes(&manager->sessions,
-                                sizeof(uint64_t), _Alignof(uint64_t),
-                                sizeof(flowmq_scatter_session_t *),
-                                _Alignof(flowmq_scatter_session_t *), max_sessions,
-                                hash_bytes, hash_key_equal, NULL) != STL_OK) {
+  if (hash_map_init_bytes(&manager->sessions, sizeof(uint64_t), _Alignof(uint64_t),
+                          sizeof(flowmq_scatter_session_t *), _Alignof(flowmq_scatter_session_t *),
+                          max_sessions, hash_bytes, hash_key_equal, NULL) != STL_OK) {
     return TURBO_ENOMEM;
   }
   if (hash_map_reserve(&manager->sessions, max_sessions) != 0) {
@@ -222,10 +210,8 @@ void flowmq_scatter_gather_manager_destroy(flowmq_scatter_gather_manager_t *mana
 
 int flowmq_scatter_gather_create_session(flowmq_scatter_gather_manager_t *manager,
                                          uint32_t expected_responses,
-                                         flowmq_protocol_gather_policy_t policy,
-                                         uint64_t timeout_ns,
-                                         void *client_context,
-                                         uint64_t *correlation_id) {
+                                         flowmq_esb_gather_policy_t policy, uint64_t timeout_ns,
+                                         void *client_context, uint64_t *correlation_id) {
   if (!manager || !correlation_id) {
     return TURBO_EINVAL;
   }
@@ -234,23 +220,21 @@ int flowmq_scatter_gather_create_session(flowmq_scatter_gather_manager_t *manage
   uint64_t deadline = timeout_ns;
   uint64_t now_ns = turbo_hrtime();
   if (deadline == 0) {
-    int rc = flowmq_scatter_gather_calculate_deadline(
-      now_ns, manager->default_timeout_ms, &deadline);
+    int rc =
+        flowmq_scatter_gather_calculate_deadline(now_ns, manager->default_timeout_ms, &deadline);
     if (rc != TURBO_OK) {
       return rc;
     }
   }
 
-  return flowmq_scatter_gather_create_session_impl(
-      manager, expected_responses, policy, deadline, client_context, correlation_id);
+  return flowmq_scatter_gather_create_session_impl(manager, expected_responses, policy, deadline,
+                                                   client_context, correlation_id);
 }
 
 int flowmq_scatter_gather_create_session_ms(flowmq_scatter_gather_manager_t *manager,
-                                           uint32_t expected_responses,
-                                           flowmq_protocol_gather_policy_t policy,
-                                           uint64_t timeout_ms,
-                                           void *client_context,
-                                           uint64_t *correlation_id) {
+                                            uint32_t expected_responses,
+                                            flowmq_esb_gather_policy_t policy, uint64_t timeout_ms,
+                                            void *client_context, uint64_t *correlation_id) {
   if (!manager) {
     return TURBO_EINVAL;
   }
@@ -269,11 +253,8 @@ int flowmq_scatter_gather_create_session_ms(flowmq_scatter_gather_manager_t *man
 }
 
 int flowmq_scatter_gather_record_response(flowmq_scatter_gather_manager_t *manager,
-                                          uint64_t correlation_id,
-                                          uint32_t index,
-                                          tstr *payload,
-                                          int status,
-                                          uint64_t received_ns) {
+                                          uint64_t correlation_id, uint32_t index, tstr *payload,
+                                          int status, uint64_t received_ns) {
   if (!manager || !payload) {
     return TURBO_EINVAL;
   }
@@ -311,9 +292,9 @@ int flowmq_scatter_gather_record_response(flowmq_scatter_gather_manager_t *manag
   flowmq_scatter_partial_response_t resp = {0};
   resp.index = index;
   resp.received_ns = received_ns;
-  resp.payload = *payload;  /* Move ownership */
+  resp.payload = *payload; /* Move ownership */
   resp.status = status;
-  *payload = NULL;  /* Clear source */
+  *payload = NULL; /* Clear source */
 
   /* Add to results */
   if (vec_push(&session->partial_results, &resp) != TURBO_OK) {
@@ -380,7 +361,7 @@ int flowmq_scatter_gather_finalize_session(flowmq_scatter_gather_manager_t *mana
 
   /* Remove from map */
   (void)hash_map_remove(&manager->sessions, &correlation_id, NULL);
-  free(session);  /* Free the pointer, not the session data */
+  free(session); /* Free the pointer, not the session data */
 
   manager->active_sessions--;
   return TURBO_OK;
@@ -430,8 +411,8 @@ uint32_t flowmq_scatter_gather_process_timeouts(flowmq_scatter_gather_manager_t 
       continue;
     }
     flowmq_scatter_session_t *session = *session_ptr;
-    if (session && session->state == FLOWMQ_SCATTER_PENDING &&
-        session->deadline_ns > 0 && now_ns >= session->deadline_ns) {
+    if (session && session->state == FLOWMQ_SCATTER_PENDING && session->deadline_ns > 0 &&
+        now_ns >= session->deadline_ns) {
       if (count < FLOWMQ_SCATTER_GATHER_MAX_SESSIONS) {
         timed_out_ids[count++] = session->correlation_id;
       }
@@ -457,8 +438,7 @@ uint32_t flowmq_scatter_gather_process_timeouts(flowmq_scatter_gather_manager_t 
   return timed_out;
 }
 
-void flowmq_scatter_gather_stats(const flowmq_scatter_gather_manager_t *manager,
-                                 uint32_t *active,
+void flowmq_scatter_gather_stats(const flowmq_scatter_gather_manager_t *manager, uint32_t *active,
                                  uint32_t *capacity) {
   if (!manager) {
     return;

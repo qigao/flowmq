@@ -15,8 +15,7 @@ enum {
   BENCH_LARGE_SAMPLES = 1000
 };
 
-static void bench_protocol_roundtrip(size_t payload_size, size_t samples,
-                                     const char *encode_title,
+static void bench_protocol_roundtrip(size_t payload_size, size_t samples, const char *encode_title,
                                      const char *decode_title) {
   static char payload[BENCH_LARGE_PAYLOAD_BYTES];
   flowmq_protocol_frame_t input;
@@ -34,12 +33,11 @@ static void bench_protocol_roundtrip(size_t payload_size, size_t samples,
   input.topic = vstr_from_cstr("bench.protocol");
   input.payload = vstr_from_buf(payload, payload_size);
 
-  check_equal(flowmq_protocol_encode_frame(&input, BENCH_MAX_FRAME_BYTES, &encoded),
-               TURBO_OK);
+  check_equal(flowmq_protocol_encode_frame(&input, BENCH_MAX_FRAME_BYTES, &encoded), TURBO_OK);
   memset(&output, 0, sizeof(output));
-  check_equal(flowmq_protocol_decode_frame(encoded, tstr_len(encoded),
-                                            BENCH_MAX_FRAME_BYTES, &output, &consumed),
-               TURBO_OK);
+  check_equal(flowmq_protocol_decode_frame(encoded, tstr_len(encoded), BENCH_MAX_FRAME_BYTES,
+                                           &output, &consumed),
+              TURBO_OK);
   check_equal(output.payload.len, payload_size);
   check_equal(output.payload.data, payload, payload_size);
   flowmq_protocol_frame_cleanup(&output);
@@ -53,8 +51,8 @@ static void bench_protocol_roundtrip(size_t payload_size, size_t samples,
 
   benchmark_bytes(decode_title, samples, payload_size) {
     memset(&output, 0, sizeof(output));
-    rc = flowmq_protocol_decode_frame(encoded, tstr_len(encoded), BENCH_MAX_FRAME_BYTES,
-                                      &output, &consumed);
+    rc = flowmq_protocol_decode_frame(encoded, tstr_len(encoded), BENCH_MAX_FRAME_BYTES, &output,
+                                      &consumed);
     flowmq_protocol_frame_cleanup(&output);
   }
   check_equal(rc, TURBO_OK);
@@ -63,12 +61,10 @@ static void bench_protocol_roundtrip(size_t payload_size, size_t samples,
 }
 
 spec("standalone FlowMQ protocol benchmark") {
-  bench("contiguous FMQ v4 framing") {
+  bench("contiguous FMQ/6 framing") {
     bench_protocol_roundtrip(BENCH_SMALL_PAYLOAD_BYTES, BENCH_SMALL_SAMPLES,
-                             "encode 64-byte payload",
-                             "decode 64-byte payload");
+                             "encode 64-byte payload", "decode 64-byte payload");
     bench_protocol_roundtrip(BENCH_LARGE_PAYLOAD_BYTES, BENCH_LARGE_SAMPLES,
-                             "encode 64-KiB payload",
-                             "decode 64-KiB payload");
+                             "encode 64-KiB payload", "decode 64-KiB payload");
   }
 }
