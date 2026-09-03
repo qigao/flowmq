@@ -9,14 +9,14 @@ spec("flowmq_pattern_state") {
     check_equal(flowmq_pattern_state_init(&state, FLOWMQ_PROTOCOL_REQ), TURBO_OK);
     check_equal(flowmq_pattern_state_send_validate(&state), TURBO_OK);
     flowmq_pattern_state_send_commit(&state, 1);
-    check_equal(flowmq_pattern_state_receive_validate(&state), TURBO_EBUSY);
+    check_equal(flowmq_pattern_state_receive_validate(&state), TURBO_EPROTO);
     check_equal(flowmq_pattern_state_send_validate(&state), TURBO_OK);
     flowmq_pattern_state_send_commit(&state, 0);
 
-    check_equal(flowmq_pattern_state_send_validate(&state), TURBO_EBUSY);
+    check_equal(flowmq_pattern_state_send_validate(&state), TURBO_EPROTO);
     check_equal(flowmq_pattern_state_receive_validate(&state), TURBO_OK);
     flowmq_pattern_state_receive_commit(&state, 1);
-    check_equal(flowmq_pattern_state_send_validate(&state), TURBO_EBUSY);
+    check_equal(flowmq_pattern_state_send_validate(&state), TURBO_EPROTO);
     check_equal(flowmq_pattern_state_receive_validate(&state), TURBO_OK);
     flowmq_pattern_state_receive_commit(&state, 0);
     check_equal(flowmq_pattern_state_send_validate(&state), TURBO_OK);
@@ -26,16 +26,16 @@ spec("flowmq_pattern_state") {
     flowmq_pattern_state_t state = FLOWMQ_PATTERN_STATE_INIT;
 
     check_equal(flowmq_pattern_state_init(&state, FLOWMQ_PROTOCOL_REP), TURBO_OK);
-    check_equal(flowmq_pattern_state_send_validate(&state), TURBO_EBUSY);
+    check_equal(flowmq_pattern_state_send_validate(&state), TURBO_EPROTO);
     check_equal(flowmq_pattern_state_receive_validate(&state), TURBO_OK);
     flowmq_pattern_state_receive_commit(&state, 1);
-    check_equal(flowmq_pattern_state_send_validate(&state), TURBO_EBUSY);
+    check_equal(flowmq_pattern_state_send_validate(&state), TURBO_EPROTO);
     flowmq_pattern_state_receive_commit(&state, 0);
 
-    check_equal(flowmq_pattern_state_receive_validate(&state), TURBO_EBUSY);
+    check_equal(flowmq_pattern_state_receive_validate(&state), TURBO_EPROTO);
     check_equal(flowmq_pattern_state_send_validate(&state), TURBO_OK);
     flowmq_pattern_state_send_commit(&state, 1);
-    check_equal(flowmq_pattern_state_receive_validate(&state), TURBO_EBUSY);
+    check_equal(flowmq_pattern_state_receive_validate(&state), TURBO_EPROTO);
     flowmq_pattern_state_send_commit(&state, 0);
     check_equal(flowmq_pattern_state_receive_validate(&state), TURBO_OK);
   }
@@ -72,11 +72,11 @@ spec("flowmq_pattern_state") {
 
     check_equal(flowmq_pattern_state_init(&state, FLOWMQ_PROTOCOL_DEALER), TURBO_OK);
     flowmq_pattern_state_send_commit(&state, 1);
-    check_equal(flowmq_pattern_state_receive_validate(&state), TURBO_EBUSY);
+    check_equal(flowmq_pattern_state_receive_validate(&state), TURBO_EPROTO);
     flowmq_pattern_state_send_commit(&state, 0);
     check_equal(flowmq_pattern_state_receive_validate(&state), TURBO_OK);
     flowmq_pattern_state_receive_commit(&state, 1);
-    check_equal(flowmq_pattern_state_send_validate(&state), TURBO_EBUSY);
+    check_equal(flowmq_pattern_state_send_validate(&state), TURBO_EPROTO);
     flowmq_pattern_state_receive_commit(&state, 0);
     check_equal(flowmq_pattern_state_send_validate(&state), TURBO_OK);
   }

@@ -42,8 +42,8 @@ TCP/TLS 第一阶段承载以下经典 socket 模式；bind/connect 方向不决
 
 消息是离散且可 multipart；`SNDMORE` parts 由 socket 有界暂存，final part 成功时才把完整
 消息原子转移到选定 peer outbound。`send` 成功只表示本地 socket 接管消息，不表示网络
-发送或远端处理完成。REQ/REP 非法顺序返回明确 FSM
-错误；`DONTWAIT` 在无法 admission/receive 时立即返回 would-block，普通 `send/recv`
+发送或远端处理完成。REQ/REP 非法顺序和 multipart 方向交错立即返回 `TURBO_EPROTO`，不进入
+阻塞重试；`DONTWAIT` 在无法 admission/receive 时立即返回 would-block，普通 `send/recv`
 则在调用者线程内分片推进所属 socket，直到操作成功或 progress 失败。
 
 ## 当前实现边界

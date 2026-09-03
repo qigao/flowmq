@@ -165,7 +165,8 @@ REQ 状态为 `READY -> WAIT_REPLY -> READY`。REP 状态为
 socket 取消 transaction；下一个受影响的 send/receive 一次性返回 `TURBO_ENOTCONN`，
 `flowmq_poll()` 在错误被消费前报告 `FLOWMQ_POLLERR`。新 session 完成 HELLO 后可继续，
 旧 generation reply 不得完成新 request。状态迁移只在完整 multipart 的最后一个 part
-成功 admission/receive 时提交。
+成功 admission/receive 时提交。应用在错误 FSM phase 调用 send/receive，或在 multipart
+中途切换方向，立即返回 `TURBO_EPROTO`，不得作为 would-block 重试。
 
 ROUTER routing envelope 与 ZeroMQ 一样只公开 peer claimed identity，它是当前 live
 session 的查找键，不是带 generation 的 opaque token。identity part 选中 peer 后，同一

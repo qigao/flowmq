@@ -27,14 +27,14 @@ int flowmq_pattern_state_init(flowmq_pattern_state_t *state,
 int flowmq_pattern_state_send_validate(const flowmq_pattern_state_t *state) {
   if (state == NULL || !flowmq_pattern_can_send(state->pattern))
     return TURBO_ENOTSUP;
-  if (state->receiving_multipart) return TURBO_EBUSY;
+  if (state->receiving_multipart) return TURBO_EPROTO;
   if (state->sending_multipart) return TURBO_OK;
   if (state->pattern == FLOWMQ_PROTOCOL_REQ &&
       state->phase != FLOWMQ_PATTERN_PHASE_READY)
-    return TURBO_EBUSY;
+    return TURBO_EPROTO;
   if (state->pattern == FLOWMQ_PROTOCOL_REP &&
       state->phase != FLOWMQ_PATTERN_PHASE_REP_SEND_REPLY)
-    return TURBO_EBUSY;
+    return TURBO_EPROTO;
   return TURBO_OK;
 }
 
@@ -51,14 +51,14 @@ void flowmq_pattern_state_send_commit(flowmq_pattern_state_t *state, int more) {
 int flowmq_pattern_state_receive_validate(const flowmq_pattern_state_t *state) {
   if (state == NULL || !flowmq_pattern_can_receive(state->pattern))
     return TURBO_ENOTSUP;
-  if (state->sending_multipart) return TURBO_EBUSY;
+  if (state->sending_multipart) return TURBO_EPROTO;
   if (state->receiving_multipart) return TURBO_OK;
   if (state->pattern == FLOWMQ_PROTOCOL_REQ &&
       state->phase != FLOWMQ_PATTERN_PHASE_REQ_WAIT_REPLY)
-    return TURBO_EBUSY;
+    return TURBO_EPROTO;
   if (state->pattern == FLOWMQ_PROTOCOL_REP &&
       state->phase != FLOWMQ_PATTERN_PHASE_READY)
-    return TURBO_EBUSY;
+    return TURBO_EPROTO;
   return TURBO_OK;
 }
 

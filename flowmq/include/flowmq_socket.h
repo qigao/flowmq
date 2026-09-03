@@ -117,7 +117,9 @@ FLOWMQ_C_API int flowmq_getsockopt(const flowmq_socket_t *socket, int option,
  * would-block condition advances this socket on the calling thread until the
  * message can be admitted or progress fails. If the peer bound to an active
  * transaction disconnects, the next affected send returns TURBO_ENOTCONN once
- * instead of retrying the cancelled transaction. Returns a Turbo status.
+ * instead of retrying the cancelled transaction. An operation forbidden by
+ * the pattern or multipart FSM returns TURBO_EPROTO without blocking. Returns
+ * a Turbo status.
  */
 FLOWMQ_C_API int flowmq_send(flowmq_socket_t *socket, const void *data,
                              size_t size, int flags);
@@ -127,7 +129,9 @@ FLOWMQ_C_API int flowmq_send(flowmq_socket_t *socket, const void *data,
  * FLOWMQ_DONTWAIT, advance this socket on the calling thread until a part is
  * available or progress fails. If the peer bound to an active transaction
  * disconnects, the next affected receive returns TURBO_ENOTCONN once instead
- * of retrying the cancelled transaction. Returns a Turbo status.
+ * of retrying the cancelled transaction. An operation forbidden by the
+ * pattern or multipart FSM returns TURBO_EPROTO without blocking. Returns a
+ * Turbo status.
  */
 FLOWMQ_C_API int flowmq_recv(flowmq_socket_t *socket, void *data,
                              size_t capacity, size_t *received, int flags);

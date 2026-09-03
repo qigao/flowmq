@@ -83,7 +83,8 @@ buffer；完整 multipart 提交前只存在于对应 peer staging。完整消�
 
 ## Pattern 状态
 
-- REQ：`SEND_READY -> WAIT_REPLY -> SEND_READY`，非法 send/recv 返回 FSM 错误。
+- REQ：`SEND_READY -> WAIT_REPLY -> SEND_READY`，非法 send/recv 与 multipart 方向交错立即
+  返回 `TURBO_EPROTO`，不进入阻塞重试。
 - REP：`RECV_READY -> SEND_REPLY -> RECV_READY`，reply 绑定最后一个 requester。
 - PUSH/DEALER/REQ：eligible peer round-robin；peer busy 时不形成跨 peer HOL。
 - PULL/SUB/DEALER/ROUTER：当前按网络完成顺序进入全局队列；严格 per-peer fair queue 尚未完成。

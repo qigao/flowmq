@@ -230,6 +230,14 @@ spec("flowmq_socket lifecycle and pattern surface") {
       size_t ready = 0u;
       check_equal(flowmq_poll(&item, 1u, 0u, &ready), TURBO_OK);
     }
+    {
+      flowmq_pollitem_t cancelled = {
+          .socket = server, .events = FLOWMQ_POLLOUT};
+      size_t ready = 0u;
+      check_equal(flowmq_poll(&cancelled, 1u, 0u, &ready), TURBO_OK);
+      check_equal(ready, 1u);
+      check_equal(cancelled.revents, FLOWMQ_POLLERR);
+    }
 
     check_equal(flowmq_connect(replacement, endpoint), TURBO_OK);
     status = TURBO_EBUSY;
@@ -243,6 +251,13 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(status, TURBO_OK);
     check_equal(flowmq_send(server, reply, sizeof(reply) - 1u, 0),
                 TURBO_ENOTCONN);
+    {
+      flowmq_pollitem_t consumed = {.socket = server};
+      size_t ready = 0u;
+      check_equal(flowmq_poll(&consumed, 1u, 0u, &ready), TURBO_OK);
+      check_equal(ready, 0u);
+      check_equal(consumed.revents, 0);
+    }
     status = TURBO_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
                         status == TURBO_EBUSY;
@@ -1757,15 +1772,14 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_last_endpoint(rep, endpoint, sizeof(endpoint), &endpoint_size),
                 TURBO_OK);
     check_equal(flowmq_connect(req, endpoint), TURBO_OK);
-    check_equal(flowmq_send(rep, reply, sizeof(reply) - 1u, FLOWMQ_DONTWAIT),
-                TURBO_EBUSY);
+    check_equal(flowmq_send(rep, reply, sizeof(reply) - 1u, 0), TURBO_EPROTO);
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY; ++i) {
       check_equal(progress_pair(req, rep), TURBO_OK);
       status = flowmq_send(req, request, sizeof(request) - 1u, FLOWMQ_DONTWAIT);
     }
     check_equal(status, TURBO_OK);
-    check_equal(flowmq_send(req, request, sizeof(request) - 1u, FLOWMQ_DONTWAIT),
-                TURBO_EBUSY);
+    check_equal(flowmq_send(req, request, sizeof(request) - 1u, 0),
+                TURBO_EPROTO);
     status = TURBO_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY; ++i) {
       check_equal(progress_pair(req, rep), TURBO_OK);
@@ -1774,8 +1788,8 @@ spec("flowmq_socket lifecycle and pattern surface") {
     }
     check_equal(status, TURBO_OK);
     check_equal(received_size, sizeof(request) - 1u);
-    check_equal(flowmq_recv(rep, received, sizeof(received), &received_size,
-                            FLOWMQ_DONTWAIT), TURBO_EBUSY);
+    check_equal(flowmq_recv(rep, received, sizeof(received), &received_size, 0),
+                TURBO_EPROTO);
 
     status = TURBO_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == TURBO_EBUSY; ++i) {
@@ -1794,6 +1808,72 @@ spec("flowmq_socket lifecycle and pattern surface") {
 
     check_equal(flowmq_close(req), TURBO_OK);
     check_equal(flowmq_close(rep), TURBO_OK);
+    check_equal(flowmq_ctx_term(ctx), TURBO_OK);
+  }
+
+  it("rejects blocking direction changes inside multipart messages") {
+    static const char first_part[] = "first";
+    static const char final_part[] = "final";
+    static const char interleaved[] = "interleaved";
+    char endpoint[128] = {0};
+    char received[32] = {0};
+    size_t endpoint_size = 0u;
+    size_t received_size = 0u;
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *left = flowmq_socket(ctx, FLOWMQ_PAIR);
+    flowmq_socket_t *right = flowmq_socket(ctx, FLOWMQ_PAIR);
+    int status = TURBO_EBUSY;
+
+    check_equal(flowmq_bind(left, "tcp://127.0.0.1:0"), TURBO_OK);
+    check_equal(flowmq_last_endpoint(left, endpoint, sizeof(endpoint),
+                                     &endpoint_size), TURBO_OK);
+    check_equal(flowmq_connect(right, endpoint), TURBO_OK);
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == TURBO_EBUSY;
+         ++i) {
+      check_equal(progress_pair(left, right), TURBO_OK);
+      status = flowmq_send(left, first_part, sizeof(first_part) - 1u,
+                           FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE);
+    }
+    check_equal(status, TURBO_OK);
+    check_equal(flowmq_recv(left, received, sizeof(received), &received_size, 0),
+                TURBO_EPROTO);
+    check_equal(flowmq_send(left, final_part, sizeof(final_part) - 1u,
+                            FLOWMQ_DONTWAIT), TURBO_OK);
+
+    status = TURBO_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == TURBO_EBUSY;
+         ++i) {
+      check_equal(progress_pair(left, right), TURBO_OK);
+      status = flowmq_recv(right, received, sizeof(received), &received_size,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, TURBO_OK);
+    check_equal(flowmq_recv(right, received, sizeof(received), &received_size,
+                            FLOWMQ_DONTWAIT), TURBO_OK);
+
+    status = flowmq_send(right, first_part, sizeof(first_part) - 1u,
+                         FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE);
+    check_equal(status, TURBO_OK);
+    check_equal(flowmq_send(right, final_part, sizeof(final_part) - 1u,
+                            FLOWMQ_DONTWAIT), TURBO_OK);
+    status = TURBO_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == TURBO_EBUSY;
+         ++i) {
+      check_equal(progress_pair(left, right), TURBO_OK);
+      status = flowmq_recv(left, received, sizeof(received), &received_size,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, TURBO_OK);
+    check_equal(flowmq_send(left, interleaved, sizeof(interleaved) - 1u, 0),
+                TURBO_EPROTO);
+    check_equal(flowmq_recv(left, received, sizeof(received), &received_size,
+                            FLOWMQ_DONTWAIT), TURBO_OK);
+
+    check_equal(flowmq_close(right), TURBO_OK);
+    check_equal(flowmq_close(left), TURBO_OK);
     check_equal(flowmq_ctx_term(ctx), TURBO_OK);
   }
 
