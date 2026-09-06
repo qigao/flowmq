@@ -1,4 +1,5 @@
 #include "flowmq_socket.h"
+#include "flowmq_tls_identity_map.h"
 #include "flowmq_tls_test_material.h"
 #include "tinytest.h"
 #include "salts_error.h"
@@ -1080,6 +1081,286 @@ spec("flowmq_socket lifecycle and pattern surface") {
 
     check_equal(flowmq_close(client), SALTS_OK);
     check_equal(flowmq_close(server), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+    check_equal(tt_remove_file(cert_path), 0);
+    check_equal(tt_remove_file(key_path), 0);
+    free(cert_path);
+    free(key_path);
+  }
+
+  it("requires a mutual TLS ROUTER before binding an identity policy") {
+    static const char fingerprint[] =
+        "sha256:" FLOWMQ_TLS_TEST_CERTIFICATE_SHA256;
+    static const char identity[] = "authorized-peer";
+    flowmq_tls_identity_binding_t binding = {
+        sizeof(binding), fingerprint, identity};
+    flowmq_tls_identity_map_config_t policy =
+        FLOWMQ_TLS_IDENTITY_MAP_CONFIG_INIT;
+    char *cert_path = tt_make_temp_file("flowmq-policy-cert", ".pem");
+    char *key_path = tt_make_temp_file("flowmq-policy-key", ".pem");
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *pair = flowmq_socket(ctx, FLOWMQ_PAIR);
+    flowmq_socket_t *tcp_router = flowmq_socket(ctx, FLOWMQ_ROUTER);
+    flowmq_socket_t *tls_router = flowmq_socket(ctx, FLOWMQ_ROUTER);
+    uint64_t rejections = UINT64_MAX;
+    size_t option_size = sizeof(rejections) - 1u;
+    int require_client_certificate = 1;
+
+    policy.bindings = &binding;
+    policy.binding_count = 1u;
+    check_not_null(cert_path);
+    check_not_null(key_path);
+    check_equal(tt_write_file(cert_path, FLOWMQ_TLS_TEST_CERTIFICATE,
+                              sizeof(FLOWMQ_TLS_TEST_CERTIFICATE) - 1u), 0);
+    check_equal(tt_write_file(key_path, FLOWMQ_TLS_TEST_KEY,
+                              sizeof(FLOWMQ_TLS_TEST_KEY) - 1u), 0);
+    check_equal(flowmq_setsockopt(pair, FLOWMQ_TLS_IDENTITY_POLICY, &policy,
+                                  sizeof(policy)), SALTS_EINVAL);
+    check_equal(flowmq_setsockopt(tcp_router, FLOWMQ_TLS_IDENTITY_POLICY,
+                                  &policy, sizeof(policy)), SALTS_OK);
+    check_equal(flowmq_bind(tcp_router, "tcp://127.0.0.1:0"), SALTS_EINVAL);
+
+    check_equal(flowmq_setsockopt(tls_router, FLOWMQ_TLS_CERT_FILE, cert_path,
+                                  strlen(cert_path)), SALTS_OK);
+    check_equal(flowmq_setsockopt(tls_router, FLOWMQ_TLS_KEY_FILE, key_path,
+                                  strlen(key_path)), SALTS_OK);
+    check_equal(flowmq_setsockopt(tls_router, FLOWMQ_TLS_CA_FILE, cert_path,
+                                  strlen(cert_path)), SALTS_OK);
+    check_equal(flowmq_setsockopt(tls_router, FLOWMQ_TLS_IDENTITY_POLICY,
+                                  &policy, sizeof(policy)), SALTS_OK);
+    check_equal(flowmq_bind(tls_router, "tls://127.0.0.1:0"), SALTS_EINVAL);
+    check_equal(flowmq_setsockopt(tls_router,
+                                  FLOWMQ_TLS_REQUIRE_CLIENT_CERTIFICATE,
+                                  &require_client_certificate,
+                                  sizeof(require_client_certificate)),
+                SALTS_OK);
+    check_equal(flowmq_bind(tls_router, "tls://127.0.0.1:0"), SALTS_OK);
+    check_equal(flowmq_getsockopt(tls_router, FLOWMQ_TLS_IDENTITY_REJECTIONS,
+                                  &rejections, &option_size),
+                SALTS_EMSGSIZE);
+    check_equal(option_size, sizeof(rejections));
+    check_equal(flowmq_getsockopt(tls_router, FLOWMQ_TLS_IDENTITY_REJECTIONS,
+                                  &rejections, &option_size),
+                SALTS_OK);
+    check_equal(rejections, 0u);
+    check_equal(flowmq_setsockopt(tls_router, FLOWMQ_TLS_IDENTITY_POLICY,
+                                  &policy, sizeof(policy)), SALTS_EBUSY);
+
+    check_equal(flowmq_close(tls_router), SALTS_OK);
+    check_equal(flowmq_close(tcp_router), SALTS_OK);
+    check_equal(flowmq_close(pair), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+    check_equal(tt_remove_file(cert_path), 0);
+    check_equal(tt_remove_file(key_path), 0);
+    free(cert_path);
+    free(key_path);
+  }
+
+  it("rejects an unauthorized TLS HELLO and keeps the ROUTER available") {
+    static const char authorized_identity[] = "authorized-peer";
+    static const char forged_identity[] = "forged-peer";
+    static const char payload[] = "authenticated-message";
+    char fingerprint[] = "sha256:" FLOWMQ_TLS_TEST_CERTIFICATE_SHA256;
+    char policy_identity[] = "authorized-peer";
+    flowmq_tls_identity_binding_t binding = {
+        sizeof(binding), fingerprint, policy_identity};
+    flowmq_tls_identity_map_config_t policy =
+        FLOWMQ_TLS_IDENTITY_MAP_CONFIG_INIT;
+    char endpoint[128] = {0};
+    char received[64] = {0};
+    size_t endpoint_size = 0u;
+    size_t received_size = 0u;
+    char *cert_path = tt_make_temp_file("flowmq-bound-cert", ".pem");
+    char *key_path = tt_make_temp_file("flowmq-bound-key", ".pem");
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *router = flowmq_socket(ctx, FLOWMQ_ROUTER);
+    flowmq_socket_t *forged = flowmq_socket(ctx, FLOWMQ_DEALER);
+    flowmq_socket_t *authorized = NULL;
+    uint64_t rejections = 0u;
+    size_t option_size = sizeof(rejections);
+    int require_client_certificate = 1;
+    int reconnect_ms = -1;
+    int status = SALTS_EBUSY;
+
+    policy.bindings = &binding;
+    policy.binding_count = 1u;
+    check_not_null(cert_path);
+    check_not_null(key_path);
+    check_equal(tt_write_file(cert_path, FLOWMQ_TLS_TEST_CERTIFICATE,
+                              sizeof(FLOWMQ_TLS_TEST_CERTIFICATE) - 1u), 0);
+    check_equal(tt_write_file(key_path, FLOWMQ_TLS_TEST_KEY,
+                              sizeof(FLOWMQ_TLS_TEST_KEY) - 1u), 0);
+    check_equal(flowmq_setsockopt(router, FLOWMQ_TLS_CA_FILE, cert_path,
+                                  strlen(cert_path)), SALTS_OK);
+    check_equal(flowmq_setsockopt(router, FLOWMQ_TLS_CERT_FILE, cert_path,
+                                  strlen(cert_path)), SALTS_OK);
+    check_equal(flowmq_setsockopt(router, FLOWMQ_TLS_KEY_FILE, key_path,
+                                  strlen(key_path)), SALTS_OK);
+    check_equal(flowmq_setsockopt(router,
+                                  FLOWMQ_TLS_REQUIRE_CLIENT_CERTIFICATE,
+                                  &require_client_certificate,
+                                  sizeof(require_client_certificate)),
+                SALTS_OK);
+    check_equal(flowmq_setsockopt(router, FLOWMQ_TLS_IDENTITY_POLICY, &policy,
+                                  sizeof(policy)), SALTS_OK);
+    policy.binding_count = 0u;
+    check_equal(flowmq_setsockopt(router, FLOWMQ_TLS_IDENTITY_POLICY, &policy,
+                                  sizeof(policy)), SALTS_EINVAL);
+    policy.binding_count = 1u;
+    fingerprint[7] = fingerprint[7] == '0' ? '1' : '0';
+    policy_identity[0] = 'x';
+
+    check_equal(flowmq_setsockopt(forged, FLOWMQ_IDENTITY, forged_identity,
+                                  sizeof(forged_identity) - 1u), SALTS_OK);
+    check_equal(flowmq_setsockopt(forged, FLOWMQ_TLS_CA_FILE, cert_path,
+                                  strlen(cert_path)), SALTS_OK);
+    check_equal(flowmq_setsockopt(forged, FLOWMQ_TLS_CERT_FILE, cert_path,
+                                  strlen(cert_path)), SALTS_OK);
+    check_equal(flowmq_setsockopt(forged, FLOWMQ_TLS_KEY_FILE, key_path,
+                                  strlen(key_path)), SALTS_OK);
+    check_equal(flowmq_setsockopt(forged, FLOWMQ_TLS_SERVER_NAME, "localhost",
+                                  sizeof("localhost") - 1u), SALTS_OK);
+    check_equal(flowmq_setsockopt(forged, FLOWMQ_RECONNECT_IVL, &reconnect_ms,
+                                  sizeof(reconnect_ms)), SALTS_OK);
+    check_equal(flowmq_bind(router, "tls://127.0.0.1:0"), SALTS_OK);
+    check_equal(flowmq_last_endpoint(router, endpoint, sizeof(endpoint),
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(forged, endpoint), SALTS_OK);
+    for (size_t i = 0u;
+         i < FLOWMQ_TEST_PROGRESS_LIMIT && rejections == 0u; ++i) {
+      check_equal(progress_pair(forged, router), SALTS_OK);
+      option_size = sizeof(rejections);
+      check_equal(flowmq_getsockopt(router,
+                                    FLOWMQ_TLS_IDENTITY_REJECTIONS,
+                                    &rejections, &option_size), SALTS_OK);
+    }
+    check_equal(rejections, 1u);
+    check_equal(flowmq_recv(router, received, sizeof(received), &received_size,
+                            FLOWMQ_DONTWAIT), SALTS_EBUSY);
+    check_equal(flowmq_close(forged), SALTS_OK);
+
+    authorized = flowmq_socket(ctx, FLOWMQ_DEALER);
+    check_not_null(authorized);
+    check_equal(flowmq_setsockopt(authorized, FLOWMQ_IDENTITY,
+                                  authorized_identity,
+                                  sizeof(authorized_identity) - 1u), SALTS_OK);
+    check_equal(flowmq_setsockopt(authorized, FLOWMQ_TLS_CA_FILE, cert_path,
+                                  strlen(cert_path)), SALTS_OK);
+    check_equal(flowmq_setsockopt(authorized, FLOWMQ_TLS_CERT_FILE, cert_path,
+                                  strlen(cert_path)), SALTS_OK);
+    check_equal(flowmq_setsockopt(authorized, FLOWMQ_TLS_KEY_FILE, key_path,
+                                  strlen(key_path)), SALTS_OK);
+    check_equal(flowmq_setsockopt(authorized, FLOWMQ_TLS_SERVER_NAME,
+                                  "localhost", sizeof("localhost") - 1u),
+                SALTS_OK);
+    check_equal(flowmq_connect(authorized, endpoint), SALTS_OK);
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == SALTS_EBUSY;
+         ++i) {
+      check_equal(progress_pair(authorized, router), SALTS_OK);
+      status = flowmq_send(authorized, payload, sizeof(payload) - 1u,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    status = SALTS_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == SALTS_EBUSY;
+         ++i) {
+      check_equal(progress_pair(authorized, router), SALTS_OK);
+      status = flowmq_recv(router, received, sizeof(received), &received_size,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    check_equal(received_size, sizeof(authorized_identity) - 1u);
+    check_equal(memcmp(received, authorized_identity, received_size), 0);
+    check_equal(flowmq_recv(router, received, sizeof(received), &received_size,
+                            FLOWMQ_DONTWAIT), SALTS_OK);
+    check_equal(received_size, sizeof(payload) - 1u);
+    check_equal(memcmp(received, payload, received_size), 0);
+    option_size = sizeof(rejections);
+    check_equal(flowmq_getsockopt(router, FLOWMQ_TLS_IDENTITY_REJECTIONS,
+                                  &rejections, &option_size), SALTS_OK);
+    check_equal(rejections, 1u);
+
+    check_equal(flowmq_close(authorized), SALTS_OK);
+    check_equal(flowmq_close(router), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+    check_equal(tt_remove_file(cert_path), 0);
+    check_equal(tt_remove_file(key_path), 0);
+    free(cert_path);
+    free(key_path);
+  }
+
+  it("rejects a verified certificate absent from the identity policy") {
+    static const char identity[] = "authorized-peer";
+    static const char unlisted_fingerprint[] =
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    flowmq_tls_identity_binding_t binding = {
+        sizeof(binding), unlisted_fingerprint, identity};
+    flowmq_tls_identity_map_config_t policy =
+        FLOWMQ_TLS_IDENTITY_MAP_CONFIG_INIT;
+    char endpoint[128] = {0};
+    size_t endpoint_size = 0u;
+    char *cert_path = tt_make_temp_file("flowmq-unlisted-cert", ".pem");
+    char *key_path = tt_make_temp_file("flowmq-unlisted-key", ".pem");
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *router = flowmq_socket(ctx, FLOWMQ_ROUTER);
+    flowmq_socket_t *dealer = flowmq_socket(ctx, FLOWMQ_DEALER);
+    uint64_t rejections = 0u;
+    size_t option_size = sizeof(rejections);
+    int require_client_certificate = 1;
+    int reconnect_ms = -1;
+
+    policy.bindings = &binding;
+    policy.binding_count = 1u;
+    check_not_null(cert_path);
+    check_not_null(key_path);
+    check_equal(tt_write_file(cert_path, FLOWMQ_TLS_TEST_CERTIFICATE,
+                              sizeof(FLOWMQ_TLS_TEST_CERTIFICATE) - 1u), 0);
+    check_equal(tt_write_file(key_path, FLOWMQ_TLS_TEST_KEY,
+                              sizeof(FLOWMQ_TLS_TEST_KEY) - 1u), 0);
+    check_equal(flowmq_setsockopt(router, FLOWMQ_TLS_CA_FILE, cert_path,
+                                  strlen(cert_path)), SALTS_OK);
+    check_equal(flowmq_setsockopt(router, FLOWMQ_TLS_CERT_FILE, cert_path,
+                                  strlen(cert_path)), SALTS_OK);
+    check_equal(flowmq_setsockopt(router, FLOWMQ_TLS_KEY_FILE, key_path,
+                                  strlen(key_path)), SALTS_OK);
+    check_equal(flowmq_setsockopt(router,
+                                  FLOWMQ_TLS_REQUIRE_CLIENT_CERTIFICATE,
+                                  &require_client_certificate,
+                                  sizeof(require_client_certificate)),
+                SALTS_OK);
+    check_equal(flowmq_setsockopt(router, FLOWMQ_TLS_IDENTITY_POLICY, &policy,
+                                  sizeof(policy)), SALTS_OK);
+
+    check_equal(flowmq_setsockopt(dealer, FLOWMQ_IDENTITY, identity,
+                                  sizeof(identity) - 1u), SALTS_OK);
+    check_equal(flowmq_setsockopt(dealer, FLOWMQ_TLS_CA_FILE, cert_path,
+                                  strlen(cert_path)), SALTS_OK);
+    check_equal(flowmq_setsockopt(dealer, FLOWMQ_TLS_CERT_FILE, cert_path,
+                                  strlen(cert_path)), SALTS_OK);
+    check_equal(flowmq_setsockopt(dealer, FLOWMQ_TLS_KEY_FILE, key_path,
+                                  strlen(key_path)), SALTS_OK);
+    check_equal(flowmq_setsockopt(dealer, FLOWMQ_TLS_SERVER_NAME, "localhost",
+                                  sizeof("localhost") - 1u), SALTS_OK);
+    check_equal(flowmq_setsockopt(dealer, FLOWMQ_RECONNECT_IVL, &reconnect_ms,
+                                  sizeof(reconnect_ms)), SALTS_OK);
+    check_equal(flowmq_bind(router, "tls://127.0.0.1:0"), SALTS_OK);
+    check_equal(flowmq_last_endpoint(router, endpoint, sizeof(endpoint),
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(dealer, endpoint), SALTS_OK);
+    for (size_t i = 0u;
+         i < FLOWMQ_TEST_PROGRESS_LIMIT && rejections == 0u; ++i) {
+      check_equal(progress_pair(dealer, router), SALTS_OK);
+      option_size = sizeof(rejections);
+      check_equal(flowmq_getsockopt(router,
+                                    FLOWMQ_TLS_IDENTITY_REJECTIONS,
+                                    &rejections, &option_size), SALTS_OK);
+    }
+    check_equal(rejections, 1u);
+
+    check_equal(flowmq_close(dealer), SALTS_OK);
+    check_equal(flowmq_close(router), SALTS_OK);
     check_equal(flowmq_ctx_term(ctx), SALTS_OK);
     check_equal(tt_remove_file(cert_path), 0);
     check_equal(tt_remove_file(key_path), 0);

@@ -6,7 +6,7 @@ endif()
 
 project(
   FlowMQ
-  VERSION 1.0.0
+  VERSION 1.1.0
   DESCRIPTION "Pattern-oriented messaging library for C"
   HOMEPAGE_URL "https://github.com/qigao/flowmq"
   LANGUAGES C)

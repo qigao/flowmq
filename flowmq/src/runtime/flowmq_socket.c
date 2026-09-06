@@ -8,6 +8,7 @@
 #include "flowmq_reconnect.h"
 #include "flowmq_stream_decoder.h"
 #include "flowmq_subscription_set.h"
+#include "flowmq_tls_identity_map.h"
 #include "salts_error.h"
 #include "salts_buffer.h"
 #include "salts_str.h"
@@ -48,7 +49,11 @@ enum {
   FLOWMQ_SOCKET_HOST_CAPACITY = 256u,
   FLOWMQ_SOCKET_ENDPOINT_CAPACITY = 320u,
   FLOWMQ_SOCKET_TLS_PATH_CAPACITY = 1024u,
-  FLOWMQ_SOCKET_TLS_PASSWORD_CAPACITY = 512u
+  FLOWMQ_SOCKET_TLS_PASSWORD_CAPACITY = 512u,
+  FLOWMQ_SOCKET_TLS_FINGERPRINT_PREFIX_SIZE = 7u,
+  FLOWMQ_SOCKET_TLS_FINGERPRINT_CAPACITY =
+      FLOWMQ_SOCKET_TLS_FINGERPRINT_PREFIX_SIZE +
+      CNET_TLS_PEER_CERTIFICATE_SHA256_CAPACITY
 };
 
 _Static_assert(FLOWMQ_SOCKET_FRAME_SEGMENT_CAPACITY <=
@@ -140,6 +145,7 @@ struct flowmq_socket_s {
   cnet_tls_server tls_server;
   mem_pool_t message_pool;
   flowmq_subscription_set_t subscriptions;
+  flowmq_tls_identity_map_t *tls_identity_policy;
   flowmq_socket_peer_t *peers;
   flowmq_socket_endpoint_t endpoints[FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY];
   flowmq_socket_message_t *inbound;
@@ -168,6 +174,7 @@ struct flowmq_socket_s {
   uint64_t send_peer_generation;
   uint64_t reply_peer_generation;
   uint64_t request_peer_generation;
+  uint64_t tls_identity_rejections;
   uint64_t publish_peer_generations[FLOWMQ_SOCKET_PEER_CAPACITY];
   uint32_t flow_update_quantum;
   int heartbeat_interval_ms;
@@ -885,6 +892,29 @@ static int flowmq_socket_peer_heartbeat_progress(flowmq_socket_peer_t *peer) {
   return SALTS_OK;
 }
 
+static int flowmq_socket_tls_identity_verify(flowmq_socket_peer_t *peer,
+                                             vstr claimed_identity) {
+  static const char prefix[] = "sha256:";
+  flowmq_socket_t *socket = peer->owner;
+  char digest[CNET_TLS_PEER_CERTIFICATE_SHA256_CAPACITY];
+  char fingerprint[FLOWMQ_SOCKET_TLS_FINGERPRINT_CAPACITY];
+  int status;
+  if (socket->tls_identity_policy == NULL) return SALTS_OK;
+  status = cnet_tls_peer_certificate_sha256(&socket->client, peer->connection,
+                                            digest);
+  if (status == SALTS_OK) {
+    memcpy(fingerprint, prefix, FLOWMQ_SOCKET_TLS_FINGERPRINT_PREFIX_SIZE);
+    memcpy(fingerprint + FLOWMQ_SOCKET_TLS_FINGERPRINT_PREFIX_SIZE, digest,
+           sizeof(digest));
+    status = flowmq_tls_identity_map_verify(socket->tls_identity_policy,
+                                            fingerprint, claimed_identity);
+  }
+  if (status == SALTS_OK) return SALTS_OK;
+  if (socket->tls_identity_rejections != UINT64_MAX)
+    ++socket->tls_identity_rejections;
+  return SALTS_EPERM;
+}
+
 static int flowmq_socket_process_receive(flowmq_socket_peer_t *peer) {
   flowmq_socket_t *socket = peer->owner;
   if (peer->commit_pending) return SALTS_ENOBUFS;
@@ -899,7 +929,9 @@ static int flowmq_socket_process_receive(flowmq_socket_peer_t *peer) {
       status =
           flowmq_pattern_socket_hello_validate(socket->pattern.pattern, &frame);
       if (status == SALTS_OK) {
-        if (socket->pattern.pattern == FLOWMQ_PROTOCOL_ROUTER) {
+        status = flowmq_socket_tls_identity_verify(peer, frame.identity);
+        if (status == SALTS_OK &&
+            socket->pattern.pattern == FLOWMQ_PROTOCOL_ROUTER) {
           for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
             flowmq_socket_peer_t *candidate = &socket->peers[i];
             if (candidate == peer || !candidate->used || candidate->retired ||
@@ -1509,6 +1541,8 @@ int flowmq_close(flowmq_socket_t *socket) {
   for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i)
     flowmq_socket_peer_release(&socket->peers[i]);
   flowmq_subscription_set_destroy(&socket->subscriptions);
+  flowmq_tls_identity_map_destroy(socket->tls_identity_policy);
+  socket->tls_identity_policy = NULL;
   if (socket->pool_initialized) mem_destroy(&socket->message_pool);
   flowmq_socket_clear_secret(socket->tls_key_password,
                              sizeof(socket->tls_key_password));
@@ -1531,6 +1565,11 @@ int flowmq_bind(flowmq_socket_t *socket, const char *endpoint) {
   status = flowmq_endpoint_parse(endpoint, 1, &parts);
   if (status != SALTS_OK) return status;
   if (socket->listener_initialized) return SALTS_EALREADY;
+  if (socket->tls_identity_policy != NULL &&
+      (socket->pattern.pattern != FLOWMQ_PROTOCOL_ROUTER ||
+       parts.transport != FLOWMQ_TRANSPORT_TLS ||
+       !socket->tls_require_client_certificate))
+    return SALTS_EINVAL;
   if (parts.transport == FLOWMQ_TRANSPORT_TLS) {
     status = flowmq_socket_tls_server_init(socket);
     if (status != SALTS_OK) return status;
@@ -1740,6 +1779,19 @@ int flowmq_setsockopt(flowmq_socket_t *socket, int option, const void *value,
     if (value == NULL || size != sizeof(int)) return SALTS_EINVAL;
     socket->tls_require_client_certificate = *(const int *)value != 0;
     return SALTS_OK;
+  case FLOWMQ_TLS_IDENTITY_POLICY: {
+    flowmq_tls_identity_map_t *replacement = NULL;
+    int status;
+    if (socket->pattern.pattern != FLOWMQ_PROTOCOL_ROUTER || value == NULL ||
+        size != sizeof(flowmq_tls_identity_map_config_t))
+      return SALTS_EINVAL;
+    status = flowmq_tls_identity_map_create(
+        (const flowmq_tls_identity_map_config_t *)value, &replacement);
+    if (status != SALTS_OK) return status;
+    flowmq_tls_identity_map_destroy(socket->tls_identity_policy);
+    socket->tls_identity_policy = replacement;
+    return SALTS_OK;
+  }
   default: return SALTS_ENOTSUP;
   }
 }
@@ -1769,6 +1821,15 @@ int flowmq_getsockopt(const flowmq_socket_t *socket, int option, void *value,
       return value == NULL ? SALTS_EINVAL : SALTS_EMSGSIZE;
     }
     *(int *)value = socket->last_rcvmore;
+    *size = required;
+    return SALTS_OK;
+  case FLOWMQ_TLS_IDENTITY_REJECTIONS:
+    required = sizeof(uint64_t);
+    if (value == NULL || *size < required) {
+      *size = required;
+      return value == NULL ? SALTS_EINVAL : SALTS_EMSGSIZE;
+    }
+    *(uint64_t *)value = socket->tls_identity_rejections;
     *size = required;
     return SALTS_OK;
   default: return SALTS_ENOTSUP;
