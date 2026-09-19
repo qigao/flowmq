@@ -1,0 +1,56 @@
+name: Verify TurboRaft Multi-Group FlowMQ
+
+on:
+  push:
+    branches:
+      - verify/turboraft-multigroup
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout FlowMQ verifier host
+        uses: actions/checkout@v4
+
+      - name: Checkout TurboRaft exact head and public dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone https://github.com/qigao/turboraft.git ../turboraft
+          git -C ../turboraft checkout 8793338fea78a9fd383d1eeb2c3fd1718a50ca3a
+          test "$(git -C ../turboraft rev-parse HEAD)" =                "8793338fea78a9fd383d1eeb2c3fd1718a50ca3a"
+
+          git clone --depth 1 https://github.com/qigao/salts.git ../salts
+          git clone --depth 1 https://github.com/qigao/salts-utils.git ../salts-utils
+
+      - name: Compile TurboRaft FlowMQ integration against private headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          INC=(
+            -I../turboraft/include
+            -I../turboraft/src
+            -I../turboraft/src/core
+            -I../turboraft/src/transport
+            -Iflowmq/include
+            -I../salts/utils/include
+            -I../salts/platform/include
+            -I../salts/concurrency/include
+            -I../salts/cnet/include
+            -I../salts/native-io/include
+            -I../salts/cstl/include
+            -I../salts/cmeta/include
+            -I../salts/tinytest/include
+            -I../salts-utils/tbe/data_bind
+            -I../salts-utils/tbe/schema/include
+          )
+
+          cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             "${INC[@]}" -fsyntax-only             ../turboraft/src/transport/raft_group_queue.c
+
+          cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             "${INC[@]}" -fsyntax-only             ../turboraft/src/transport/raft_flowmq_peer_service.c
+
+          cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             "${INC[@]}"             -DTURBORAFT_TEST_FIXTURE_DIR=\"../turboraft/tests/fixtures/flowmq_tls\"             -fsyntax-only             ../turboraft/tests/core/test_raft_flowmq_peer_service.c
