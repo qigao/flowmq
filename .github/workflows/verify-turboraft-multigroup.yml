@@ -21,8 +21,8 @@ jobs:
         run: |
           set -euo pipefail
           git clone https://github.com/qigao/turboraft.git ../turboraft
-          git -C ../turboraft checkout 8793338fea78a9fd383d1eeb2c3fd1718a50ca3a
-          test "$(git -C ../turboraft rev-parse HEAD)" =                "8793338fea78a9fd383d1eeb2c3fd1718a50ca3a"
+          git -C ../turboraft checkout 9d61357a2c481471d3f25f49b2f914ec7254d8f8
+          test "$(git -C ../turboraft rev-parse HEAD)" =                "9d61357a2c481471d3f25f49b2f914ec7254d8f8"
 
           git clone --depth 1 https://github.com/qigao/salts.git ../salts
           git clone --depth 1 https://github.com/qigao/salts-utils.git ../salts-utils
