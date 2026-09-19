@@ -22,15 +22,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone https://github.com/qigao/turboraft.git ../turboraft
-          git -C ../turboraft checkout "$TURBORAFT_SHA"
-          git clone --depth 1 https://github.com/qigao/salts.git ../salts
-          git clone --depth 1 https://github.com/qigao/salts-utils.git ../salts-utils
+          mkdir -p diagnostics
+          git clone https://github.com/qigao/turboraft.git ../turboraft             > diagnostics/turboraft-clone.log 2>&1
+          git -C ../turboraft checkout "$TURBORAFT_SHA"             >> diagnostics/turboraft-clone.log 2>&1
+          git clone --depth 1 https://github.com/qigao/salts.git ../salts             > diagnostics/salts-clone.log 2>&1
+          git clone --depth 1 https://github.com/qigao/salts-utils.git ../salts-utils             > diagnostics/salts-utils-clone.log 2>&1
 
       - name: Compile TurboRaft FlowMQ adapter and contract test
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p diagnostics
           INC=(
             -I../turboraft/include
             -I../turboraft/src
@@ -51,12 +53,32 @@ jobs:
             -I../salts-utils/tbe/schema/include
           )
 
-          cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             "${INC[@]}"             -fsyntax-only             ../turboraft/src/transport/raft_flowmq_peer_service.c
+          run_check() {
+            local label="$1"
+            shift
+            set +e
+            local logfile="diagnostics/${label}.log"
+            "$@" > "$logfile" 2>&1
+            local rc=$?
+            set -e
+            cat "$logfile"
+            return "$rc"
+          }
 
-          cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             -DTURBORAFT_TEST_FIXTURE_DIR=\"../turboraft/tests/fixtures\"             "${INC[@]}"             -fsyntax-only             ../turboraft/tests/core/test_raft_flowmq_peer_service.c
+          run_check flowmq-adapter             cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             "${INC[@]}"             -fsyntax-only             ../turboraft/src/transport/raft_flowmq_peer_service.c
+
+          run_check flowmq-test             cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             -DTURBORAFT_TEST_FIXTURE_DIR=\"../turboraft/tests/fixtures\"             "${INC[@]}"             -fsyntax-only             ../turboraft/tests/core/test_raft_flowmq_peer_service.c
 
       - name: Verify exact TurboRaft head
         shell: bash
         run: |
           set -euo pipefail
           test "$(git -C ../turboraft rev-parse HEAD)" = "$TURBORAFT_SHA"
+
+      - name: Upload verification diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: turboraft-pr34-flowmq-diagnostics
+          path: diagnostics
+          if-no-files-found: warn
