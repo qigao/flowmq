@@ -1,0 +1,62 @@
+name: Verify TurboRaft PR34 FlowMQ integration
+
+on:
+  push:
+    branches:
+      - verify/turboraft-pr34
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    env:
+      TURBORAFT_SHA: cd87d2d5820dc4cae5254731e43522eb51e99d30
+    steps:
+      - name: Checkout FlowMQ
+        uses: actions/checkout@v4
+
+      - name: Checkout TurboRaft exact head and public dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone https://github.com/qigao/turboraft.git ../turboraft
+          git -C ../turboraft checkout "$TURBORAFT_SHA"
+          git clone --depth 1 https://github.com/qigao/salts.git ../salts
+          git clone --depth 1 https://github.com/qigao/salts-utils.git ../salts-utils
+
+      - name: Compile TurboRaft FlowMQ adapter and contract test
+        shell: bash
+        run: |
+          set -euo pipefail
+          INC=(
+            -I../turboraft/include
+            -I../turboraft/src
+            -I../turboraft/src/core
+            -I../turboraft/src/service
+            -I../turboraft/src/transport
+            -I../turboraft/src/wire/generated
+            -Iflowmq/include
+            -I../salts/utils/include
+            -I../salts/platform/include
+            -I../salts/concurrency/include
+            -I../salts/cnet/include
+            -I../salts/native-io/include
+            -I../salts/cstl/include
+            -I../salts/cmeta/include
+            -I../salts/tinytest/include
+            -I../salts-utils/tbe/data_bind
+            -I../salts-utils/tbe/schema/include
+          )
+
+          cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             "${INC[@]}"             -fsyntax-only             ../turboraft/src/transport/raft_flowmq_peer_service.c
+
+          cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             -DTURBORAFT_TEST_FIXTURE_DIR=\"../turboraft/tests/fixtures\"             "${INC[@]}"             -fsyntax-only             ../turboraft/tests/core/test_raft_flowmq_peer_service.c
+
+      - name: Verify exact TurboRaft head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C ../turboraft rev-parse HEAD)" = "$TURBORAFT_SHA"
