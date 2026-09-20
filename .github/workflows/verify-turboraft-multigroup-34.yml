@@ -1,5 +1,5 @@
 name: TurboRaft #34 FlowMQ compatibility
-# verifier retry: require a real hosted runner before interpreting results
+# verifier retry 2: require a real hosted runner before interpreting results
 
 on:
   push:
