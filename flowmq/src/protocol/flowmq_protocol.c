@@ -5,7 +5,7 @@
 
 #include "salts_buffer.h"
 #include "salts_error.h"
-#include "salts_str.h"
+#include "str.h"
 
 #include <limits.h>
 #include <string.h>
