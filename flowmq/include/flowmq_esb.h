@@ -4,7 +4,7 @@
 #include "flowmq_export.h"
 #include "flowmq_protocol_catalog.h"
 
-#include "salts_str.h"
+#include "str.h"
 
 #include <stddef.h>
 #include <stdint.h>
