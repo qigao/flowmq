@@ -20,6 +20,8 @@ find_dependency(Salts CONFIG REQUIRED PATHS "${FLOWMQ_SALTS_ROOT_PATH}"
                 NO_DEFAULT_PATH)
 find_dependency(SaltsUtils CONFIG REQUIRED PATHS "${FLOWMQ_SALTS_UTILS_ROOT_PATH}"
                 NO_DEFAULT_PATH)
+find_dependency(DataBind CONFIG REQUIRED PATHS "${FLOWMQ_SALTS_UTILS_ROOT_PATH}"
+                NO_DEFAULT_PATH)
 
 include("${CMAKE_CURRENT_LIST_DIR}/FlowMQTargets.cmake")
 
