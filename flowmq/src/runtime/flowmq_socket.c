@@ -10,7 +10,7 @@
 #include "flowmq_subscription_set.h"
 #include "salts_error.h"
 #include "salts_buffer.h"
-#include "salts_str.h"
+#include "str.h"
 
 #include <cnet/cnet.h>
 #include <salts/clock.h>
