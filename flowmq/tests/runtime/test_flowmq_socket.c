@@ -3,6 +3,7 @@
 #include "tinytest.h"
 #include "salts_error.h"
 #include <salts/clock.h>
+#include <salts/thread.h>
 
 #include <stddef.h>
 #include <stdlib.h>
@@ -10,7 +11,6 @@
 
 enum {
   FLOWMQ_TEST_PROGRESS_LIMIT = 10000u,
-  FLOWMQ_TEST_PROGRESS_TIMEOUT_MS = 1000u,
   FLOWMQ_TEST_SEGMENTED_PAYLOAD_SIZE = 64u * 1024u + 37u,
   FLOWMQ_TEST_QUEUED_MESSAGES = 8u,
   FLOWMQ_TEST_HEARTBEAT_IVL_MS = 20,
@@ -22,7 +22,9 @@ enum {
 static int progress_pair(flowmq_socket_t *first, flowmq_socket_t *second) {
   flowmq_pollitem_t items[] = {{.socket = first}, {.socket = second}};
   size_t ready = 0u;
-  return flowmq_poll(items, 2u, 0u, &ready);
+  int status = flowmq_poll(items, 2u, 0u, &ready);
+  if (status == SALTS_OK) salts_thread_yield();
+  return status;
 }
 
 static int progress_three(flowmq_socket_t *first, flowmq_socket_t *second,
@@ -30,7 +32,9 @@ static int progress_three(flowmq_socket_t *first, flowmq_socket_t *second,
   flowmq_pollitem_t items[] = {
       {.socket = first}, {.socket = second}, {.socket = third}};
   size_t ready = 0u;
-  return flowmq_poll(items, 3u, 0u, &ready);
+  int status = flowmq_poll(items, 3u, 0u, &ready);
+  if (status == SALTS_OK) salts_thread_yield();
+  return status;
 }
 
 spec("flowmq_socket lifecycle and pattern surface") {
@@ -972,15 +976,12 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(status, SALTS_OK);
 
     status = SALTS_EBUSY;
-    {
-      const uint64_t deadline_ms =
-          salts_monotonic_ms() + FLOWMQ_TEST_PROGRESS_TIMEOUT_MS;
-      while (status == SALTS_EBUSY && salts_monotonic_ms() < deadline_ms) {
-        check_equal(progress_pair(client, server), SALTS_OK);
-        status = flowmq_recv(server, received, sizeof(received), &received_size,
-                             FLOWMQ_DONTWAIT);
-        if (status == SALTS_EBUSY) salts_sleep_ms(1u);
-      }
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == SALTS_EBUSY;
+         ++i) {
+      check_equal(progress_pair(client, server), SALTS_OK);
+      status = flowmq_recv(server, received, sizeof(received), &received_size,
+                           FLOWMQ_DONTWAIT);
     }
     check_equal(status, SALTS_OK);
     check_equal(received_size, sizeof(request) - 1u);
@@ -2130,15 +2131,12 @@ spec("flowmq_socket lifecycle and pattern surface") {
                             FLOWMQ_DONTWAIT), SALTS_OK);
 
     status = SALTS_EBUSY;
-    {
-      const uint64_t deadline_ms =
-          salts_monotonic_ms() + FLOWMQ_TEST_PROGRESS_TIMEOUT_MS;
-      while (status == SALTS_EBUSY && salts_monotonic_ms() < deadline_ms) {
-        check_equal(progress_pair(left, right), SALTS_OK);
-        status = flowmq_recv(right, received, sizeof(received), &received_size,
-                             FLOWMQ_DONTWAIT);
-        if (status == SALTS_EBUSY) salts_sleep_ms(1u);
-      }
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == SALTS_EBUSY;
+         ++i) {
+      check_equal(progress_pair(left, right), SALTS_OK);
+      status = flowmq_recv(right, received, sizeof(received), &received_size,
+                           FLOWMQ_DONTWAIT);
     }
     check_equal(status, SALTS_OK);
     check_equal(flowmq_recv(right, received, sizeof(received), &received_size,
@@ -2282,15 +2280,11 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_setsockopt(xsub, FLOWMQ_UNSUBSCRIBE, topic,
                                  sizeof(topic) - 1u), SALTS_OK);
     status = SALTS_EBUSY;
-    {
-      const uint64_t deadline_ms =
-          salts_monotonic_ms() + FLOWMQ_TEST_PROGRESS_TIMEOUT_MS;
-      while (status == SALTS_EBUSY && salts_monotonic_ms() < deadline_ms) {
-        check_equal(progress_pair(xsub, xpub), SALTS_OK);
-        status = flowmq_recv(xpub, event, sizeof(event), &event_size,
-                             FLOWMQ_DONTWAIT);
-        if (status == SALTS_EBUSY) salts_sleep_ms(1u);
-      }
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY;
+         ++i) {
+      check_equal(progress_pair(xsub, xpub), SALTS_OK);
+      status = flowmq_recv(xpub, event, sizeof(event), &event_size,
+                           FLOWMQ_DONTWAIT);
     }
     check_equal(status, SALTS_OK);
     check_equal(event_size, sizeof(topic));
