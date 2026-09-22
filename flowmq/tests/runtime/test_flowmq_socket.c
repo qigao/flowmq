@@ -3,7 +3,6 @@
 #include "tinytest.h"
 #include "salts_error.h"
 #include <salts/clock.h>
-#include <salts/thread.h>
 
 #include <stddef.h>
 #include <stdlib.h>
@@ -22,9 +21,7 @@ enum {
 static int progress_pair(flowmq_socket_t *first, flowmq_socket_t *second) {
   flowmq_pollitem_t items[] = {{.socket = first}, {.socket = second}};
   size_t ready = 0u;
-  int status = flowmq_poll(items, 2u, 0u, &ready);
-  if (status == SALTS_OK) salts_thread_yield();
-  return status;
+  return flowmq_poll(items, 2u, 1u, &ready);
 }
 
 static int progress_three(flowmq_socket_t *first, flowmq_socket_t *second,
@@ -32,9 +29,7 @@ static int progress_three(flowmq_socket_t *first, flowmq_socket_t *second,
   flowmq_pollitem_t items[] = {
       {.socket = first}, {.socket = second}, {.socket = third}};
   size_t ready = 0u;
-  int status = flowmq_poll(items, 3u, 0u, &ready);
-  if (status == SALTS_OK) salts_thread_yield();
-  return status;
+  return flowmq_poll(items, 3u, 1u, &ready);
 }
 
 spec("flowmq_socket lifecycle and pattern surface") {
