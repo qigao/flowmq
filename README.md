@@ -144,5 +144,11 @@ libzmq 都链接 Release 产物。GitHub Actions 通过
 `qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master` 以只读模式消费共享的
 GitHub Packages 二进制缓存，并使用 cache-only gate 防止 CI 静默回退到本地重编依赖。
 
+交叉编译时 target SDK 与 host code-generation 工具必须分开。设置
+`SALTS_ROOT` / `SALTS_UTILS_ROOT` 指向目标平台 SDK，同时设置
+`SALTS_HOST_ROOT` / `SALTS_UTILS_HOST_ROOT` 指向构建主机 SDK；FlowMQ 使用 host
+SaltsUtils 中的 `tbe_compiler` 生成 FMP/1 头文件，再用 target Salts/SaltsUtils 编译和链接。
+非交叉编译时 host roots 可省略，并自动回退到对应 target roots。
+
 详细所有权和关闭顺序见 [架构说明](docs/ARCHITECTURE.md)，wire 契约见
 [FMQ/6 协议](docs/FMQ_WIRE_PROTOCOL.md)。
