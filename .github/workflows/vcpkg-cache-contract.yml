@@ -1,0 +1,50 @@
+name: Shared vcpkg cache contract
+
+on:
+  pull_request:
+    paths:
+      - "vcpkg.json"
+      - ".github/workflows/vcpkg-cache-contract.yml"
+  push:
+    branches: [main]
+    paths:
+      - "vcpkg.json"
+      - ".github/workflows/vcpkg-cache-contract.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  linux-x64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+      - name: Prepare host dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm
+      - name: Restore FlowMQ vcpkg dependencies from shared cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_root="$RUNNER_TEMP/flowmq-vcpkg-installed"
+          log="$RUNNER_TEMP/flowmq-vcpkg-cache.log"
+          rm -rf "$install_root"
+          "$VCPKG_ROOT/vcpkg" install \
+            --x-manifest-root=. \
+            --x-install-root="$install_root" \
+            --triplet x64-linux \
+            --only-binarycaching 2>&1 | tee "$log"
+          if grep -q '^Building ' "$log"; then
+            echo "shared cache miss detected" >&2
+            exit 1
+          fi
+          grep -Eq 'Restored [1-9][0-9]* package\(s\) from NuGet' "$log"
