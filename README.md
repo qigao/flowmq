@@ -140,7 +140,9 @@ cmake --build --preset win-release-user --target bench_flowmq_socket
 ```
 
 ZeroMQ 由 `vcpkg.json` 安装；公平对比必须使用 Release preset，使 FlowMQ 与
-libzmq 都链接 Release 产物。
+libzmq 都链接 Release 产物。GitHub Actions 通过
+`qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master` 以只读模式消费共享的
+GitHub Packages 二进制缓存，并使用 cache-only gate 防止 CI 静默回退到本地重编依赖。
 
 详细所有权和关闭顺序见 [架构说明](docs/ARCHITECTURE.md)，wire 契约见
 [FMQ/6 协议](docs/FMQ_WIRE_PROTOCOL.md)。

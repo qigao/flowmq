@@ -1,0 +1,99 @@
+name: Shared vcpkg cache contract
+
+on:
+  pull_request:
+    paths:
+      - "CMakeLists.txt"
+      - "cmake/**"
+      - "flowmq/**"
+      - "vcpkg.json"
+      - ".github/workflows/vcpkg-cache-contract.yml"
+  push:
+    branches: [main]
+    paths:
+      - "CMakeLists.txt"
+      - "cmake/**"
+      - "flowmq/**"
+      - "vcpkg.json"
+      - ".github/workflows/vcpkg-cache-contract.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  linux-x64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Prepare host dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm
+      - name: Restore FlowMQ vcpkg dependencies from shared cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_root="$RUNNER_TEMP/flowmq-vcpkg-installed"
+          log="$RUNNER_TEMP/flowmq-vcpkg-cache.log"
+          rm -rf "$install_root"
+          "$VCPKG_ROOT/vcpkg" install \
+            --x-manifest-root=. \
+            --x-install-root="$install_root" \
+            --triplet x64-linux \
+            --only-binarycaching 2>&1 | tee "$log"
+          if grep -q '^Building ' "$log"; then
+            echo "shared cache miss detected" >&2
+            exit 1
+          fi
+          grep -Eq 'Restored [1-9][0-9]* package\(s\) from NuGet' "$log"
+          echo "FLOWMQ_VCPKG_INSTALLED=$install_root" >> "$GITHUB_ENV"
+      - name: Restore released Salts SDKs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          config="$RUNNER_TEMP/flowmq-sdk-nuget.config"
+          project="$RUNNER_TEMP/flowmq-sdk-restore.csproj"
+          packages="$RUNNER_TEMP/flowmq-sdk-packages"
+          cat > "$project" <<'EOF'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+            <ItemGroup>
+              <PackageReference Include="Salts.Native" Version="[1.2.0]" />
+              <PackageReference Include="SaltsUtils.Native" Version="[2.0.2]" />
+            </ItemGroup>
+          </Project>
+          EOF
+          printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json \
+            --name github --username qigao --password "$GITHUB_TOKEN" \
+            --store-password-in-clear-text --configfile "$config"
+          dotnet restore "$project" --configfile "$config" --packages "$packages"
+          echo "SALTS_ROOT=$packages/salts.native/1.2.0/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_ROOT=$packages/saltsutils.native/2.0.2/sdk/linux-x64" >> "$GITHUB_ENV"
+      - name: Configure, build and test against released SDKs
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build/cache-contract -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DVCPKG_INSTALLED_DIR="$FLOWMQ_VCPKG_INSTALLED" \
+            -DBUILD_TESTS=ON -DBUILD_EXAMPLES=OFF
+          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$FLOWMQ_VCPKG_INSTALLED/x64-linux/lib"
+          cmake --build build/cache-contract --parallel 2
+          ctest --test-dir build/cache-contract --no-tests=error --output-on-failure
