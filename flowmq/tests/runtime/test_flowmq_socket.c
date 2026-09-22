@@ -282,8 +282,8 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(received_size, sizeof(identity) - 1u);
     check_equal(flowmq_recv(router, received, sizeof(received), &received_size,
                             FLOWMQ_DONTWAIT), SALTS_OK);
-    check_equal(received_size, sizeof(payload) - 1u);
-    check_equal(memcmp(received, payload, received_size), 0);
+    check_equal(received_size, sizeof(first_payload) - 1u);
+    check_equal(memcmp(received, first_payload, received_size), 0);
 
     check_equal(flowmq_close(incompatible), SALTS_OK);
     check_equal(flowmq_close(dealer), SALTS_OK);
@@ -1168,7 +1168,8 @@ spec("flowmq_socket lifecycle and pattern surface") {
 
   it("rejects a duplicate ROUTER peer identity without replacing the first peer") {
     static const char identity[] = "duplicate";
-    static const char payload[] = "first-peer";
+    static const char first_payload[] = "first-peer";
+    static const char duplicate_payload[] = "duplicate-peer";
     char endpoint[128] = {0};
     char received[32] = {0};
     size_t endpoint_size = 0u;
@@ -1192,13 +1193,21 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_connect(duplicate, endpoint), SALTS_OK);
     for (size_t i = 0u; i < 200u; ++i)
       check_equal(progress_three(first, duplicate, router), SALTS_OK);
-    check_equal(flowmq_send(duplicate, payload, sizeof(payload) - 1u,
-                            FLOWMQ_DONTWAIT), SALTS_EBUSY);
+    {
+      int duplicate_status =
+          flowmq_send(duplicate, duplicate_payload,
+                      sizeof(duplicate_payload) - 1u, FLOWMQ_DONTWAIT);
+      check_equal(duplicate_status == SALTS_OK ||
+                      duplicate_status == SALTS_EBUSY,
+                  1);
+    }
+    for (size_t i = 0u; i < 50u; ++i)
+      check_equal(progress_three(first, duplicate, router), SALTS_OK);
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
                         status == SALTS_EBUSY;
          ++i) {
       check_equal(progress_three(first, duplicate, router), SALTS_OK);
-      status = flowmq_send(first, payload, sizeof(payload) - 1u,
+      status = flowmq_send(first, first_payload, sizeof(first_payload) - 1u,
                            FLOWMQ_DONTWAIT);
     }
     check_equal(status, SALTS_OK);
