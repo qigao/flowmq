@@ -48,6 +48,32 @@ foreach(_flowmq_dependency_root IN ITEMS SALTS_ROOT SALTS_UTILS_ROOT)
   endif()
 endforeach()
 
+if(CMAKE_CROSSCOMPILING)
+  foreach(_flowmq_host_root IN ITEMS SALTS_HOST_ROOT SALTS_UTILS_HOST_ROOT)
+    if(NOT DEFINED ENV{${_flowmq_host_root}} OR
+       "$ENV{${_flowmq_host_root}}" STREQUAL "")
+      message(FATAL_ERROR
+              "${_flowmq_host_root} must name a host SDK profile for cross builds")
+    endif()
+  endforeach()
+endif()
+
+foreach(_flowmq_host_root IN ITEMS SALTS_HOST_ROOT SALTS_UTILS_HOST_ROOT)
+  if(DEFINED ENV{${_flowmq_host_root}} AND
+     NOT "$ENV{${_flowmq_host_root}}" STREQUAL "")
+    file(TO_CMAKE_PATH "$ENV{${_flowmq_host_root}}"
+         FLOWMQ_${_flowmq_host_root}_PATH)
+  elseif(_flowmq_host_root STREQUAL "SALTS_HOST_ROOT")
+    set(FLOWMQ_SALTS_HOST_ROOT_PATH "${FLOWMQ_SALTS_ROOT_PATH}")
+  else()
+    set(FLOWMQ_SALTS_UTILS_HOST_ROOT_PATH "${FLOWMQ_SALTS_UTILS_ROOT_PATH}")
+  endif()
+  if(NOT IS_DIRECTORY "${FLOWMQ_${_flowmq_host_root}_PATH}")
+    message(FATAL_ERROR
+            "${_flowmq_host_root} is not a directory: ${FLOWMQ_${_flowmq_host_root}_PATH}")
+  endif()
+endforeach()
+
 find_package(
   Salts CONFIG REQUIRED
   PATHS "${FLOWMQ_SALTS_ROOT_PATH}"
@@ -61,11 +87,24 @@ find_package(OpenSSL CONFIG REQUIRED)
 unset(FLOWMQ_TBE_COMPILER_EXECUTABLE)
 unset(FLOWMQ_TBE_COMPILER_EXECUTABLE CACHE)
 find_program(FLOWMQ_TBE_COMPILER_EXECUTABLE NAMES tbe_compiler
-             PATHS "${FLOWMQ_SALTS_UTILS_ROOT_PATH}/bin"
+             PATHS "${FLOWMQ_SALTS_UTILS_HOST_ROOT_PATH}/bin"
              NO_DEFAULT_PATH)
 if(NOT FLOWMQ_TBE_COMPILER_EXECUTABLE)
   message(FATAL_ERROR
-    "FlowMQ media-provider contract requires the SaltsUtils tbe_compiler")
+    "FlowMQ media-provider contract requires the host SaltsUtils tbe_compiler")
+endif()
+
+if(CMAKE_HOST_WIN32)
+  set(FLOWMQ_TBE_COMPILER_ENV
+      "PATH=${FLOWMQ_SALTS_UTILS_HOST_ROOT_PATH}/bin\;${FLOWMQ_SALTS_HOST_ROOT_PATH}/bin\;$ENV{PATH}")
+elseif(CMAKE_HOST_APPLE)
+  set(FLOWMQ_TBE_COMPILER_ENV
+      "PATH=${FLOWMQ_SALTS_UTILS_HOST_ROOT_PATH}/bin:${FLOWMQ_SALTS_HOST_ROOT_PATH}/bin:$ENV{PATH}"
+      "DYLD_LIBRARY_PATH=${FLOWMQ_SALTS_UTILS_HOST_ROOT_PATH}/lib:${FLOWMQ_SALTS_HOST_ROOT_PATH}/lib:$ENV{DYLD_LIBRARY_PATH}")
+else()
+  set(FLOWMQ_TBE_COMPILER_ENV
+      "PATH=${FLOWMQ_SALTS_UTILS_HOST_ROOT_PATH}/bin:${FLOWMQ_SALTS_HOST_ROOT_PATH}/bin:$ENV{PATH}"
+      "LD_LIBRARY_PATH=${FLOWMQ_SALTS_UTILS_HOST_ROOT_PATH}/lib:${FLOWMQ_SALTS_HOST_ROOT_PATH}/lib:$ENV{LD_LIBRARY_PATH}")
 endif()
 
 set(FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS
