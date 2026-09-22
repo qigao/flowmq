@@ -282,8 +282,8 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(received_size, sizeof(identity) - 1u);
     check_equal(flowmq_recv(router, received, sizeof(received), &received_size,
                             FLOWMQ_DONTWAIT), SALTS_OK);
-    check_equal(received_size, sizeof(first_payload) - 1u);
-    check_equal(memcmp(received, first_payload, received_size), 0);
+    check_equal(received_size, sizeof(payload) - 1u);
+    check_equal(memcmp(received, payload, received_size), 0);
 
     check_equal(flowmq_close(incompatible), SALTS_OK);
     check_equal(flowmq_close(dealer), SALTS_OK);
@@ -1223,8 +1223,8 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(received_size, sizeof(identity) - 1u);
     check_equal(flowmq_recv(router, received, sizeof(received), &received_size,
                             FLOWMQ_DONTWAIT), SALTS_OK);
-    check_equal(received_size, sizeof(payload) - 1u);
-    check_equal(memcmp(received, payload, received_size), 0);
+    check_equal(received_size, sizeof(first_payload) - 1u);
+    check_equal(memcmp(received, first_payload, received_size), 0);
 
     check_equal(flowmq_close(duplicate), SALTS_OK);
     check_equal(flowmq_close(first), SALTS_OK);
