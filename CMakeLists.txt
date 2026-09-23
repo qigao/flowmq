@@ -77,18 +77,21 @@ endforeach()
 find_package(
   Salts CONFIG REQUIRED
   PATHS "${FLOWMQ_SALTS_ROOT_PATH}"
-  NO_DEFAULT_PATH)
+  NO_DEFAULT_PATH
+  NO_CMAKE_FIND_ROOT_PATH)
 find_package(
   SaltsUtils CONFIG REQUIRED
   PATHS "${FLOWMQ_SALTS_UTILS_ROOT_PATH}"
-  NO_DEFAULT_PATH)
+  NO_DEFAULT_PATH
+  NO_CMAKE_FIND_ROOT_PATH)
 find_package(OpenSSL CONFIG REQUIRED)
 
 unset(FLOWMQ_TBE_COMPILER_EXECUTABLE)
 unset(FLOWMQ_TBE_COMPILER_EXECUTABLE CACHE)
 find_program(FLOWMQ_TBE_COMPILER_EXECUTABLE NAMES tbe_compiler
              PATHS "${FLOWMQ_SALTS_UTILS_HOST_ROOT_PATH}/bin"
-             NO_DEFAULT_PATH)
+             NO_DEFAULT_PATH
+             NO_CMAKE_FIND_ROOT_PATH)
 if(NOT FLOWMQ_TBE_COMPILER_EXECUTABLE)
   message(FATAL_ERROR
     "FlowMQ media-provider contract requires the host SaltsUtils tbe_compiler")
