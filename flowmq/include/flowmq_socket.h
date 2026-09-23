@@ -50,6 +50,8 @@ typedef enum flowmq_socket_option_e {
   FLOWMQ_TLS_KEY_PASSWORD = 1004,
   FLOWMQ_TLS_SERVER_NAME = 1005,
   FLOWMQ_TLS_REQUIRE_CLIENT_CERTIFICATE = 1006,
+  FLOWMQ_TLS_IDENTITY_POLICY = 1007,
+  FLOWMQ_TLS_IDENTITY_REJECTIONS = 1008,
   FLOWMQ_SNDHWM_BYTES = 1101,
   FLOWMQ_RCVHWM_BYTES = 1102,
   FLOWMQ_FLOW_UPDATE_QUANTUM = 1103,
@@ -104,6 +106,11 @@ FLOWMQ_C_API int flowmq_last_endpoint(const flowmq_socket_t *socket, char *buffe
  * defaults to zero (fixed interval); a value at least as large as IVL enables
  * bounded exponential backoff, while a smaller positive value is ignored.
  * Reconnect intervals may be randomized to avoid synchronized retries.
+ * FLOWMQ_TLS_IDENTITY_POLICY takes a complete
+ * `flowmq_tls_identity_map_config_t` from `flowmq_tls_identity_map.h`. It is
+ * valid only on a ROUTER before runtime initialization; FlowMQ validates and
+ * copies the immutable policy synchronously. A socket with this policy may
+ * bind only a TLS listener configured to require client certificates.
  * FLOW_UPDATE quantum defaults to one quarter of receive byte HWM with a
  * bounded 64 KiB floor, and its interval defaults to 10 ms. These options are
  * fixed before bind/connect. Reconnect, heartbeat, and flow-credit progress are
@@ -116,7 +123,10 @@ FLOWMQ_C_API int flowmq_setsockopt(flowmq_socket_t *socket, int option,
  * Read a socket option into caller storage. FLOWMQ_RECONNECT_IVL and
  * FLOWMQ_RECONNECT_IVL_MAX return their configured `int` millisecond values.
  * FLOWMQ_RCVMORE returns an `int` describing whether another part follows the
- * most recently received part. `size` is both input capacity and output size.
+ * most recently received part. FLOWMQ_TLS_IDENTITY_REJECTIONS returns the
+ * saturating `uint64_t` count of TLS peers rejected because their verified
+ * certificate and claimed HELLO identity were not authorized. `size` is both
+ * input capacity and output size.
  */
 FLOWMQ_C_API int flowmq_getsockopt(const flowmq_socket_t *socket, int option,
                                    void *value, size_t *size);
