@@ -26,7 +26,7 @@ int main(void)
 
     policy.binding_count = 0u;
     return setopt_fn == NULL || getopt_fn == NULL ||
-                   policy.struct_size != sizeof(policy)
+                   policy.size != sizeof(policy)
                ? 1
                : 0;
 }
