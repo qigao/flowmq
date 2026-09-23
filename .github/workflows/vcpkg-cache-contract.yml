@@ -6,6 +6,7 @@ on:
       - "CMakeLists.txt"
       - "cmake/**"
       - "flowmq/**"
+      - "tests/package/**"
       - "vcpkg.json"
       - ".github/workflows/vcpkg-cache-contract.yml"
   push:
@@ -14,6 +15,7 @@ on:
       - "CMakeLists.txt"
       - "cmake/**"
       - "flowmq/**"
+      - "tests/package/**"
       - "vcpkg.json"
       - ".github/workflows/vcpkg-cache-contract.yml"
   workflow_dispatch:
@@ -97,3 +99,22 @@ jobs:
           export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$FLOWMQ_VCPKG_INSTALLED/x64-linux/lib"
           cmake --build build/cache-contract --parallel 2
           ctest --test-dir build/cache-contract --no-tests=error --output-on-failure
+
+      - name: Verify installed FlowMQ 1.1 package contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          flowmq_root="$RUNNER_TEMP/flowmq-sdk"
+          rm -rf "$flowmq_root" build/package-consumer
+          cmake --install build/cache-contract --prefix "$flowmq_root"
+          test -f "$flowmq_root/lib/cmake/FlowMQ/FlowMQConfig.cmake"
+          export FLOWMQ_ROOT="$flowmq_root"
+          cmake -S tests/package -B build/package-consumer -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DVCPKG_INSTALLED_DIR="$FLOWMQ_VCPKG_INSTALLED"
+          cmake --build build/package-consumer --parallel 2
+          export LD_LIBRARY_PATH="$flowmq_root/lib:$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$FLOWMQ_VCPKG_INSTALLED/x64-linux/lib"
+          build/package-consumer/flowmq_package_consumer

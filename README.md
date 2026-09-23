@@ -64,6 +64,61 @@ ROUTER 的 routing identity 与 ZeroMQ 一样表示当前 live peer，不是可�
 token；同 identity 重连后的 delayed reply 会指向新 session。单条 outbound multipart
 内部会绑定 connection generation，peer 断线后取消，不能把剩余 parts 交给 replacement。
 
+### TLS certificate 与 HELLO identity 绑定
+
+TLS 只证明 peer 持有受信证书；HELLO identity 仍是 peer 自己声明的 routing identity。需要
+授权语义的 TLS ROUTER 应在 bind 前设置 `FLOWMQ_TLS_IDENTITY_POLICY`，把 CNet 已验证证书的
+canonical SHA-256 fingerprint（`sha256:` 加 64 个小写十六进制字符）精确绑定到允许的 HELLO
+identity。FlowMQ 在 identity 进入 peer table 前校验元组，不改变 FMQ/6 wire 格式。
+
+policy setter 同步校验并复制所有 binding 字符串，调用者可在成功返回后释放输入。启用 policy
+的 socket 必须是 ROUTER，且只能 bind 已启用 required client certificate 的 `tls://` listener；
+组合不合法返回 `SALTS_EINVAL`，runtime 已初始化返回 `SALTS_EBUSY`。未授权连接只关闭该 peer，
+不会把错误写入 ROUTER 的全局 async error；可用 `FLOWMQ_TLS_IDENTITY_REJECTIONS` 读取饱和
+`uint64_t` 计数。policy 是启动期配置，不支持热替换；证书轮换可把新旧两个 fingerprint 同时
+映射到同一 identity，然后重启应用。
+
+```c
+#include <flowmq_socket.h>
+#include <flowmq_tls_identity_map.h>
+#include <salts_error.h>
+
+#include <string.h>
+
+int configure_authenticated_router(flowmq_socket_t *router,
+                                   const char *ca_file,
+                                   const char *cert_file,
+                                   const char *key_file) {
+  static const flowmq_tls_identity_binding_t bindings[] = {{
+      sizeof(flowmq_tls_identity_binding_t),
+      "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "raft-node-1"}};
+  flowmq_tls_identity_map_config_t policy =
+      FLOWMQ_TLS_IDENTITY_MAP_CONFIG_INIT;
+  int required = 1;
+  int status;
+
+  policy.bindings = bindings;
+  policy.binding_count = sizeof(bindings) / sizeof(bindings[0]);
+  status = flowmq_setsockopt(router, FLOWMQ_TLS_CA_FILE, ca_file,
+                             strlen(ca_file));
+  if (status == SALTS_OK)
+    status = flowmq_setsockopt(router, FLOWMQ_TLS_CERT_FILE, cert_file,
+                               strlen(cert_file));
+  if (status == SALTS_OK)
+    status = flowmq_setsockopt(router, FLOWMQ_TLS_KEY_FILE, key_file,
+                               strlen(key_file));
+  if (status == SALTS_OK)
+    status = flowmq_setsockopt(router,
+                               FLOWMQ_TLS_REQUIRE_CLIENT_CERTIFICATE,
+                               &required, sizeof(required));
+  if (status == SALTS_OK)
+    status = flowmq_setsockopt(router, FLOWMQ_TLS_IDENTITY_POLICY, &policy,
+                               sizeof(policy));
+  return status;
+}
+```
+
 ```c
 #include <flowmq_socket.h>
 #include <salts_error.h>
