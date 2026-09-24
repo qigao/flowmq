@@ -67,6 +67,17 @@ cmake_add_test(
   INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/runtime
   FOLDER "flowmq/tests/runtime")
 
+if(NOT TARGET Salts::CFlow)
+  message(FATAL_ERROR
+          "FlowMQ control-plane qualification requires released Salts::CFlow")
+endif()
+
+cmake_add_test(
+  test_flowmq_cflow_qualification
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/qualification/test_flowmq_cflow_qualification.c
+  LIBS Salts::CFlow Salts::TinyTest
+  FOLDER "flowmq/tests/qualification")
+
 cmake_add_test(
   test_flowmq_media_provider_schema
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/media_provider/test_flowmq_media_provider_schema.c
@@ -108,6 +119,8 @@ set_tests_properties(${FLOWMQ_CORE_TESTS}
                      PROPERTIES LABELS "flowmq;flowmq-core")
 set_tests_properties(${FLOWMQ_TRANSPORT_TESTS}
                      PROPERTIES LABELS "flowmq;flowmq-transport")
+set_tests_properties(test_flowmq_cflow_qualification
+                     PROPERTIES LABELS "flowmq;flowmq-qualification")
 set_tests_properties(test_flowmq_media_provider_schema
                      PROPERTIES LABELS "flowmq;flowmq-application")
 
@@ -116,7 +129,12 @@ if(WIN32)
     ${FLOWMQ_PROTOCOL_TESTS}
     ${FLOWMQ_CORE_TESTS}
     ${FLOWMQ_TRANSPORT_TESTS}
+    test_flowmq_cflow_qualification
     test_flowmq_media_provider_schema
     PROPERTIES ENVIRONMENT_MODIFICATION
                "${FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS}")
+  set_property(
+    TEST test_flowmq_cflow_qualification
+    APPEND PROPERTY ENVIRONMENT_MODIFICATION
+    "PATH=path_list_prepend:$<TARGET_FILE_DIR:Salts::CFlow>")
 endif()
