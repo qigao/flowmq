@@ -93,6 +93,14 @@ PING/PONG、FLOW_UPDATE 与 subscription sync 共用 CONTROL write lane，不进
 FIFO；收到任意合法 FMQ frame 会取消未应答 PING 的 timeout。所有 deadline 只在 owner 调用
 `send/recv/poll` 时检查，不创建 timer thread，也不把 socket 变成 MPSC。
 
+ROUTER 的 per-peer backpressure 事实保持 peer-owned。成功 admission 后，应用 payload 的
+message/byte outstanding 计数同时覆盖 direct in-flight 与 retained outbound ring；只有 CNet
+send completion 才从 current outstanding 扣除。远端 cumulative credit 是另一正交事实，因此
+本地 outstanding 可以为 0 而 `send_credit_bytes` 仍为 0。公开
+`flowmq_router_peer_status()` 只投影这些稳定诊断事实与 session-local monotonic counters，
+不暴露 peer slot、generation、ring cursor 或 raw cumulative credit counter，也不执行任何
+progress。peer retire 后不再可由该 API 查到；同 routing identity reconnect 得到全新统计。
+
 Outbound endpoint 是 URI 与重连退避的主事实源；peer 是一次 CNet connection session。
 终止回调先解除 endpoint 的 active session，再按既有 generation fencing 退休 peer，并为
 endpoint 安排下一次 caller-driven attempt。旧 peer 的 decoder、credit、subscription snapshot、
