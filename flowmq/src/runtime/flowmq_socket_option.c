@@ -67,7 +67,7 @@ static int flowmq_socket_option_validate_value(
       return SALTS_EINVAL;
     memcpy(&value_int, value, sizeof(value_int));
     return (int64_t)value_int >= desc->min_value &&
-                   (uint64_t)value_int <= desc->max_value
+                   (int64_t)value_int <= (int64_t)desc->max_value
                ? SALTS_OK
                : SALTS_EINVAL;
   }
