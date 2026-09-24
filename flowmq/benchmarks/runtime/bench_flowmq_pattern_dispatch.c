@@ -312,15 +312,46 @@ static int bench_router_open(bench_router_t *fixture) {
 static int bench_router_exchange(bench_router_t *fixture,
                                  const void *payload,
                                  size_t payload_size) {
-  int status = bench_send_retry(&fixture->group, fixture->router,
-                                fixture->identity, fixture->identity_size,
-                                FLOWMQ_SNDMORE);
+  int status = SALTS_EBUSY;
+
+  /*
+   * ROUTER routing-id + payload is one admission transaction. If target
+   * capacity/credit rejects the final payload, FlowMQ intentionally rolls
+   * that route transaction back. Retry must therefore restart from the
+   * routing-id; retrying only the payload would no longer name a target.
+   */
+  for (size_t i = 0u; i < BENCH_PATTERN_PROGRESS_LIMIT; ++i) {
+    status = flowmq_send(fixture->router, fixture->identity,
+                         fixture->identity_size,
+                         FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE);
+    if (status == SALTS_EBUSY || status == SALTS_ENOBUFS) {
+      status = bench_group_progress(&fixture->group);
+      if (status != SALTS_OK) return status;
+      continue;
+    }
+    if (status != SALTS_OK) return status;
+
+    status = flowmq_send(fixture->router, payload, payload_size,
+                         FLOWMQ_DONTWAIT);
+    if (status == SALTS_OK) break;
+    if (status != SALTS_EBUSY && status != SALTS_ENOBUFS) return status;
+
+    status = bench_group_progress(&fixture->group);
+    if (status != SALTS_OK) return status;
+  }
+
   if (status != SALTS_OK) return status;
-  status = bench_send_retry(&fixture->group, fixture->router,
-                            payload, payload_size, 0);
+  status = bench_recv_exact(&fixture->group, fixture->dealer,
+                            payload, payload_size);
   if (status != SALTS_OK) return status;
-  return bench_recv_exact(&fixture->group, fixture->dealer,
-                          payload, payload_size);
+
+  /*
+   * Give the receiver a caller-driven progress turn after consumption so its
+   * cumulative credit update/control lane is not deferred into the next timed
+   * sample. This keeps the benchmark focused on routing policy rather than
+   * interval-dependent credit publication.
+   */
+  return bench_group_progress(&fixture->group);
 }
 
 /* REQ/REP ----------------------------------------------------------------- */
