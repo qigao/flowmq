@@ -139,6 +139,12 @@ spec("flowmq_peer_state") {
     check_equal(flowmq_peer_state_write_begin(
                     &state, FLOWMQ_PEER_WRITE_SETTINGS),
                 SALTS_EPROTO);
+    check_equal(flowmq_peer_state_write_begin(
+                    &state, FLOWMQ_PEER_WRITE_CONTROL),
+                SALTS_EPROTO);
+    check_equal(flowmq_peer_state_write_begin(
+                    &state, FLOWMQ_PEER_WRITE_DATA),
+                SALTS_EPROTO);
 
     check_equal(flowmq_peer_state_write_begin(
                     &state, FLOWMQ_PEER_WRITE_HELLO),
