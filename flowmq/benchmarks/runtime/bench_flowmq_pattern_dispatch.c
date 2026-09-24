@@ -74,7 +74,14 @@ static int bench_recv_exact(bench_socket_group_t *group,
       (expected_size != 0u &&
        memcmp(buffer, expected, expected_size) != 0))
     return SALTS_EPROTO;
-  return SALTS_OK;
+
+  /*
+   * The receiver can observe DATA before the sender-side owner loop has
+   * consumed the corresponding CNet send-completion/control work. Drain one
+   * additional caller-driven progress turn so the next benchmark sample
+   * starts from a stable write lane and current credit state.
+   */
+  return bench_group_progress(group);
 }
 
 static int bench_send_retry(bench_socket_group_t *group,
