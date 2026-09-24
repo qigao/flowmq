@@ -68,6 +68,12 @@ cmake_add_test(
   FOLDER "flowmq/tests/runtime")
 
 cmake_add_test(
+  test_flowmq_cflow_qualification
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/qualification/test_flowmq_cflow_qualification.c
+  LIBS Salts::CFlow Salts::TinyTest
+  FOLDER "flowmq/tests/qualification")
+
+cmake_add_test(
   test_flowmq_media_provider_schema
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/media_provider/test_flowmq_media_provider_schema.c
           ${FLOWMQ_MEDIA_PROVIDER_GENERATED_HEADER}
@@ -108,6 +114,8 @@ set_tests_properties(${FLOWMQ_CORE_TESTS}
                      PROPERTIES LABELS "flowmq;flowmq-core")
 set_tests_properties(${FLOWMQ_TRANSPORT_TESTS}
                      PROPERTIES LABELS "flowmq;flowmq-transport")
+set_tests_properties(test_flowmq_cflow_qualification
+                     PROPERTIES LABELS "flowmq;flowmq-qualification;cflow")
 set_tests_properties(test_flowmq_media_provider_schema
                      PROPERTIES LABELS "flowmq;flowmq-application")
 
@@ -116,6 +124,7 @@ if(WIN32)
     ${FLOWMQ_PROTOCOL_TESTS}
     ${FLOWMQ_CORE_TESTS}
     ${FLOWMQ_TRANSPORT_TESTS}
+    test_flowmq_cflow_qualification
     test_flowmq_media_provider_schema
     PROPERTIES ENVIRONMENT_MODIFICATION
                "${FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS}")
