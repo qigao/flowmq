@@ -1447,6 +1447,137 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
+  it("rolls back a saturated ROUTER route so a healthy peer can progress") {
+    static const char slow_identity[] = "slow";
+    static const char healthy_identity[] = "healthy";
+    static const char warmup[] = "warm";
+    static unsigned char payload[64];
+    char endpoint[128] = {0};
+    unsigned char received[96] = {0};
+    size_t endpoint_size = 0u;
+    size_t received_size = 0u;
+    size_t slow_receive_window = sizeof(payload);
+    size_t ready = 0u;
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *router = flowmq_socket(ctx, FLOWMQ_ROUTER);
+    flowmq_socket_t *slow = flowmq_socket(ctx, FLOWMQ_DEALER);
+    flowmq_socket_t *healthy = flowmq_socket(ctx, FLOWMQ_DEALER);
+    flowmq_pollitem_t router_out = {
+        .socket = router, .events = FLOWMQ_POLLOUT};
+    int status = SALTS_EBUSY;
+
+    memset(payload, 0x5a, sizeof(payload));
+    check_equal(flowmq_setsockopt(slow, FLOWMQ_IDENTITY, slow_identity,
+                                  sizeof(slow_identity) - 1u), SALTS_OK);
+    check_equal(flowmq_setsockopt(healthy, FLOWMQ_IDENTITY, healthy_identity,
+                                  sizeof(healthy_identity) - 1u), SALTS_OK);
+    check_equal(flowmq_setsockopt(slow, FLOWMQ_RCVHWM_BYTES,
+                                  &slow_receive_window,
+                                  sizeof(slow_receive_window)), SALTS_OK);
+
+    check_equal(flowmq_bind(router, "tcp://127.0.0.1:0"), SALTS_OK);
+    check_equal(flowmq_last_endpoint(router, endpoint, sizeof(endpoint),
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(slow, endpoint), SALTS_OK);
+    check_equal(flowmq_connect(healthy, endpoint), SALTS_OK);
+
+    /* Warm and learn the slow identity. */
+    status = SALTS_EBUSY;
+    for (size_t i = 0u;
+         i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_three(slow, healthy, router), SALTS_OK);
+      status = flowmq_send(slow, warmup, sizeof(warmup) - 1u,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    status = SALTS_EBUSY;
+    for (size_t i = 0u;
+         i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_three(slow, healthy, router), SALTS_OK);
+      status = flowmq_recv(router, received, sizeof(received), &received_size,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    check_equal(received_size, sizeof(slow_identity) - 1u);
+    check_equal(flowmq_recv(router, received, sizeof(received), &received_size,
+                            FLOWMQ_DONTWAIT), SALTS_OK);
+
+    /* Warm and learn the healthy identity. */
+    status = SALTS_EBUSY;
+    for (size_t i = 0u;
+         i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_three(slow, healthy, router), SALTS_OK);
+      status = flowmq_send(healthy, warmup, sizeof(warmup) - 1u,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    status = SALTS_EBUSY;
+    for (size_t i = 0u;
+         i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_three(slow, healthy, router), SALTS_OK);
+      status = flowmq_recv(router, received, sizeof(received), &received_size,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    check_equal(received_size, sizeof(healthy_identity) - 1u);
+    check_equal(flowmq_recv(router, received, sizeof(received), &received_size,
+                            FLOWMQ_DONTWAIT), SALTS_OK);
+
+    /* One complete message consumes all advertised slow-peer receive credit. */
+    check_equal(flowmq_send(router, slow_identity, sizeof(slow_identity) - 1u,
+                            FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), SALTS_OK);
+    status = SALTS_EBUSY;
+    for (size_t i = 0u;
+         i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      status = flowmq_send(router, payload, sizeof(payload), FLOWMQ_DONTWAIT);
+      if (status == SALTS_EBUSY)
+        check_equal(progress_three(slow, healthy, router), SALTS_OK);
+    }
+    check_equal(status, SALTS_OK);
+
+    /*
+     * A second message can select the slow route, but final admission must
+     * reject on that peer's exhausted credit and roll the route transaction
+     * back instead of pinning the whole ROUTER socket to the slow peer.
+     */
+    check_equal(flowmq_send(router, slow_identity, sizeof(slow_identity) - 1u,
+                            FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), SALTS_OK);
+    check_equal(flowmq_send(router, payload, sizeof(payload), FLOWMQ_DONTWAIT),
+                SALTS_ENOBUFS);
+
+    check_equal(flowmq_poll(&router_out, 1u, 0u, &ready), SALTS_OK);
+    check_equal(ready, 1u);
+    check_equal(router_out.revents, FLOWMQ_POLLOUT);
+
+    check_equal(flowmq_send(router, healthy_identity,
+                            sizeof(healthy_identity) - 1u,
+                            FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), SALTS_OK);
+    status = SALTS_EBUSY;
+    for (size_t i = 0u;
+         i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      status = flowmq_send(router, payload, sizeof(payload), FLOWMQ_DONTWAIT);
+      if (status == SALTS_EBUSY)
+        check_equal(progress_three(slow, healthy, router), SALTS_OK);
+    }
+    check_equal(status, SALTS_OK);
+
+    status = SALTS_EBUSY;
+    for (size_t i = 0u;
+         i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_three(slow, healthy, router), SALTS_OK);
+      status = flowmq_recv(healthy, received, sizeof(received), &received_size,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    check_equal(received_size, sizeof(payload));
+    check_equal(memcmp(received, payload, sizeof(payload)), 0);
+
+    check_equal(flowmq_close(healthy), SALTS_OK);
+    check_equal(flowmq_close(slow), SALTS_OK);
+    check_equal(flowmq_close(router), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+  }
+
   it("rejects a duplicate ROUTER peer identity without replacing the first peer") {
     static const char identity[] = "duplicate";
     static const char first_payload[] = "first-peer";
