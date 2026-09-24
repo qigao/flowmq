@@ -100,7 +100,33 @@ multipart staging 与 outbound queue 都不会转移到新 peer；socket-owned X
 subscriptions 会从事实源重放。`FLOWMQ_RECONNECT_IVL` 默认 100ms，`-1` 禁用；
 `FLOWMQ_RECONNECT_IVL_MAX=0` 使用固定间隔，正值启用有上限的指数退避。
 
-CFlow/CMeta 可服务于控制面配置、类型描述和 executor 组合，不参与逐消息数据热路径。
+CMeta 是 FlowMQ 的编译期/初始化期语义事实源；CFlow 只用于 qualification
+测试和工具，不进入安装后的逐消息执行路径。当前 send-order qualification 把控制面证明进度
+表示为一个普通标量 token，并用 CMeta FunctionDesc/FunctionAbi + exact-ABI adapter 投影为
+CFlow Graph：
+
+```text
+VALIDATE
+  -> ROUTE_SELECTED
+  -> LOCAL_CAPACITY_OK
+  -> REMOTE_CREDIT_OK
+  -> ENCODED
+  -> ADMITTED
+  -> CREDIT_COMMITTED
+  -> IO_SUBMITTED
+```
+
+这里 token 不是 message、peer 或 socket runtime state，只用于证明阶段顺序。错误顺序例如
+未 encode 即 admission、未 admission 即 credit commit、未 commit 即 I/O submit 会得到
+qualification failure。CMeta 当前 effect 粒度为 `STATEFUL / ASYNC / IO / MAY_FAIL / UNKNOWN`，
+因此 FlowMQ 不虚构 `READS_STATE/WRITES_STATE`；细粒度先后条件由 qualification token 表达，
+CFlow effect analysis 则负责保留 STATEFUL/IO barrier。normalize/optimize/compiled verification
+只验证这些控制面 Graph 的语义等价性。
+
+`FlowMQ::FlowMQ` 本身不链接 `Salts::CFlow`；CFlow 只由
+`test_flowmq_cflow_qualification` 直接链接。installed package contract 会检查公开
+`INTERFACE_LINK_LIBRARIES` 不包含 CFlow。production `send/recv/poll` 不做 Graph traversal、
+Plan evaluation 或 reflection lookup。
 
 ## Send 数据路径
 
