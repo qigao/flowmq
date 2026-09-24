@@ -1655,7 +1655,8 @@ int flowmq_connect(flowmq_socket_t *socket, const char *endpoint) {
   if (status != SALTS_OK) return status;
   if (socket->pattern.desc->routing_class == FLOWMQ_PATTERN_ROUTE_SINGLE) {
     for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
-      if (socket->peers[i].used) return SALTS_EBUSY;
+      if (flowmq_peer_state_is_used(&socket->peers[i].state))
+        return SALTS_EBUSY;
     }
     for (size_t i = 0u; i < FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY; ++i) {
       if (socket->endpoints[i].used) return SALTS_EBUSY;
