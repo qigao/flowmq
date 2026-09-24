@@ -1722,6 +1722,553 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
+  it("isolates per-peer message and byte HWM from a healthy ROUTER peer") {
+    static const char slow_identity[] = "slow-hwm";
+    static const char healthy_identity[] = "healthy-hwm";
+    static const char warmup[] = "warm";
+    unsigned char first[64];
+    unsigned char second[64];
+    unsigned char rejected[64];
+    unsigned char healthy_payload[64];
+    unsigned char received[96] = {0};
+    char endpoint[128] = {0};
+    size_t endpoint_size = 0u;
+    size_t received_size = 0u;
+    size_t send_hwm_bytes = 2u * sizeof(first);
+    int send_hwm = 2;
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *router = flowmq_socket(ctx, FLOWMQ_ROUTER);
+    flowmq_socket_t *slow = flowmq_socket(ctx, FLOWMQ_DEALER);
+    flowmq_socket_t *healthy = flowmq_socket(ctx, FLOWMQ_DEALER);
+    flowmq_router_peer_status_t slow_status = FLOWMQ_ROUTER_PEER_STATUS_INIT;
+    flowmq_router_peer_status_t healthy_status = FLOWMQ_ROUTER_PEER_STATUS_INIT;
+    int status = SALTS_EBUSY;
+
+    memset(first, 0x11, sizeof(first));
+    memset(second, 0x22, sizeof(second));
+    memset(rejected, 0x33, sizeof(rejected));
+    memset(healthy_payload, 0x44, sizeof(healthy_payload));
+
+    check_equal(flowmq_setsockopt(router, FLOWMQ_SNDHWM, &send_hwm,
+                                  sizeof(send_hwm)), SALTS_OK);
+    check_equal(flowmq_setsockopt(router, FLOWMQ_SNDHWM_BYTES,
+                                  &send_hwm_bytes, sizeof(send_hwm_bytes)),
+                SALTS_OK);
+    check_equal(flowmq_setsockopt(slow, FLOWMQ_IDENTITY, slow_identity,
+                                  sizeof(slow_identity) - 1u), SALTS_OK);
+    check_equal(flowmq_setsockopt(healthy, FLOWMQ_IDENTITY, healthy_identity,
+                                  sizeof(healthy_identity) - 1u), SALTS_OK);
+    check_equal(flowmq_bind(router, "tcp://127.0.0.1:0"), SALTS_OK);
+    check_equal(flowmq_last_endpoint(router, endpoint, sizeof(endpoint),
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(slow, endpoint), SALTS_OK);
+    check_equal(flowmq_connect(healthy, endpoint), SALTS_OK);
+
+    /* Learn slow identity. */
+    for (size_t i = 0u;
+         i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_three(slow, healthy, router), SALTS_OK);
+      status = flowmq_send(slow, warmup, sizeof(warmup) - 1u,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    status = SALTS_EBUSY;
+    for (size_t i = 0u;
+         i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_three(slow, healthy, router), SALTS_OK);
+      status = flowmq_recv(router, received, sizeof(received), &received_size,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    check_equal(received_size, sizeof(slow_identity) - 1u);
+    check_equal(flowmq_recv(router, received, sizeof(received), &received_size,
+                            FLOWMQ_DONTWAIT), SALTS_OK);
+
+    /* Learn healthy identity. */
+    status = SALTS_EBUSY;
+    for (size_t i = 0u;
+         i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_three(slow, healthy, router), SALTS_OK);
+      status = flowmq_send(healthy, warmup, sizeof(warmup) - 1u,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    status = SALTS_EBUSY;
+    for (size_t i = 0u;
+         i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_three(slow, healthy, router), SALTS_OK);
+      status = flowmq_recv(router, received, sizeof(received), &received_size,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    check_equal(received_size, sizeof(healthy_identity) - 1u);
+    check_equal(flowmq_recv(router, received, sizeof(received), &received_size,
+                            FLOWMQ_DONTWAIT), SALTS_OK);
+
+    /*
+     * No owner progress between these sends: first DATA is in-flight and the
+     * second is retained in the slow peer's bounded ring. Together they hit
+     * both the per-peer message HWM and byte HWM.
+     */
+    check_equal(flowmq_send(router, slow_identity, sizeof(slow_identity) - 1u,
+                            FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), SALTS_OK);
+    check_equal(flowmq_send(router, first, sizeof(first), FLOWMQ_DONTWAIT),
+                SALTS_OK);
+    check_equal(flowmq_send(router, slow_identity, sizeof(slow_identity) - 1u,
+                            FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), SALTS_OK);
+    check_equal(flowmq_send(router, second, sizeof(second), FLOWMQ_DONTWAIT),
+                SALTS_OK);
+
+    slow_status = (flowmq_router_peer_status_t)FLOWMQ_ROUTER_PEER_STATUS_INIT;
+    check_equal(flowmq_router_peer_status(
+                    router, slow_identity, sizeof(slow_identity) - 1u,
+                    &slow_status), SALTS_OK);
+    check_equal(slow_status.admitted_messages, 2u);
+    check_equal(slow_status.admitted_bytes, sizeof(first) + sizeof(second));
+    check_equal(slow_status.outstanding_messages, 2u);
+    check_equal(slow_status.outstanding_bytes,
+                sizeof(first) + sizeof(second));
+    check_equal(slow_status.peak_outstanding_messages, 2u);
+    check_equal(slow_status.peak_outstanding_bytes,
+                sizeof(first) + sizeof(second));
+
+    check_equal(flowmq_send(router, slow_identity, sizeof(slow_identity) - 1u,
+                            FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), SALTS_OK);
+    check_equal(flowmq_send(router, rejected, sizeof(rejected),
+                            FLOWMQ_DONTWAIT), SALTS_ENOBUFS);
+    memset(rejected, 0xcc, sizeof(rejected));
+
+    slow_status = (flowmq_router_peer_status_t)FLOWMQ_ROUTER_PEER_STATUS_INIT;
+    check_equal(flowmq_router_peer_status(
+                    router, slow_identity, sizeof(slow_identity) - 1u,
+                    &slow_status), SALTS_OK);
+    check_equal(slow_status.rejected_messages, 1u);
+    check_equal(slow_status.rejected_bytes, sizeof(rejected));
+    check_equal(slow_status.admitted_messages, 2u);
+
+    /*
+     * The full slow peer cannot poison another peer. This send is admitted
+     * without first draining slow or completing its queued DATA.
+     */
+    check_equal(flowmq_send(router, healthy_identity,
+                            sizeof(healthy_identity) - 1u,
+                            FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), SALTS_OK);
+    check_equal(flowmq_send(router, healthy_payload, sizeof(healthy_payload),
+                            FLOWMQ_DONTWAIT), SALTS_OK);
+
+    healthy_status =
+        (flowmq_router_peer_status_t)FLOWMQ_ROUTER_PEER_STATUS_INIT;
+    check_equal(flowmq_router_peer_status(
+                    router, healthy_identity, sizeof(healthy_identity) - 1u,
+                    &healthy_status), SALTS_OK);
+    check_equal(healthy_status.admitted_messages, 1u);
+    check_equal(healthy_status.admitted_bytes, sizeof(healthy_payload));
+
+    status = SALTS_EBUSY;
+    for (size_t i = 0u;
+         i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_three(slow, healthy, router), SALTS_OK);
+      status = flowmq_recv(healthy, received, sizeof(received), &received_size,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    check_equal(received_size, sizeof(healthy_payload));
+    check_equal(memcmp(received, healthy_payload, sizeof(healthy_payload)), 0);
+
+    /* Only the two admitted slow messages exist, in FIFO order. */
+    status = SALTS_EBUSY;
+    for (size_t i = 0u;
+         i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_three(slow, healthy, router), SALTS_OK);
+      status = flowmq_recv(slow, received, sizeof(received), &received_size,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    check_equal(received_size, sizeof(first));
+    check_equal(memcmp(received, first, sizeof(first)), 0);
+
+    status = SALTS_EBUSY;
+    for (size_t i = 0u;
+         i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_three(slow, healthy, router), SALTS_OK);
+      status = flowmq_recv(slow, received, sizeof(received), &received_size,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    check_equal(received_size, sizeof(second));
+    check_equal(memcmp(received, second, sizeof(second)), 0);
+    for (size_t i = 0u; i < 32u; ++i)
+      check_equal(progress_three(slow, healthy, router), SALTS_OK);
+    check_equal(flowmq_recv(slow, received, sizeof(received), &received_size,
+                            FLOWMQ_DONTWAIT), SALTS_EBUSY);
+
+    check_equal(flowmq_close(healthy), SALTS_OK);
+    check_equal(flowmq_close(slow), SALTS_OK);
+    check_equal(flowmq_close(router), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+  }
+
+  it("preserves per-peer FIFO across outbound ring wrap") {
+    static const char identity[] = "fifo-wrap";
+    static const char warmup[] = "warm";
+    enum { WRAP_CYCLES = 40, MESSAGES_PER_CYCLE = 32 };
+    char endpoint[128] = {0};
+    unsigned char payload[sizeof(uint64_t)] = {0};
+    unsigned char received[32] = {0};
+    size_t endpoint_size = 0u;
+    size_t received_size = 0u;
+    size_t send_hwm_bytes = MESSAGES_PER_CYCLE * sizeof(payload);
+    int send_hwm = MESSAGES_PER_CYCLE;
+    uint64_t expected_sequence = 0u;
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *router = flowmq_socket(ctx, FLOWMQ_ROUTER);
+    flowmq_socket_t *dealer = flowmq_socket(ctx, FLOWMQ_DEALER);
+    flowmq_router_peer_status_t peer_status = FLOWMQ_ROUTER_PEER_STATUS_INIT;
+    int status = SALTS_EBUSY;
+
+    check_equal(flowmq_setsockopt(router, FLOWMQ_SNDHWM, &send_hwm,
+                                  sizeof(send_hwm)), SALTS_OK);
+    check_equal(flowmq_setsockopt(router, FLOWMQ_SNDHWM_BYTES,
+                                  &send_hwm_bytes, sizeof(send_hwm_bytes)),
+                SALTS_OK);
+    check_equal(flowmq_setsockopt(dealer, FLOWMQ_IDENTITY, identity,
+                                  sizeof(identity) - 1u), SALTS_OK);
+    check_equal(flowmq_bind(router, "tcp://127.0.0.1:0"), SALTS_OK);
+    check_equal(flowmq_last_endpoint(router, endpoint, sizeof(endpoint),
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(dealer, endpoint), SALTS_OK);
+
+    for (size_t i = 0u;
+         i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(dealer, router), SALTS_OK);
+      status = flowmq_send(dealer, warmup, sizeof(warmup) - 1u,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    status = SALTS_EBUSY;
+    for (size_t i = 0u;
+         i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(dealer, router), SALTS_OK);
+      status = flowmq_recv(router, received, sizeof(received), &received_size,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    check_equal(received_size, sizeof(identity) - 1u);
+    check_equal(flowmq_recv(router, received, sizeof(received), &received_size,
+                            FLOWMQ_DONTWAIT), SALTS_OK);
+
+    /*
+     * The first send of each batch uses the direct CNet lane; the remaining
+     * 31 are retained in the peer ring. 40 * 31 = 1240 queued entries, which
+     * crosses the fixed 1024-entry ring boundary while peak occupancy stays
+     * bounded at 32.
+     */
+    for (size_t cycle = 0u; cycle < WRAP_CYCLES; ++cycle) {
+      for (size_t message = 0u; message < MESSAGES_PER_CYCLE; ++message) {
+        uint64_t sequence =
+            (uint64_t)cycle * MESSAGES_PER_CYCLE + message;
+        memcpy(payload, &sequence, sizeof(sequence));
+        check_equal(flowmq_send(router, identity, sizeof(identity) - 1u,
+                                FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), SALTS_OK);
+        check_equal(flowmq_send(router, payload, sizeof(payload),
+                                FLOWMQ_DONTWAIT), SALTS_OK);
+      }
+
+      peer_status =
+          (flowmq_router_peer_status_t)FLOWMQ_ROUTER_PEER_STATUS_INIT;
+      check_equal(flowmq_router_peer_status(
+                      router, identity, sizeof(identity) - 1u, &peer_status),
+                  SALTS_OK);
+      check_equal(peer_status.outstanding_messages, MESSAGES_PER_CYCLE);
+      check_equal(peer_status.outstanding_bytes,
+                  MESSAGES_PER_CYCLE * sizeof(payload));
+
+      for (size_t message = 0u; message < MESSAGES_PER_CYCLE; ++message) {
+        uint64_t sequence = UINT64_MAX;
+        status = SALTS_EBUSY;
+        for (size_t i = 0u;
+             i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+          check_equal(progress_pair(dealer, router), SALTS_OK);
+          status = flowmq_recv(dealer, received, sizeof(received),
+                               &received_size, FLOWMQ_DONTWAIT);
+        }
+        check_equal(status, SALTS_OK);
+        check_equal(received_size, sizeof(sequence));
+        memcpy(&sequence, received, sizeof(sequence));
+        check_equal(sequence, expected_sequence);
+        ++expected_sequence;
+      }
+
+      for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT; ++i) {
+        peer_status =
+            (flowmq_router_peer_status_t)FLOWMQ_ROUTER_PEER_STATUS_INIT;
+        check_equal(flowmq_router_peer_status(
+                        router, identity, sizeof(identity) - 1u, &peer_status),
+                    SALTS_OK);
+        if (peer_status.outstanding_messages == 0u &&
+            peer_status.completed_messages ==
+                (uint64_t)(cycle + 1u) * MESSAGES_PER_CYCLE)
+          break;
+        check_equal(progress_pair(dealer, router), SALTS_OK);
+      }
+      peer_status =
+          (flowmq_router_peer_status_t)FLOWMQ_ROUTER_PEER_STATUS_INIT;
+      check_equal(flowmq_router_peer_status(
+                      router, identity, sizeof(identity) - 1u, &peer_status),
+                  SALTS_OK);
+      check_equal(peer_status.outstanding_messages, 0u);
+      check_equal(peer_status.outstanding_bytes, 0u);
+      check_equal(peer_status.completed_messages,
+                  (uint64_t)(cycle + 1u) * MESSAGES_PER_CYCLE);
+    }
+
+    peer_status =
+        (flowmq_router_peer_status_t)FLOWMQ_ROUTER_PEER_STATUS_INIT;
+    check_equal(flowmq_router_peer_status(
+                    router, identity, sizeof(identity) - 1u, &peer_status),
+                SALTS_OK);
+    check_equal(peer_status.admitted_messages,
+                (uint64_t)WRAP_CYCLES * MESSAGES_PER_CYCLE);
+    check_equal(peer_status.completed_messages,
+                (uint64_t)WRAP_CYCLES * MESSAGES_PER_CYCLE);
+    check_equal(peer_status.rejected_messages, 0u);
+    check_equal(peer_status.peak_outstanding_messages, MESSAGES_PER_CYCLE);
+    check_equal(peer_status.peak_outstanding_bytes,
+                MESSAGES_PER_CYCLE * sizeof(payload));
+
+    check_equal(flowmq_close(dealer), SALTS_OK);
+    check_equal(flowmq_close(router), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+  }
+
+  it("keeps a healthy ROUTER peer progressing across same-identity replacement") {
+    static const char slow_identity[] = "slow-replace";
+    static const char healthy_identity[] = "healthy-replace";
+    static const char warmup[] = "warm";
+    static const char slow_payload[] = "slow-before";
+    enum { HEALTHY_DURING_RETIRE = 8 };
+    char endpoint[128] = {0};
+    unsigned char received[96] = {0};
+    size_t endpoint_size = 0u;
+    size_t received_size = 0u;
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *router = flowmq_socket(ctx, FLOWMQ_ROUTER);
+    flowmq_socket_t *slow = flowmq_socket(ctx, FLOWMQ_DEALER);
+    flowmq_socket_t *healthy = flowmq_socket(ctx, FLOWMQ_DEALER);
+    flowmq_socket_t *replacement = NULL;
+    flowmq_router_peer_status_t slow_status = FLOWMQ_ROUTER_PEER_STATUS_INIT;
+    flowmq_router_peer_status_t healthy_status = FLOWMQ_ROUTER_PEER_STATUS_INIT;
+    int status = SALTS_EBUSY;
+
+    check_equal(flowmq_setsockopt(slow, FLOWMQ_IDENTITY, slow_identity,
+                                  sizeof(slow_identity) - 1u), SALTS_OK);
+    check_equal(flowmq_setsockopt(healthy, FLOWMQ_IDENTITY, healthy_identity,
+                                  sizeof(healthy_identity) - 1u), SALTS_OK);
+    check_equal(flowmq_bind(router, "tcp://127.0.0.1:0"), SALTS_OK);
+    check_equal(flowmq_last_endpoint(router, endpoint, sizeof(endpoint),
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(slow, endpoint), SALTS_OK);
+    check_equal(flowmq_connect(healthy, endpoint), SALTS_OK);
+
+    /* Learn slow identity. */
+    for (size_t i = 0u;
+         i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_three(slow, healthy, router), SALTS_OK);
+      status = flowmq_send(slow, warmup, sizeof(warmup) - 1u,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    status = SALTS_EBUSY;
+    for (size_t i = 0u;
+         i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_three(slow, healthy, router), SALTS_OK);
+      status = flowmq_recv(router, received, sizeof(received), &received_size,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    check_equal(received_size, sizeof(slow_identity) - 1u);
+    check_equal(flowmq_recv(router, received, sizeof(received), &received_size,
+                            FLOWMQ_DONTWAIT), SALTS_OK);
+
+    /* Learn healthy identity. */
+    status = SALTS_EBUSY;
+    for (size_t i = 0u;
+         i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_three(slow, healthy, router), SALTS_OK);
+      status = flowmq_send(healthy, warmup, sizeof(warmup) - 1u,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    status = SALTS_EBUSY;
+    for (size_t i = 0u;
+         i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_three(slow, healthy, router), SALTS_OK);
+      status = flowmq_recv(router, received, sizeof(received), &received_size,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    check_equal(received_size, sizeof(healthy_identity) - 1u);
+    check_equal(flowmq_recv(router, received, sizeof(received), &received_size,
+                            FLOWMQ_DONTWAIT), SALTS_OK);
+
+    /* Give the old slow session non-zero outbound counters. */
+    check_equal(flowmq_send(router, slow_identity, sizeof(slow_identity) - 1u,
+                            FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), SALTS_OK);
+    check_equal(flowmq_send(router, slow_payload, sizeof(slow_payload) - 1u,
+                            FLOWMQ_DONTWAIT), SALTS_OK);
+    status = SALTS_EBUSY;
+    for (size_t i = 0u;
+         i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_three(slow, healthy, router), SALTS_OK);
+      status = flowmq_recv(slow, received, sizeof(received), &received_size,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    check_equal(received_size, sizeof(slow_payload) - 1u);
+
+    check_equal(flowmq_close(slow), SALTS_OK);
+
+    /*
+     * Healthy traffic continues while the old slow generation retires. Payload
+     * order is encoded in one byte and checked at the application boundary.
+     */
+    for (size_t round = 0u; round < HEALTHY_DURING_RETIRE; ++round) {
+      unsigned char payload = (unsigned char)(round + 1u);
+      check_equal(flowmq_send(router, healthy_identity,
+                              sizeof(healthy_identity) - 1u,
+                              FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), SALTS_OK);
+      status = SALTS_EBUSY;
+      for (size_t i = 0u;
+           i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+           (status == SALTS_EBUSY || status == SALTS_ENOBUFS); ++i) {
+        status = flowmq_send(router, &payload, sizeof(payload),
+                             FLOWMQ_DONTWAIT);
+        if (status == SALTS_EBUSY || status == SALTS_ENOBUFS)
+          check_equal(progress_pair(healthy, router), SALTS_OK);
+      }
+      check_equal(status, SALTS_OK);
+
+      status = SALTS_EBUSY;
+      for (size_t i = 0u;
+           i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+        check_equal(progress_pair(healthy, router), SALTS_OK);
+        status = flowmq_recv(healthy, received, sizeof(received),
+                             &received_size, FLOWMQ_DONTWAIT);
+      }
+      check_equal(status, SALTS_OK);
+      check_equal(received_size, sizeof(payload));
+      check_equal(received[0], payload);
+    }
+
+    /* The retired identity disappears before the replacement is admitted. */
+    status = SALTS_OK;
+    for (size_t i = 0u;
+         i < FLOWMQ_TEST_PROGRESS_LIMIT && status != SALTS_ENOENT; ++i) {
+      slow_status =
+          (flowmq_router_peer_status_t)FLOWMQ_ROUTER_PEER_STATUS_INIT;
+      status = flowmq_router_peer_status(
+          router, slow_identity, sizeof(slow_identity) - 1u, &slow_status);
+      if (status != SALTS_ENOENT)
+        check_equal(progress_pair(healthy, router), SALTS_OK);
+    }
+    check_equal(status, SALTS_ENOENT);
+
+    healthy_status =
+        (flowmq_router_peer_status_t)FLOWMQ_ROUTER_PEER_STATUS_INIT;
+    check_equal(flowmq_router_peer_status(
+                    router, healthy_identity, sizeof(healthy_identity) - 1u,
+                    &healthy_status), SALTS_OK);
+    check_equal(healthy_status.admitted_messages, HEALTHY_DURING_RETIRE);
+    check_equal(healthy_status.completed_messages, HEALTHY_DURING_RETIRE);
+
+    replacement = flowmq_socket(ctx, FLOWMQ_DEALER);
+    check_not_null(replacement);
+    check_equal(flowmq_setsockopt(replacement, FLOWMQ_IDENTITY, slow_identity,
+                                  sizeof(slow_identity) - 1u), SALTS_OK);
+    check_equal(flowmq_connect(replacement, endpoint), SALTS_OK);
+
+    status = SALTS_EBUSY;
+    for (size_t i = 0u;
+         i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_three(replacement, healthy, router), SALTS_OK);
+      status = flowmq_send(replacement, warmup, sizeof(warmup) - 1u,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    status = SALTS_EBUSY;
+    for (size_t i = 0u;
+         i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_three(replacement, healthy, router), SALTS_OK);
+      status = flowmq_recv(router, received, sizeof(received), &received_size,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    check_equal(received_size, sizeof(slow_identity) - 1u);
+    check_equal(flowmq_recv(router, received, sizeof(received), &received_size,
+                            FLOWMQ_DONTWAIT), SALTS_OK);
+
+    /*
+     * Same identity is a fresh live session: old generation counters cannot
+     * leak into the replacement, while healthy counters remain untouched.
+     */
+    slow_status = (flowmq_router_peer_status_t)FLOWMQ_ROUTER_PEER_STATUS_INIT;
+    check_equal(flowmq_router_peer_status(
+                    router, slow_identity, sizeof(slow_identity) - 1u,
+                    &slow_status), SALTS_OK);
+    check_equal(slow_status.admitted_messages, 0u);
+    check_equal(slow_status.completed_messages, 0u);
+    check_equal(slow_status.rejected_messages, 0u);
+    check_equal(slow_status.outstanding_messages, 0u);
+
+    healthy_status =
+        (flowmq_router_peer_status_t)FLOWMQ_ROUTER_PEER_STATUS_INIT;
+    check_equal(flowmq_router_peer_status(
+                    router, healthy_identity, sizeof(healthy_identity) - 1u,
+                    &healthy_status), SALTS_OK);
+    check_equal(healthy_status.admitted_messages, HEALTHY_DURING_RETIRE);
+    check_equal(healthy_status.completed_messages, HEALTHY_DURING_RETIRE);
+
+    check_equal(flowmq_send(router, slow_identity, sizeof(slow_identity) - 1u,
+                            FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), SALTS_OK);
+    check_equal(flowmq_send(router, slow_payload, sizeof(slow_payload) - 1u,
+                            FLOWMQ_DONTWAIT), SALTS_OK);
+    status = SALTS_EBUSY;
+    for (size_t i = 0u;
+         i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_three(replacement, healthy, router), SALTS_OK);
+      status = flowmq_recv(replacement, received, sizeof(received),
+                           &received_size, FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    check_equal(received_size, sizeof(slow_payload) - 1u);
+    check_equal(memcmp(received, slow_payload, received_size), 0);
+
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT; ++i) {
+      slow_status =
+          (flowmq_router_peer_status_t)FLOWMQ_ROUTER_PEER_STATUS_INIT;
+      check_equal(flowmq_router_peer_status(
+                      router, slow_identity, sizeof(slow_identity) - 1u,
+                      &slow_status), SALTS_OK);
+      if (slow_status.completed_messages == 1u) break;
+      check_equal(progress_three(replacement, healthy, router), SALTS_OK);
+    }
+    check_equal(slow_status.admitted_messages, 1u);
+    check_equal(slow_status.completed_messages, 1u);
+
+    healthy_status =
+        (flowmq_router_peer_status_t)FLOWMQ_ROUTER_PEER_STATUS_INIT;
+    check_equal(flowmq_router_peer_status(
+                    router, healthy_identity, sizeof(healthy_identity) - 1u,
+                    &healthy_status), SALTS_OK);
+    check_equal(healthy_status.admitted_messages, HEALTHY_DURING_RETIRE);
+    check_equal(healthy_status.completed_messages, HEALTHY_DURING_RETIRE);
+
+    check_equal(flowmq_close(replacement), SALTS_OK);
+    check_equal(flowmq_close(healthy), SALTS_OK);
+    check_equal(flowmq_close(router), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+  }
+
   it("rejects a duplicate ROUTER peer identity without replacing the first peer") {
     static const char identity[] = "duplicate";
     static const char first_payload[] = "first-peer";
