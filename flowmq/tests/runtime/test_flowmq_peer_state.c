@@ -101,6 +101,13 @@ spec("flowmq_peer_state") {
     check_equal(completed, FLOWMQ_PEER_WRITE_SETTINGS);
     check_true(flowmq_peer_state_handshake_has(
         &state, FLOWMQ_PEER_HANDSHAKE_SETTINGS_TX));
+    check_equal(flowmq_peer_state_handshake_mark(
+                    &state, FLOWMQ_PEER_HANDSHAKE_HELLO_RX),
+                SALTS_OK);
+    check_equal(flowmq_peer_state_handshake_mark(
+                    &state, FLOWMQ_PEER_HANDSHAKE_SETTINGS_RX),
+                SALTS_OK);
+    check_true(flowmq_peer_state_ready(&state));
 
     check_equal(flowmq_peer_state_write_begin(
                     &state, FLOWMQ_PEER_WRITE_CONTROL),
