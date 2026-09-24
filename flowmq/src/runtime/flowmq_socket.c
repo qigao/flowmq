@@ -295,7 +295,9 @@ static size_t flowmq_socket_peer_index(const flowmq_socket_t *socket,
 
 static uint64_t flowmq_socket_counter_add_saturating(uint64_t current,
                                                      size_t increment) {
-  const uint64_t value = (uint64_t)increment;
+  uint64_t value;
+  if (increment > (size_t)UINT64_MAX) return UINT64_MAX;
+  value = (uint64_t)increment;
   return value > UINT64_MAX - current ? UINT64_MAX : current + value;
 }
 
@@ -1925,6 +1927,56 @@ int flowmq_getsockopt(const flowmq_socket_t *socket, int option, void *value,
     /* A GET-capable schema row without a read path is an internal drift. */
     return SALTS_EPROTO;
   }
+}
+
+int flowmq_router_peer_status(
+    const flowmq_socket_t *socket, const void *identity, size_t identity_size,
+    flowmq_router_peer_status_t *status) {
+  size_t caller_size;
+  if (socket == NULL || socket->ctx == NULL || status == NULL ||
+      identity == NULL || identity_size == 0u ||
+      identity_size > FLOWMQ_PROTOCOL_MAX_IDENTITY_SIZE)
+    return SALTS_EINVAL;
+  caller_size = status->size;
+  if (caller_size < sizeof(*status)) return SALTS_EINVAL;
+  if (socket->pattern.desc == NULL ||
+      socket->pattern.desc->routing_class != FLOWMQ_PATTERN_ROUTE_IDENTITY)
+    return SALTS_ENOTSUP;
+
+  for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
+    const flowmq_socket_peer_t *peer = &socket->peers[i];
+    flowmq_router_peer_status_t snapshot = FLOWMQ_ROUTER_PEER_STATUS_INIT;
+    if (!flowmq_peer_state_is_used(&peer->state) ||
+        flowmq_peer_state_is_retired(&peer->state) ||
+        peer->identity_size != identity_size ||
+        memcmp(peer->identity, identity, identity_size) != 0)
+      continue;
+
+    snapshot.admitted_messages = peer->admitted_messages;
+    snapshot.admitted_bytes = peer->admitted_bytes;
+    snapshot.completed_messages = peer->completed_messages;
+    snapshot.completed_bytes = peer->completed_bytes;
+    snapshot.rejected_messages = peer->rejected_messages;
+    snapshot.rejected_bytes = peer->rejected_bytes;
+    if (peer->flow_control.remote_initialized &&
+        peer->flow_control.sent_data <= peer->flow_control.remote_max_data)
+      snapshot.send_credit_bytes =
+          peer->flow_control.remote_max_data - peer->flow_control.sent_data;
+    snapshot.outstanding_messages = peer->outbound_messages;
+    snapshot.outstanding_bytes = peer->outbound_bytes;
+    snapshot.peak_outstanding_messages = peer->peak_outstanding_messages;
+    snapshot.peak_outstanding_bytes = peer->peak_outstanding_bytes;
+    snapshot.connected = flowmq_peer_state_is_connected(&peer->state);
+    snapshot.ready = flowmq_socket_peer_ready(peer);
+
+    /*
+     * Only the current canonical prefix is written. A newer caller may pass a
+     * larger struct; unknown tail bytes remain caller-owned.
+     */
+    memcpy(status, &snapshot, sizeof(snapshot));
+    return SALTS_OK;
+  }
+  return SALTS_ENOENT;
 }
 
 /* All fallible validation and allocation precedes peer-ring mutation, so the
