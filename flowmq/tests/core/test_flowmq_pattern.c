@@ -97,7 +97,21 @@ spec("flowmq_pattern") {
     check_equal(dealer->routing_class, FLOWMQ_PATTERN_ROUTE_ROUND_ROBIN);
     check_equal(pair->routing_class, FLOWMQ_PATTERN_ROUTE_SINGLE);
     check_equal(req->fsm_class, FLOWMQ_PATTERN_FSM_REQ);
+    check_equal(rep->routing_class, FLOWMQ_PATTERN_ROUTE_REPLY_PEER);
     check_equal(rep->fsm_class, FLOWMQ_PATTERN_FSM_REP);
+
+    /*
+     * Reply-peer routing and REP transaction semantics are distinct fields,
+     * but in the single canonical pattern schema they intentionally identify
+     * the same one public pattern. Hot routing may therefore consume the
+     * routing fact without changing transaction/FSM ownership.
+     */
+    for (flowmq_protocol_pattern_t pattern = FLOWMQ_PROTOCOL_PUB;
+         pattern <= FLOWMQ_PROTOCOL_XSUB; ++pattern) {
+      const flowmq_pattern_desc_t *desc = flowmq_pattern_descriptor(pattern);
+      check_equal(desc->routing_class == FLOWMQ_PATTERN_ROUTE_REPLY_PEER,
+                  desc->fsm_class == FLOWMQ_PATTERN_FSM_REP);
+    }
   }
 
   it("requires a compatible HELLO and DEALER identity") {
