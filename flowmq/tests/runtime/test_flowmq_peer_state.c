@@ -127,6 +127,74 @@ spec("flowmq_peer_state") {
                 SALTS_EPROTO);
   }
 
+
+  it("requires HELLO TX before SETTINGS TX and keeps readiness lifecycle-aware") {
+    flowmq_peer_state_t state = FLOWMQ_PEER_STATE_INIT;
+    flowmq_peer_write_lane_t completed = FLOWMQ_PEER_WRITE_IDLE;
+
+    check_equal(flowmq_peer_state_allocate(&state), SALTS_OK);
+    check_equal(flowmq_peer_state_transition(
+                    &state, FLOWMQ_PEER_LIFECYCLE_CONNECTED),
+                SALTS_OK);
+    check_equal(flowmq_peer_state_write_begin(
+                    &state, FLOWMQ_PEER_WRITE_SETTINGS),
+                SALTS_EPROTO);
+
+    check_equal(flowmq_peer_state_write_begin(
+                    &state, FLOWMQ_PEER_WRITE_HELLO),
+                SALTS_OK);
+    check_equal(flowmq_peer_state_write_complete(&state, &completed),
+                SALTS_OK);
+    check_equal(completed, FLOWMQ_PEER_WRITE_HELLO);
+    check_equal(flowmq_peer_state_write_begin(
+                    &state, FLOWMQ_PEER_WRITE_SETTINGS),
+                SALTS_OK);
+    check_equal(flowmq_peer_state_write_complete(&state, &completed),
+                SALTS_OK);
+
+    check_equal(flowmq_peer_state_handshake_mark(
+                    &state, FLOWMQ_PEER_HANDSHAKE_HELLO_RX),
+                SALTS_OK);
+    check_equal(flowmq_peer_state_handshake_mark(
+                    &state, FLOWMQ_PEER_HANDSHAKE_SETTINGS_RX),
+                SALTS_OK);
+    check_true(flowmq_peer_state_ready(&state));
+
+    check_equal(flowmq_peer_state_transition(
+                    &state, FLOWMQ_PEER_LIFECYCLE_CLOSING),
+                SALTS_OK);
+    check_false(flowmq_peer_state_ready(&state));
+    check_equal(flowmq_peer_state_write_begin(
+                    &state, FLOWMQ_PEER_WRITE_DATA),
+                SALTS_EBUSY);
+  }
+
+  it("keeps close retry and closing as one-way terminal lifecycle progress") {
+    flowmq_peer_state_t state = FLOWMQ_PEER_STATE_INIT;
+
+    check_equal(flowmq_peer_state_allocate(&state), SALTS_OK);
+    check_equal(flowmq_peer_state_transition(
+                    &state, FLOWMQ_PEER_LIFECYCLE_CONNECTED),
+                SALTS_OK);
+    check_equal(flowmq_peer_state_transition(
+                    &state, FLOWMQ_PEER_LIFECYCLE_CLOSE_RETRY),
+                SALTS_OK);
+    check_true(flowmq_peer_state_needs_close_retry(&state));
+    check_equal(flowmq_peer_state_transition(
+                    &state, FLOWMQ_PEER_LIFECYCLE_CONNECTED),
+                SALTS_EPROTO);
+    check_equal(flowmq_peer_state_transition(
+                    &state, FLOWMQ_PEER_LIFECYCLE_CLOSING),
+                SALTS_OK);
+    check_equal(flowmq_peer_state_transition(
+                    &state, FLOWMQ_PEER_LIFECYCLE_CONNECTED),
+                SALTS_EPROTO);
+    check_equal(flowmq_peer_state_transition(
+                    &state, FLOWMQ_PEER_LIFECYCLE_RETIRED),
+                SALTS_OK);
+    check_equal(flowmq_peer_state_release(&state), SALTS_OK);
+  }
+
   it("permits failed allocation to return directly to free") {
     flowmq_peer_state_t state = FLOWMQ_PEER_STATE_INIT;
 
