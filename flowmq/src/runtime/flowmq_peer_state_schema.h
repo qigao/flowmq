@@ -45,13 +45,19 @@
          (FLOWMQ_PEER_HANDSHAKE_SETTINGS_TX, FLOWMQ_PEER_HANDSHAKE_HELLO_TX),\
          (FLOWMQ_PEER_HANDSHAKE_SETTINGS_RX, FLOWMQ_PEER_HANDSHAKE_HELLO_RX))
 
-/* HELLO/SETTINGS completion advances the corresponding handshake TX fact. */
+/*
+ * Write admission owns its handshake prerequisites. HELLO/SETTINGS completion
+ * also advances the corresponding TX fact.
+ *
+ * row: lane, required_handshake_mask, completion_event
+ */
 #define FLOWMQ_PEER_WRITE_SCHEMA(M)                                          \
   Schema(M,                                                                  \
-         (FLOWMQ_PEER_WRITE_IDLE, 0u),                                       \
-         (FLOWMQ_PEER_WRITE_HELLO, FLOWMQ_PEER_HANDSHAKE_HELLO_TX),          \
-         (FLOWMQ_PEER_WRITE_SETTINGS, FLOWMQ_PEER_HANDSHAKE_SETTINGS_TX),    \
-         (FLOWMQ_PEER_WRITE_CONTROL, 0u),                                    \
-         (FLOWMQ_PEER_WRITE_DATA, 0u))
+         (FLOWMQ_PEER_WRITE_IDLE, 0u, 0u),                                   \
+         (FLOWMQ_PEER_WRITE_HELLO, 0u, FLOWMQ_PEER_HANDSHAKE_HELLO_TX),      \
+         (FLOWMQ_PEER_WRITE_SETTINGS, FLOWMQ_PEER_HANDSHAKE_HELLO_TX,        \
+          FLOWMQ_PEER_HANDSHAKE_SETTINGS_TX),                                \
+         (FLOWMQ_PEER_WRITE_CONTROL, FLOWMQ_PEER_HANDSHAKE_READY, 0u),       \
+         (FLOWMQ_PEER_WRITE_DATA, FLOWMQ_PEER_HANDSHAKE_READY, 0u))
 
 #endif /* FLOWMQ_PEER_STATE_SCHEMA_H */
