@@ -100,6 +100,13 @@ jobs:
           cmake --build build/cache-contract --parallel 2
           ctest --test-dir build/cache-contract --no-tests=error --output-on-failure
 
+      - name: Measure dispatch policy candidates
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$FLOWMQ_VCPKG_INSTALLED/x64-linux/lib"
+          build/cache-contract/bin/bench_flowmq_dispatch_policy
+
       - name: Smoke pattern dispatch benchmark workloads
         shell: bash
         run: |
@@ -107,12 +114,6 @@ jobs:
           export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$FLOWMQ_VCPKG_INSTALLED/x64-linux/lib"
           FLOWMQ_BENCH_SMOKE=1 build/cache-contract/bin/bench_flowmq_pattern_dispatch
 
-      - name: Measure dispatch policy candidates
-        shell: bash
-        run: |
-          set -euo pipefail
-          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$FLOWMQ_VCPKG_INSTALLED/x64-linux/lib"
-          build/cache-contract/bin/bench_flowmq_dispatch_policy
 
       - name: Verify peer lifecycle in Debug with ASan
         shell: bash
