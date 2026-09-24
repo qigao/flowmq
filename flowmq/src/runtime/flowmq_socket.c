@@ -1964,8 +1964,18 @@ static int flowmq_socket_try_send_multipart(flowmq_socket_t *socket, const void 
 
   if (message_end && peer != NULL &&
       !flowmq_socket_peer_can_admit_message(peer, message_size, part_count,
-                                            size))
+                                            size)) {
+    /*
+     * ROUTER routing-id selection is part of the same atomic message
+     * transaction. A target-specific capacity failure must not leave the
+     * socket pinned to that peer; otherwise unrelated ready peers inherit
+     * cross-peer HOL blocking. Other multipart patterns retain their staged
+     * retry semantics.
+     */
+    if (socket->pattern.desc->routing_class == FLOWMQ_PATTERN_ROUTE_IDENTITY)
+      flowmq_socket_cancel_send_route(socket);
     return SALTS_ENOBUFS;
+  }
   status = flowmq_socket_prepare_outbound(socket, data, size, !message_end, &part);
   if (status != SALTS_OK) return status;
   socket->send_staged[socket->send_staged_count] = part;
