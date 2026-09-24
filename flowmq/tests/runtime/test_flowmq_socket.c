@@ -76,6 +76,41 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
+  it("bounds the public ROUTER peer status surface") {
+    static const char identity[] = "missing";
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *pair = flowmq_socket(ctx, FLOWMQ_PAIR);
+    flowmq_socket_t *router = flowmq_socket(ctx, FLOWMQ_ROUTER);
+    flowmq_router_peer_status_t status = FLOWMQ_ROUTER_PEER_STATUS_INIT;
+
+    check_not_null(ctx);
+    check_not_null(pair);
+    check_not_null(router);
+
+    check_equal(flowmq_router_peer_status(
+                    pair, identity, sizeof(identity) - 1u, &status),
+                SALTS_ENOTSUP);
+
+    status = (flowmq_router_peer_status_t)FLOWMQ_ROUTER_PEER_STATUS_INIT;
+    check_equal(flowmq_router_peer_status(
+                    router, identity, sizeof(identity) - 1u, &status),
+                SALTS_ENOENT);
+
+    status = (flowmq_router_peer_status_t)FLOWMQ_ROUTER_PEER_STATUS_INIT;
+    status.size = sizeof(status) - 1u;
+    check_equal(flowmq_router_peer_status(
+                    router, identity, sizeof(identity) - 1u, &status),
+                SALTS_EINVAL);
+
+    status = (flowmq_router_peer_status_t)FLOWMQ_ROUTER_PEER_STATUS_INIT;
+    check_equal(flowmq_router_peer_status(router, NULL, 0u, &status),
+                SALTS_EINVAL);
+
+    check_equal(flowmq_close(router), SALTS_OK);
+    check_equal(flowmq_close(pair), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+  }
+
   it("reports poll readiness only when the pattern FSM can perform the operation") {
     flowmq_ctx_t *ctx = flowmq_ctx_new();
     flowmq_socket_t *sub = flowmq_socket(ctx, FLOWMQ_SUB);
