@@ -3,6 +3,7 @@
 #include "salts_error.h"
 
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 
 enum {
@@ -11,6 +12,13 @@ enum {
   BENCH_PATTERN_PEERS = 4u,
   BENCH_PATTERN_PROGRESS_LIMIT = 10000u
 };
+
+static size_t bench_pattern_samples(void) {
+  const char *smoke = getenv("FLOWMQ_BENCH_SMOKE");
+  return smoke != NULL && strcmp(smoke, "0") != 0
+             ? (size_t)1u
+             : (size_t)BENCH_PATTERN_SAMPLES;
+}
 
 typedef struct bench_socket_group_s {
   flowmq_ctx_t *ctx;
@@ -360,13 +368,14 @@ spec("FlowMQ pattern dispatch benchmark") {
     bench_push_t push;
     bench_router_t router;
     bench_reqrep_t reqrep;
+    const size_t samples = bench_pattern_samples();
     int status;
 
     memset(payload, 0x5a, sizeof(payload));
 
     status = bench_pub_open(&pub);
     check_equal(status, SALTS_OK);
-    benchmark_io("PUB 4-peer fanout", BENCH_PATTERN_SAMPLES,
+    benchmark_io("PUB 4-peer fanout", samples,
                  BENCH_PATTERN_PEERS,
                  BENCH_PATTERN_PEERS * BENCH_PATTERN_PAYLOAD_BYTES) {
       if (status == SALTS_OK)
@@ -378,7 +387,7 @@ spec("FlowMQ pattern dispatch benchmark") {
     status = bench_push_open(&push);
     check_equal(status, SALTS_OK);
     check_equal(bench_push_cycle(&push, payload, sizeof(payload)), SALTS_OK);
-    benchmark_io("PUSH 4-peer round-robin", BENCH_PATTERN_SAMPLES,
+    benchmark_io("PUSH 4-peer round-robin", samples,
                  BENCH_PATTERN_PEERS,
                  BENCH_PATTERN_PEERS * BENCH_PATTERN_PAYLOAD_BYTES) {
       if (status == SALTS_OK)
@@ -391,7 +400,7 @@ spec("FlowMQ pattern dispatch benchmark") {
     check_equal(status, SALTS_OK);
     check_equal(bench_router_exchange(&router, payload, sizeof(payload)),
                 SALTS_OK);
-    benchmark_io("ROUTER identity one-way", BENCH_PATTERN_SAMPLES,
+    benchmark_io("ROUTER identity one-way", samples,
                  1u, BENCH_PATTERN_PAYLOAD_BYTES) {
       if (status == SALTS_OK)
         status = bench_router_exchange(&router, payload, sizeof(payload));
@@ -403,7 +412,7 @@ spec("FlowMQ pattern dispatch benchmark") {
     check_equal(status, SALTS_OK);
     check_equal(bench_reqrep_roundtrip(&reqrep, payload, sizeof(payload)),
                 SALTS_OK);
-    benchmark_io("REQ/REP roundtrip", BENCH_PATTERN_SAMPLES,
+    benchmark_io("REQ/REP roundtrip", samples,
                  2u, 2u * BENCH_PATTERN_PAYLOAD_BYTES) {
       if (status == SALTS_OK)
         status = bench_reqrep_roundtrip(&reqrep, payload, sizeof(payload));
