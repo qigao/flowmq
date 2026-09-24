@@ -23,6 +23,13 @@ cmake_add_benchmark(
   LIBS FlowMQ::Transport Salts::TinyTest
   FOLDER "flowmq/benchmarks/runtime")
 
+cmake_add_benchmark(
+  bench_flowmq_dispatch_policy
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_dispatch_policy.c
+  LIBS FlowMQ::Core Salts::TinyTest
+  INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/core/pattern
+  FOLDER "flowmq/benchmarks/runtime")
+
 if(FLOWMQ_BUILD_ZMQ_BENCHMARK)
   find_package(ZeroMQ CONFIG REQUIRED)
   string(TOUPPER "${CMAKE_BUILD_TYPE}" _flowmq_zmq_config)
