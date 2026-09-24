@@ -1,4 +1,5 @@
 #include "flowmq_socket_option.h"
+#include "flowmq_tls_identity_map.h"
 
 #include "salts_error.h"
 #include "tinytest.h"
