@@ -36,6 +36,10 @@ target_include_directories(
 target_link_libraries(flowmq_transport
                       PUBLIC FlowMQ::Core Salts::Core
                       PRIVATE Salts::CNet Salts::CMeta)
+if(FLOWMQ_EXPERIMENT_ROUTE_REPLY_FACT_SOURCE)
+  target_compile_definitions(
+    flowmq_transport PRIVATE FLOWMQ_EXPERIMENT_ROUTE_REPLY_FACT_SOURCE=1)
+endif()
 
 set(FLOWMQ_TRANSPORT_SOURCES ${FLOWMQ_TRANSPORT_SOURCES} PARENT_SCOPE)
 set(FLOWMQ_TRANSPORT_HEADERS ${FLOWMQ_TRANSPORT_HEADERS} PARENT_SCOPE)
