@@ -805,7 +805,7 @@ static int flowmq_socket_subscription_event(flowmq_socket_peer_t *peer,
   int status = flowmq_subscription_set_update(&peer->subscriptions, subscribe,
                                                frame->topic, &changed);
   if (status != SALTS_OK || !changed ||
-      socket->pattern.pattern != FLOWMQ_PROTOCOL_XPUB)
+      (socket->pattern.desc->capabilities & FLOWMQ_PATTERN_CAP_SUB_EVENTS) == 0u)
     return status;
   {
     unsigned char event[FLOWMQ_PROTOCOL_MAX_TOPIC_SIZE + 1u];
@@ -931,7 +931,7 @@ static int flowmq_socket_process_receive(flowmq_socket_peer_t *peer) {
       if (status == SALTS_OK) {
         status = flowmq_socket_tls_identity_verify(peer, frame.identity);
         if (status == SALTS_OK &&
-            socket->pattern.pattern == FLOWMQ_PROTOCOL_ROUTER) {
+            socket->pattern.desc->routing_class == FLOWMQ_PATTERN_ROUTE_IDENTITY) {
           for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
             flowmq_socket_peer_t *candidate = &socket->peers[i];
             if (candidate == peer || !candidate->used || candidate->retired ||
@@ -1005,7 +1005,7 @@ static int flowmq_socket_process_receive(flowmq_socket_peer_t *peer) {
                   frame.kind == FLOWMQ_PROTOCOL_FRAME_UNSUBSCRIBE)) {
         status = flowmq_socket_subscription_event(peer, &frame);
       } else if (status == SALTS_OK && frame.kind == FLOWMQ_PROTOCOL_FRAME_DATA) {
-        if (socket->pattern.pattern == FLOWMQ_PROTOCOL_REQ &&
+        if (socket->pattern.desc->fsm_class == FLOWMQ_PATTERN_FSM_REQ &&
             (!socket->request_peer_valid ||
              socket->request_peer_index !=
                  flowmq_socket_peer_index(socket, peer) ||
@@ -1016,7 +1016,7 @@ static int flowmq_socket_process_receive(flowmq_socket_peer_t *peer) {
           status = flowmq_flow_control_receive_check(&peer->flow_control,
                                                      frame.payload.len);
         if (status == SALTS_OK &&
-            socket->pattern.pattern == FLOWMQ_PROTOCOL_ROUTER &&
+            socket->pattern.desc->routing_class == FLOWMQ_PATTERN_ROUTE_IDENTITY &&
             !peer->receiving_multipart) {
           status = flowmq_socket_stage_bytes(
               peer, peer->identity, peer->identity_size, 0u, 1);
@@ -1062,7 +1062,7 @@ static void flowmq_socket_on_state(void *user, cnet_connection connection,
       }
     }
     peer->connected = 1u;
-    if (socket->pattern.pattern == FLOWMQ_PROTOCOL_PAIR) {
+    if (socket->pattern.desc->routing_class == FLOWMQ_PATTERN_ROUTE_SINGLE) {
       for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
         flowmq_socket_peer_t *candidate = &socket->peers[i];
         if (candidate != peer && candidate->used && !candidate->retired &&
@@ -1344,8 +1344,7 @@ static int flowmq_socket_sync_subscription(flowmq_socket_peer_t *peer) {
   flowmq_protocol_frame_kind_t kind = FLOWMQ_PROTOCOL_FRAME_SUBSCRIBE;
   int changed = 0;
   int status;
-  if (socket->pattern.pattern != FLOWMQ_PROTOCOL_SUB &&
-      socket->pattern.pattern != FLOWMQ_PROTOCOL_XSUB)
+  if (socket->pattern.desc->subscription_class != FLOWMQ_PATTERN_SUB_SUBSCRIBER)
     return SALTS_OK;
   if (!flowmq_socket_peer_ready(peer) || peer->write_busy)
     return SALTS_OK;
@@ -1566,7 +1565,7 @@ int flowmq_bind(flowmq_socket_t *socket, const char *endpoint) {
   if (status != SALTS_OK) return status;
   if (socket->listener_initialized) return SALTS_EALREADY;
   if (socket->tls_identity_policy != NULL &&
-      (socket->pattern.pattern != FLOWMQ_PROTOCOL_ROUTER ||
+      (socket->pattern.desc->routing_class != FLOWMQ_PATTERN_ROUTE_IDENTITY ||
        parts.transport != FLOWMQ_TRANSPORT_TLS ||
        !socket->tls_require_client_certificate))
     return SALTS_EINVAL;
@@ -1605,7 +1604,7 @@ int flowmq_connect(flowmq_socket_t *socket, const char *endpoint) {
   if (socket == NULL || socket->ctx == NULL) return SALTS_EINVAL;
   status = flowmq_endpoint_parse(endpoint, 0, &parts);
   if (status != SALTS_OK) return status;
-  if (socket->pattern.pattern == FLOWMQ_PROTOCOL_PAIR) {
+  if (socket->pattern.desc->routing_class == FLOWMQ_PATTERN_ROUTE_SINGLE) {
     for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
       if (socket->peers[i].used) return SALTS_EBUSY;
     }
@@ -1664,8 +1663,7 @@ int flowmq_setsockopt(flowmq_socket_t *socket, int option, const void *value,
   if (socket == NULL || socket->ctx == NULL) return SALTS_EINVAL;
   if (option == FLOWMQ_SUBSCRIBE || option == FLOWMQ_UNSUBSCRIBE) {
     int changed = 0;
-    if ((socket->pattern.pattern != FLOWMQ_PROTOCOL_SUB &&
-         socket->pattern.pattern != FLOWMQ_PROTOCOL_XSUB) ||
+    if ((socket->pattern.desc->subscription_class != FLOWMQ_PATTERN_SUB_SUBSCRIBER) ||
         (value == NULL && size != 0u) || size > FLOWMQ_PROTOCOL_MAX_TOPIC_SIZE)
       return SALTS_EINVAL;
     return flowmq_subscription_set_update(
@@ -1782,7 +1780,7 @@ int flowmq_setsockopt(flowmq_socket_t *socket, int option, const void *value,
   case FLOWMQ_TLS_IDENTITY_POLICY: {
     flowmq_tls_identity_map_t *replacement = NULL;
     int status;
-    if (socket->pattern.pattern != FLOWMQ_PROTOCOL_ROUTER || value == NULL ||
+    if (socket->pattern.desc->routing_class != FLOWMQ_PATTERN_ROUTE_IDENTITY || value == NULL ||
         size != sizeof(flowmq_tls_identity_map_config_t))
       return SALTS_EINVAL;
     status = flowmq_tls_identity_map_create(
@@ -1852,14 +1850,13 @@ static int flowmq_socket_try_send_multipart(flowmq_socket_t *socket, const void 
   uint32_t peer_mask = socket->publish_peer_mask;
   int message_end = (flags & FLOWMQ_SNDMORE) == 0;
   int status;
-  if (socket->pattern.pattern == FLOWMQ_PROTOCOL_ROUTER) --max_parts;
+  if (socket->pattern.desc->routing_class == FLOWMQ_PATTERN_ROUTE_IDENTITY) --max_parts;
   if (part_count > max_parts || socket->send_staged_bytes > socket->send_hwm_bytes ||
       size > socket->send_hwm_bytes - socket->send_staged_bytes)
     return SALTS_EMSGSIZE;
   message_size = socket->send_staged_bytes + size;
 
-  if (socket->pattern.pattern == FLOWMQ_PROTOCOL_PUB ||
-      socket->pattern.pattern == FLOWMQ_PROTOCOL_XPUB) {
+  if (socket->pattern.desc->routing_class == FLOWMQ_PATTERN_ROUTE_FANOUT) {
     if (starting_message) {
       peer_mask = 0u;
       for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
@@ -1888,7 +1885,7 @@ static int flowmq_socket_try_send_multipart(flowmq_socket_t *socket, const void 
       }
     }
   } else if (starting_message) {
-    if (socket->pattern.pattern == FLOWMQ_PROTOCOL_REP) {
+    if (socket->pattern.desc->fsm_class == FLOWMQ_PATTERN_FSM_REP) {
       if (!socket->reply_peer_valid ||
           socket->reply_peer_index >= FLOWMQ_SOCKET_PEER_CAPACITY)
         return SALTS_EBUSY;
@@ -1933,8 +1930,7 @@ static int flowmq_socket_try_send_multipart(flowmq_socket_t *socket, const void 
   socket->send_staged_bytes = message_size;
 
   if (!message_end) {
-    if (socket->pattern.pattern == FLOWMQ_PROTOCOL_PUB ||
-        socket->pattern.pattern == FLOWMQ_PROTOCOL_XPUB) {
+    if (socket->pattern.desc->routing_class == FLOWMQ_PATTERN_ROUTE_FANOUT) {
       socket->publish_peer_mask = peer_mask;
       memcpy(socket->publish_peer_generations, peer_generations,
              sizeof(peer_generations));
@@ -1949,8 +1945,7 @@ static int flowmq_socket_try_send_multipart(flowmq_socket_t *socket, const void 
     return SALTS_OK;
   }
 
-  if (socket->pattern.pattern == FLOWMQ_PROTOCOL_PUB ||
-      socket->pattern.pattern == FLOWMQ_PROTOCOL_XPUB) {
+  if (socket->pattern.desc->routing_class == FLOWMQ_PATTERN_ROUTE_FANOUT) {
     for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
       if ((peer_mask & (UINT32_C(1) << i)) != 0u) {
         status = flowmq_socket_peer_admit_staged(&socket->peers[i], socket);
@@ -1963,14 +1958,14 @@ static int flowmq_socket_try_send_multipart(flowmq_socket_t *socket, const void 
   } else {
     status = flowmq_socket_peer_admit_staged(peer, socket);
     if (status != SALTS_OK) return status;
-    if (socket->pattern.pattern == FLOWMQ_PROTOCOL_REQ) {
+    if (socket->pattern.desc->fsm_class == FLOWMQ_PATTERN_FSM_REQ) {
       socket->request_peer_index = selected_peer_index;
       socket->request_peer_generation =
           peer->flow_control.local_generation;
       socket->request_peer_valid = 1u;
       socket->recv_cancel_error = SALTS_OK;
     }
-    if (socket->pattern.pattern == FLOWMQ_PROTOCOL_REP) {
+    if (socket->pattern.desc->fsm_class == FLOWMQ_PATTERN_FSM_REP) {
       socket->reply_peer_valid = 0u;
       socket->reply_peer_generation = 0u;
     }
@@ -2007,7 +2002,7 @@ static int flowmq_socket_try_send(flowmq_socket_t *socket, const void *data,
   if (size > socket->send_hwm_bytes) return SALTS_EMSGSIZE;
   starting_message = !socket->pattern.sending_multipart;
   message_end = (flags & FLOWMQ_SNDMORE) == 0;
-  if (socket->pattern.pattern == FLOWMQ_PROTOCOL_ROUTER &&
+  if (socket->pattern.desc->routing_class == FLOWMQ_PATTERN_ROUTE_IDENTITY &&
       !socket->pattern.sending_multipart) {
     if ((flags & FLOWMQ_SNDMORE) == 0 || size == 0u) return SALTS_EINVAL;
     for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
@@ -2029,8 +2024,7 @@ static int flowmq_socket_try_send(flowmq_socket_t *socket, const void *data,
       (flags & FLOWMQ_SNDMORE) != 0)
     return flowmq_socket_try_send_multipart(socket, data, size, flags,
                                             starting_message);
-  if (socket->pattern.pattern == FLOWMQ_PROTOCOL_PUB ||
-      socket->pattern.pattern == FLOWMQ_PROTOCOL_XPUB) {
+  if (socket->pattern.desc->routing_class == FLOWMQ_PATTERN_ROUTE_FANOUT) {
     uint32_t peer_mask = socket->pattern.sending_multipart
                              ? socket->publish_peer_mask
                              : 0u;
@@ -2079,7 +2073,7 @@ static int flowmq_socket_try_send(flowmq_socket_t *socket, const void *data,
                                      (flags & FLOWMQ_SNDMORE) != 0);
     return SALTS_OK;
   }
-  if (socket->pattern.pattern == FLOWMQ_PROTOCOL_REP &&
+  if (socket->pattern.desc->fsm_class == FLOWMQ_PATTERN_FSM_REP &&
       !socket->send_peer_active) {
     if (!socket->reply_peer_valid ||
         socket->reply_peer_index >= FLOWMQ_SOCKET_PEER_CAPACITY)
@@ -2136,13 +2130,13 @@ static int flowmq_socket_try_send(flowmq_socket_t *socket, const void *data,
         message_end);
   if (status != SALTS_OK) return status;
   ++socket->next_message_id;
-  if (socket->pattern.pattern == FLOWMQ_PROTOCOL_REQ && starting_message) {
+  if (socket->pattern.desc->fsm_class == FLOWMQ_PATTERN_FSM_REQ && starting_message) {
     socket->request_peer_index = socket->send_peer_index;
     socket->request_peer_generation = peer->flow_control.local_generation;
     socket->request_peer_valid = 1u;
     socket->recv_cancel_error = SALTS_OK;
   }
-  if (socket->pattern.pattern == FLOWMQ_PROTOCOL_REP &&
+  if (socket->pattern.desc->fsm_class == FLOWMQ_PATTERN_FSM_REP &&
       (flags & FLOWMQ_SNDMORE) == 0) {
     socket->reply_peer_valid = 0u;
     socket->reply_peer_generation = 0u;
@@ -2174,7 +2168,7 @@ static int flowmq_socket_try_recv(flowmq_socket_t *socket, void *data,
   if (status != SALTS_OK) return status;
   if (socket->inbound_count == 0u) return SALTS_EBUSY;
   message = &socket->inbound[socket->inbound_read];
-  if (socket->pattern.pattern == FLOWMQ_PROTOCOL_REQ &&
+  if (socket->pattern.desc->fsm_class == FLOWMQ_PATTERN_FSM_REQ &&
       socket->request_peer_valid &&
       (message->peer_index != socket->request_peer_index ||
        message->peer_generation != socket->request_peer_generation))
@@ -2203,7 +2197,7 @@ static int flowmq_socket_try_recv(flowmq_socket_t *socket, void *data,
   message_more = message->more;
   socket->last_rcvmore = message_more != 0;
   flowmq_pattern_state_receive_commit(&socket->pattern, message_more);
-  if (!message_more && socket->pattern.pattern == FLOWMQ_PROTOCOL_REP) {
+  if (!message_more && socket->pattern.desc->fsm_class == FLOWMQ_PATTERN_FSM_REP) {
     if (peer->retired) {
       if (socket->send_cancel_error == SALTS_OK)
         socket->send_cancel_error = SALTS_ENOTCONN;
@@ -2217,7 +2211,7 @@ static int flowmq_socket_try_recv(flowmq_socket_t *socket, void *data,
       socket->send_cancel_error = SALTS_OK;
     }
   }
-  if (!message_more && socket->pattern.pattern == FLOWMQ_PROTOCOL_REQ) {
+  if (!message_more && socket->pattern.desc->fsm_class == FLOWMQ_PATTERN_FSM_REQ) {
     socket->request_peer_valid = 0u;
     socket->request_peer_generation = 0u;
   }
@@ -2321,8 +2315,7 @@ static int flowmq_socket_drive(flowmq_socket_t *socket, uint32_t timeout_ms,
       flowmq_socket_peer_fail(peer);
       continue;
     }
-    if (socket->pattern.pattern == FLOWMQ_PROTOCOL_SUB ||
-        socket->pattern.pattern == FLOWMQ_PROTOCOL_XSUB) {
+    if (socket->pattern.desc->subscription_class == FLOWMQ_PATTERN_SUB_SUBSCRIBER) {
       status = flowmq_socket_sync_subscription(peer);
       if (status != SALTS_OK && status != SALTS_EBUSY &&
           status != SALTS_ENOBUFS) {
@@ -2380,10 +2373,9 @@ static int flowmq_socket_pollout_ready(const flowmq_socket_t *socket) {
       socket->send_staged_count >= FLOWMQ_SOCKET_MULTIPART_CAPACITY ||
       socket->send_staged_bytes >= socket->send_hwm_bytes)
     return 0;
-  if (socket->pattern.pattern == FLOWMQ_PROTOCOL_PUB ||
-      socket->pattern.pattern == FLOWMQ_PROTOCOL_XPUB)
+  if (socket->pattern.desc->routing_class == FLOWMQ_PATTERN_ROUTE_FANOUT)
     return 1;
-  if (socket->pattern.pattern == FLOWMQ_PROTOCOL_ROUTER &&
+  if (socket->pattern.desc->routing_class == FLOWMQ_PATTERN_ROUTE_IDENTITY &&
       !socket->pattern.sending_multipart) {
     for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
       if (flowmq_socket_peer_ready(&socket->peers[i])) return 1;
@@ -2399,7 +2391,7 @@ static int flowmq_socket_pollout_ready(const flowmq_socket_t *socket) {
     return flowmq_socket_peer_can_admit(
         &socket->peers[socket->send_peer_index], 1u, 1);
   }
-  if (socket->pattern.pattern == FLOWMQ_PROTOCOL_REP) {
+  if (socket->pattern.desc->fsm_class == FLOWMQ_PATTERN_FSM_REP) {
     if (!socket->reply_peer_valid ||
         socket->reply_peer_index >= FLOWMQ_SOCKET_PEER_CAPACITY)
       return 0;
