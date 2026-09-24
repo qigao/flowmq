@@ -17,6 +17,7 @@ typedef struct flowmq_peer_handshake_desc_s {
 
 typedef struct flowmq_peer_write_desc_s {
   uint8_t lane;
+  uint8_t required_handshake_mask;
   uint8_t completion_event;
 } flowmq_peer_write_desc_t;
 
@@ -31,7 +32,8 @@ static const flowmq_peer_handshake_desc_t FLOWMQ_PEER_HANDSHAKE_DESCRIPTORS[] = 
     Replay(FLOWMQ_PEER_HANDSHAKE_SCHEMA, FLOWMQ_PEER_HANDSHAKE_ROW)};
 #undef FLOWMQ_PEER_HANDSHAKE_ROW
 
-#define FLOWMQ_PEER_WRITE_ROW(lane_value, completion_value)   [lane_value] = {lane_value, completion_value},
+#define FLOWMQ_PEER_WRITE_ROW(lane_value, required_value, completion_value) \
+  [lane_value] = {lane_value, required_value, completion_value},
 static const flowmq_peer_write_desc_t
     FLOWMQ_PEER_WRITE_DESCRIPTORS[FLOWMQ_PEER_WRITE_COUNT] = {
         Replay(FLOWMQ_PEER_WRITE_SCHEMA, FLOWMQ_PEER_WRITE_ROW)};
@@ -39,12 +41,12 @@ static const flowmq_peer_write_desc_t
 
 #define FLOWMQ_PEER_LIFECYCLE_COUNT_ROW(state_value, next_mask_value) +1
 #define FLOWMQ_PEER_HANDSHAKE_COUNT_ROW(event_value, prerequisite_value) +1
-#define FLOWMQ_PEER_WRITE_COUNT_ROW(lane_value, completion_value) +1
+#define FLOWMQ_PEER_WRITE_COUNT_ROW(lane_value, required_value, completion_value) +1
 #define FLOWMQ_PEER_LIFECYCLE_MASK_ROW(state_value, next_mask_value) \
   | FLOWMQ_PEER_LIFECYCLE_BIT(state_value)
 #define FLOWMQ_PEER_HANDSHAKE_MASK_ROW(event_value, prerequisite_value) \
   | (event_value)
-#define FLOWMQ_PEER_WRITE_MASK_ROW(lane_value, completion_value) \
+#define FLOWMQ_PEER_WRITE_MASK_ROW(lane_value, required_value, completion_value) \
   | FLOWMQ_PEER_LIFECYCLE_BIT(lane_value)
 enum {
   FLOWMQ_PEER_LIFECYCLE_SCHEMA_COUNT =
@@ -202,6 +204,9 @@ int flowmq_peer_state_write_begin(flowmq_peer_state_t *state,
   if (!flowmq_peer_state_is_connected(state)) return SALTS_EBUSY;
   if (state->write_lane != FLOWMQ_PEER_WRITE_IDLE) return SALTS_EBUSY;
   desc = &FLOWMQ_PEER_WRITE_DESCRIPTORS[lane];
+  if ((state->handshake & desc->required_handshake_mask) !=
+      desc->required_handshake_mask)
+    return SALTS_EPROTO;
   if (desc->completion_event != 0u) {
     status = flowmq_peer_handshake_can_mark(state, desc->completion_event);
     if (status != SALTS_OK) return status;
