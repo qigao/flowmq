@@ -54,9 +54,43 @@ CNet 是调用者驱动的单-owner协程池，不是线程池。FlowMQ 不创�
 - 同一个普通 socket 不允许跨线程并发使用；跨线程通信使用独立 socket。
 
 每个 live peer 独占 heartbeat deadline、pending-PONG 和双向累计 credit 状态。
-连接按 `HELLO -> SETTINGS -> READY` 推进；SETTINGS 完成前不允许 DATA。PING/PONG 与
-FLOW_UPDATE 优先使用同一个串行 CNet write lane，不进入应用 outbound FIFO；收到任意合法
-FMQ frame 会取消未应答 PING 的 timeout。所有 deadline 只在 owner 调用
+peer 的可变协议状态拆成三个独立维度，而不是一个乘积型大 FSM：
+
+```text
+lifecycle:
+  FREE -> ALLOCATED -> CONNECTED
+                       |      |
+                       |      +-> CLOSING -> RETIRED -> FREE
+                       +-> CLOSE_RETRY -> CLOSING
+  ALLOCATED / CONNECTED / CLOSE_RETRY 也可由终止回调直接进入 RETIRED
+
+handshake progress:
+  HELLO_TX -> SETTINGS_TX
+  HELLO_RX -> SETTINGS_RX
+
+write lane:
+  IDLE -> HELLO -> IDLE
+       -> SETTINGS -> IDLE
+       -> CONTROL -> IDLE
+       -> DATA -> IDLE
+```
+
+HELLO/SETTINGS 的 TX 与 RX 是两条独立单调链，可以交错推进；只有 lifecycle 为
+`CONNECTED` 且四个 handshake fact 全部成立时 peer 才是 READY。SETTINGS TX 至少依赖
+HELLO_TX；CONTROL/DATA write lane 只在 READY 后 admission。一个 peer 同时只允许一个 CNet
+write lane，send completion 根据 lane 唯一决定是否提交 HELLO_TX、SETTINGS_TX 或 DATA
+in-flight 统计，不再维护 `write_busy + writing_*` 多套事实。
+
+`CLOSE_RETRY` 表示 CNet close command 因 bounded command capacity 尚未 admission；
+`CLOSING` 表示 close 已被 CNet 接受、等待 terminal callback。终止后先进入 `RETIRED`：
+decoder、credit、subscription snapshot、multipart staging 和 outbound storage 已释放，但
+socket inbound queue 仍可能保存引用该 generation 的已完成 message part，所以 RETIRED
+不等于 FREE；只有这些 queued parts 消费完后 slot 才回到 FREE。
+
+multipart receive/commit-pending、heartbeat/PONG、flow-credit counter、queue occupancy 和
+generation fencing 仍是正交事实，不并入上述 lifecycle/handshake/write-lane 状态。
+PING/PONG、FLOW_UPDATE 与 subscription sync 共用 CONTROL write lane，不进入应用 outbound
+FIFO；收到任意合法 FMQ frame 会取消未应答 PING 的 timeout。所有 deadline 只在 owner 调用
 `send/recv/poll` 时检查，不创建 timer thread，也不把 socket 变成 MPSC。
 
 Outbound endpoint 是 URI 与重连退避的主事实源；peer 是一次 CNet connection session。

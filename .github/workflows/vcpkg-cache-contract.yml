@@ -100,6 +100,25 @@ jobs:
           cmake --build build/cache-contract --parallel 2
           ctest --test-dir build/cache-contract --no-tests=error --output-on-failure
 
+      - name: Verify peer lifecycle in Debug with ASan
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build/peer-state-asan -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DVCPKG_INSTALLED_DIR="$FLOWMQ_VCPKG_INSTALLED" \
+            -DBUILD_TESTS=ON -DBUILD_EXAMPLES=OFF -DENABLE_ASAN=ON
+          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$FLOWMQ_VCPKG_INSTALLED/x64-linux/lib"
+          export ASAN_OPTIONS="detect_leaks=1:halt_on_error=1"
+          cmake --build build/peer-state-asan --parallel 2 \
+            --target test_flowmq_peer_state test_flowmq_socket
+          ctest --test-dir build/peer-state-asan \
+            -R '^(test_flowmq_peer_state|test_flowmq_socket)$' \
+            --no-tests=error --output-on-failure
+
       - name: Verify installed FlowMQ 1.1 package contract
         shell: bash
         run: |
