@@ -128,6 +128,7 @@ static int bench_pub_open(bench_pub_t *fixture) {
 
   /* Prove all four subscription snapshots reached PUB before timing. */
   for (size_t attempt = 0u; attempt < BENCH_PATTERN_PROGRESS_LIMIT; ++attempt) {
+    unsigned char received_peer[BENCH_PATTERN_PEERS] = {0};
     size_t received_count = 0u;
     if (flowmq_send(fixture->pub, payload, sizeof(payload), FLOWMQ_DONTWAIT) !=
         SALTS_OK) {
@@ -139,7 +140,7 @@ static int bench_pub_open(bench_pub_t *fixture) {
          received_count < BENCH_PATTERN_PEERS; ++spin) {
       if (bench_group_progress(&fixture->group) != SALTS_OK) return SALTS_EIO;
       for (size_t peer = 0u; peer < BENCH_PATTERN_PEERS; ++peer) {
-        if (fixture->subs[peer] == NULL) continue;
+        if (received_peer[peer]) continue;
         {
           unsigned char buffer[BENCH_PATTERN_PAYLOAD_BYTES];
           size_t received = 0u;
@@ -147,7 +148,7 @@ static int bench_pub_open(bench_pub_t *fixture) {
                                    &received, FLOWMQ_DONTWAIT);
           if (status == SALTS_OK) {
             if (received != sizeof(payload)) return SALTS_EPROTO;
-            fixture->subs[peer] = (flowmq_socket_t *)((uintptr_t)fixture->subs[peer] | 1u);
+            received_peer[peer] = 1u;
             ++received_count;
           } else if (status != SALTS_EBUSY) {
             return status;
@@ -155,13 +156,7 @@ static int bench_pub_open(bench_pub_t *fixture) {
         }
       }
     }
-    if (received_count == BENCH_PATTERN_PEERS) {
-      for (size_t peer = 0u; peer < BENCH_PATTERN_PEERS; ++peer)
-        fixture->subs[peer] = fixture->group.sockets[peer + 1u];
-      return SALTS_OK;
-    }
-    for (size_t peer = 0u; peer < BENCH_PATTERN_PEERS; ++peer)
-      fixture->subs[peer] = fixture->group.sockets[peer + 1u];
+    if (received_count == BENCH_PATTERN_PEERS) return SALTS_OK;
   }
   return SALTS_ETIMEDOUT;
 }
