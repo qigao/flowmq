@@ -40,6 +40,12 @@ static const flowmq_peer_write_desc_t
 #define FLOWMQ_PEER_LIFECYCLE_COUNT_ROW(state_value, next_mask_value) +1
 #define FLOWMQ_PEER_HANDSHAKE_COUNT_ROW(event_value, prerequisite_value) +1
 #define FLOWMQ_PEER_WRITE_COUNT_ROW(lane_value, completion_value) +1
+#define FLOWMQ_PEER_LIFECYCLE_MASK_ROW(state_value, next_mask_value) \
+  | FLOWMQ_PEER_LIFECYCLE_BIT(state_value)
+#define FLOWMQ_PEER_HANDSHAKE_MASK_ROW(event_value, prerequisite_value) \
+  | (event_value)
+#define FLOWMQ_PEER_WRITE_MASK_ROW(lane_value, completion_value) \
+  | FLOWMQ_PEER_LIFECYCLE_BIT(lane_value)
 enum {
   FLOWMQ_PEER_LIFECYCLE_SCHEMA_COUNT =
       0 Replay(FLOWMQ_PEER_LIFECYCLE_SCHEMA,
@@ -48,19 +54,43 @@ enum {
       0 Replay(FLOWMQ_PEER_HANDSHAKE_SCHEMA,
                FLOWMQ_PEER_HANDSHAKE_COUNT_ROW),
   FLOWMQ_PEER_WRITE_SCHEMA_COUNT =
-      0 Replay(FLOWMQ_PEER_WRITE_SCHEMA, FLOWMQ_PEER_WRITE_COUNT_ROW)
+      0 Replay(FLOWMQ_PEER_WRITE_SCHEMA, FLOWMQ_PEER_WRITE_COUNT_ROW),
+  FLOWMQ_PEER_LIFECYCLE_SCHEMA_MASK =
+      0 Replay(FLOWMQ_PEER_LIFECYCLE_SCHEMA,
+               FLOWMQ_PEER_LIFECYCLE_MASK_ROW),
+  FLOWMQ_PEER_HANDSHAKE_SCHEMA_MASK =
+      0 Replay(FLOWMQ_PEER_HANDSHAKE_SCHEMA,
+               FLOWMQ_PEER_HANDSHAKE_MASK_ROW),
+  FLOWMQ_PEER_WRITE_SCHEMA_MASK =
+      0 Replay(FLOWMQ_PEER_WRITE_SCHEMA, FLOWMQ_PEER_WRITE_MASK_ROW)
 };
 #undef FLOWMQ_PEER_LIFECYCLE_COUNT_ROW
 #undef FLOWMQ_PEER_HANDSHAKE_COUNT_ROW
 #undef FLOWMQ_PEER_WRITE_COUNT_ROW
+#undef FLOWMQ_PEER_LIFECYCLE_MASK_ROW
+#undef FLOWMQ_PEER_HANDSHAKE_MASK_ROW
+#undef FLOWMQ_PEER_WRITE_MASK_ROW
+
+#define FLOWMQ_PEER_LIFECYCLE_EXPECTED_MASK \
+  ((UINT8_C(1) << FLOWMQ_PEER_LIFECYCLE_COUNT) - UINT8_C(1))
+#define FLOWMQ_PEER_WRITE_EXPECTED_MASK \
+  ((UINT8_C(1) << FLOWMQ_PEER_WRITE_COUNT) - UINT8_C(1))
 
 _Static_assert(FLOWMQ_PEER_LIFECYCLE_SCHEMA_COUNT ==
                    FLOWMQ_PEER_LIFECYCLE_COUNT,
                "peer lifecycle schema must cover every lifecycle state");
+_Static_assert(FLOWMQ_PEER_LIFECYCLE_SCHEMA_MASK ==
+                   FLOWMQ_PEER_LIFECYCLE_EXPECTED_MASK,
+               "peer lifecycle schema must cover each lifecycle state once");
 _Static_assert(FLOWMQ_PEER_HANDSHAKE_SCHEMA_COUNT == 4,
                "peer handshake schema must cover all four progress facts");
+_Static_assert(FLOWMQ_PEER_HANDSHAKE_SCHEMA_MASK ==
+                   FLOWMQ_PEER_HANDSHAKE_READY,
+               "peer handshake schema must cover every progress fact");
 _Static_assert(FLOWMQ_PEER_WRITE_SCHEMA_COUNT == FLOWMQ_PEER_WRITE_COUNT,
                "peer write schema must cover every write lane");
+_Static_assert(FLOWMQ_PEER_WRITE_SCHEMA_MASK == FLOWMQ_PEER_WRITE_EXPECTED_MASK,
+               "peer write schema must cover every write lane once");
 
 static const flowmq_peer_handshake_desc_t *
 flowmq_peer_handshake_descriptor(uint8_t event) {
