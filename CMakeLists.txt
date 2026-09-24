@@ -153,6 +153,10 @@ target_include_directories(
 target_link_libraries(flowmq
                       PUBLIC Salts::Core Salts::TbeSchema
                       PRIVATE Salts::CSTL Salts::CMeta Salts::CNet)
+if(FLOWMQ_EXPERIMENT_ROUTE_REPLY_FACT_SOURCE)
+  target_compile_definitions(
+    flowmq PRIVATE FLOWMQ_EXPERIMENT_ROUTE_REPLY_FACT_SOURCE=1)
+endif()
 if(TARGET flowmq_media_provider_codegen)
   add_dependencies(flowmq flowmq_media_provider_codegen)
 endif()
