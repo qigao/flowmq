@@ -95,10 +95,41 @@ jobs:
             -DVCPKG_TARGET_TRIPLET=x64-linux \
             -DVCPKG_MANIFEST_MODE=OFF \
             -DVCPKG_INSTALLED_DIR="$FLOWMQ_VCPKG_INSTALLED" \
-            -DBUILD_TESTS=ON -DBUILD_EXAMPLES=OFF
+            -DBUILD_TESTS=ON -DBUILD_EXAMPLES=OFF \
+            -DFLOWMQ_EXPERIMENT_ROUTE_REPLY_FACT_SOURCE=ON
           export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$FLOWMQ_VCPKG_INSTALLED/x64-linux/lib"
           cmake --build build/cache-contract --parallel 2
           ctest --test-dir build/cache-contract --no-tests=error --output-on-failure
+
+      - name: Build direct-branch baseline benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build/dispatch-baseline -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DVCPKG_INSTALLED_DIR="$FLOWMQ_VCPKG_INSTALLED" \
+            -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF \
+            -DFLOWMQ_EXPERIMENT_ROUTE_REPLY_FACT_SOURCE=OFF
+          cmake --build build/dispatch-baseline --parallel 2 \
+            --target bench_flowmq_pattern_dispatch
+
+      - name: Compare real TCP baseline and reply-peer candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$FLOWMQ_VCPKG_INSTALLED/x64-linux/lib"
+          samples=1000
+          echo "=== FLOWMQ_AB_BASELINE_1 ==="
+          FLOWMQ_BENCH_SAMPLES="$samples" build/dispatch-baseline/bin/bench_flowmq_pattern_dispatch
+          echo "=== FLOWMQ_AB_CANDIDATE_1 ==="
+          FLOWMQ_BENCH_SAMPLES="$samples" build/cache-contract/bin/bench_flowmq_pattern_dispatch
+          echo "=== FLOWMQ_AB_CANDIDATE_2 ==="
+          FLOWMQ_BENCH_SAMPLES="$samples" build/cache-contract/bin/bench_flowmq_pattern_dispatch
+          echo "=== FLOWMQ_AB_BASELINE_2 ==="
+          FLOWMQ_BENCH_SAMPLES="$samples" build/dispatch-baseline/bin/bench_flowmq_pattern_dispatch
 
       - name: Measure dispatch policy candidates
         shell: bash
@@ -125,7 +156,8 @@ jobs:
             -DVCPKG_TARGET_TRIPLET=x64-linux \
             -DVCPKG_MANIFEST_MODE=OFF \
             -DVCPKG_INSTALLED_DIR="$FLOWMQ_VCPKG_INSTALLED" \
-            -DBUILD_TESTS=ON -DBUILD_EXAMPLES=OFF -DENABLE_ASAN=ON
+            -DBUILD_TESTS=ON -DBUILD_EXAMPLES=OFF -DENABLE_ASAN=ON \
+            -DFLOWMQ_EXPERIMENT_ROUTE_REPLY_FACT_SOURCE=ON
           export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$FLOWMQ_VCPKG_INSTALLED/x64-linux/lib"
           export ASAN_OPTIONS="detect_leaks=1:halt_on_error=1"
           cmake --build build/peer-state-asan --parallel 2 \
