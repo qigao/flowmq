@@ -118,7 +118,6 @@ struct flowmq_socket_peer_s {
   unsigned receiving_multipart : 1;
   unsigned commit_pending : 1;
   unsigned heartbeat_active : 1;
-  unsigned heartbeat_closing : 1;
   unsigned pong_pending : 1;
 };
 
@@ -309,10 +308,20 @@ static void flowmq_socket_peer_storage_release(flowmq_socket_peer_t *peer) {
 }
 
 static void flowmq_socket_peer_release(flowmq_socket_peer_t *peer) {
+  int status;
   if (peer == NULL || !flowmq_peer_state_is_used(&peer->state)) return;
-  if (!flowmq_peer_state_is_retired(&peer->state))
+  if (!flowmq_peer_state_is_retired(&peer->state)) {
     flowmq_socket_peer_storage_release(peer);
-  (void)flowmq_peer_state_release(&peer->state);
+    if (peer->state.lifecycle != FLOWMQ_PEER_LIFECYCLE_ALLOCATED) {
+      status = flowmq_peer_state_transition(
+          &peer->state, FLOWMQ_PEER_LIFECYCLE_RETIRED);
+      if (status != SALTS_OK && peer->owner != NULL)
+        flowmq_socket_fail(peer->owner, SALTS_EPROTO);
+    }
+  }
+  if (peer->state.lifecycle == FLOWMQ_PEER_LIFECYCLE_RETIRED ||
+      peer->state.lifecycle == FLOWMQ_PEER_LIFECYCLE_ALLOCATED)
+    (void)flowmq_peer_state_release(&peer->state);
   memset(peer, 0, sizeof(*peer));
 }
 
@@ -654,12 +663,17 @@ static int flowmq_socket_peer_admit(flowmq_socket_peer_t *peer,
   int status;
   if (!flowmq_socket_peer_can_admit(peer, payload_size, message_end))
     return SALTS_ENOBUFS;
-  if (!peer->write_busy && peer->outbound_count == 0u) {
+  if (flowmq_peer_state_write_idle(&peer->state) &&
+      peer->outbound_count == 0u) {
+    status =
+        flowmq_peer_state_write_begin(&peer->state, FLOWMQ_PEER_WRITE_DATA);
+    if (status != SALTS_OK) return status;
     status = cnet_sendv(&socket->client, peer->connection, segments,
                         segment_count);
-    if (status != SALTS_OK) return status;
-    peer->write_busy = 1u;
-    peer->writing_data = 1u;
+    if (status != SALTS_OK) {
+      flowmq_peer_state_write_cancel(&peer->state);
+      return status;
+    }
     peer->inflight_payload_size = payload_size;
     peer->inflight_messages = message_end ? 1u : 0u;
   } else {
@@ -701,7 +715,8 @@ static int flowmq_socket_peer_flush(flowmq_socket_peer_t *peer) {
   size_t batch_payload_size = 0u;
   size_t batch_messages = 0u;
   int status;
-  if (!peer->used || !peer->connected || peer->write_busy ||
+  if (!flowmq_peer_state_is_connected(&peer->state) ||
+      !flowmq_peer_state_write_idle(&peer->state) ||
       peer->outbound_count == 0u)
     return SALTS_OK;
   while (batch_count < peer->outbound_count) {
@@ -720,11 +735,15 @@ static int flowmq_socket_peer_flush(flowmq_socket_peer_t *peer) {
     ++batch_count;
   }
   if (batch_count == 0u) return SALTS_EMSGSIZE;
+  status =
+      flowmq_peer_state_write_begin(&peer->state, FLOWMQ_PEER_WRITE_DATA);
+  if (status != SALTS_OK) return status;
   status = cnet_sendv(&socket->client, peer->connection,
                       socket->send_segments, batch_count);
-  if (status != SALTS_OK) return status;
-  peer->write_busy = 1u;
-  peer->writing_data = 1u;
+  if (status != SALTS_OK) {
+    flowmq_peer_state_write_cancel(&peer->state);
+    return status;
+  }
   peer->inflight_payload_size = batch_payload_size;
   peer->inflight_messages = batch_messages;
   for (size_t i = 0u; i < batch_count; ++i) {
@@ -837,13 +856,17 @@ static int flowmq_socket_peer_admit_control(
   flowmq_socket_t *socket = peer->owner;
   flowmq_protocol_frame_t frame = {0};
   int status;
-  if (!flowmq_socket_peer_ready(peer) || peer->write_busy)
+  if (!flowmq_socket_peer_ready(peer) ||
+      !flowmq_peer_state_write_idle(&peer->state))
     return SALTS_ENOBUFS;
   frame.kind = kind;
   frame.pattern = socket->pattern.pattern;
   frame.payload = payload;
+  status =
+      flowmq_peer_state_write_begin(&peer->state, FLOWMQ_PEER_WRITE_CONTROL);
+  if (status != SALTS_OK) return status;
   status = flowmq_socket_send_frame(socket, peer->connection, &frame);
-  if (status == SALTS_OK) peer->write_busy = 1u;
+  if (status != SALTS_OK) flowmq_peer_state_write_cancel(&peer->state);
   return status;
 }
 
@@ -852,7 +875,9 @@ static int flowmq_socket_peer_flow_update_progress(
   flowmq_protocol_flow_update_t update;
   unsigned char payload[FLOWMQ_PROTOCOL_FLOW_UPDATE_PAYLOAD_SIZE];
   int status;
-  if (!flowmq_socket_peer_ready(peer) || peer->write_busy) return SALTS_OK;
+  if (!flowmq_socket_peer_ready(peer) ||
+      !flowmq_peer_state_write_idle(&peer->state))
+    return SALTS_OK;
   status = flowmq_flow_control_next_update(&peer->flow_control, salts_hrtime(),
                                            &update);
   if (status == FLOWMQ_FLOW_CONTROL_NO_UPDATE) return SALTS_OK;
@@ -872,8 +897,7 @@ static int flowmq_socket_peer_heartbeat_progress(flowmq_socket_peer_t *peer) {
   uint64_t now_ns;
   flowmq_protocol_heartbeat_action_t action;
   int status;
-  if (!flowmq_socket_peer_ready(peer) || peer->heartbeat_closing)
-    return SALTS_OK;
+  if (!flowmq_socket_peer_ready(peer)) return SALTS_OK;
   if (peer->pong_pending) {
     status = flowmq_socket_peer_admit_control(
         peer, FLOWMQ_PROTOCOL_FRAME_PONG, (vstr){0});
@@ -890,7 +914,7 @@ static int flowmq_socket_peer_heartbeat_progress(flowmq_socket_peer_t *peer) {
   if (action == FLOWMQ_PROTOCOL_HEARTBEAT_SEND_PING) {
     /* Control frames take the next serialized CNet write slot so application
      * backlog cannot postpone dead-peer detection indefinitely. */
-    if (peer->write_busy) return SALTS_OK;
+    if (!flowmq_peer_state_write_idle(&peer->state)) return SALTS_OK;
     status = flowmq_socket_peer_admit_control(
         peer, FLOWMQ_PROTOCOL_FRAME_PING, (vstr){0});
     if (status == SALTS_ENOBUFS || status == SALTS_EBUSY) return SALTS_OK;
@@ -898,10 +922,7 @@ static int flowmq_socket_peer_heartbeat_progress(flowmq_socket_peer_t *peer) {
     flowmq_protocol_heartbeat_deadlines_on_ping(&peer->heartbeat, now_ns);
     return SALTS_OK;
   }
-  status = cnet_close(&peer->owner->client, peer->connection);
-  if (status != SALTS_OK && status != SALTS_EALREADY) return status;
-  peer->heartbeat_closing = 1u;
-  peer->connected = 0u;
+  flowmq_socket_peer_fail(peer);
   return SALTS_OK;
 }
 
@@ -938,7 +959,8 @@ static int flowmq_socket_process_receive(flowmq_socket_peer_t *peer) {
     int status = flowmq_stream_decoder_next(&peer->decoder, &frame, &consumed);
     if (status == FLOWMQ_PROTOCOL_INCOMPLETE) return SALTS_OK;
     if (status != SALTS_OK) return status;
-    if (!peer->hello_received) {
+    if (!flowmq_peer_state_handshake_has(
+            &peer->state, FLOWMQ_PEER_HANDSHAKE_HELLO_RX)) {
       status =
           flowmq_pattern_socket_hello_validate(socket->pattern.pattern, &frame);
       if (status == SALTS_OK) {
@@ -947,8 +969,11 @@ static int flowmq_socket_process_receive(flowmq_socket_peer_t *peer) {
             socket->pattern.desc->routing_class == FLOWMQ_PATTERN_ROUTE_IDENTITY) {
           for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
             flowmq_socket_peer_t *candidate = &socket->peers[i];
-            if (candidate == peer || !candidate->used || candidate->retired ||
-                !candidate->hello_received ||
+            if (candidate == peer ||
+                !flowmq_peer_state_is_used(&candidate->state) ||
+                flowmq_peer_state_is_retired(&candidate->state) ||
+                !flowmq_peer_state_handshake_has(
+                    &candidate->state, FLOWMQ_PEER_HANDSHAKE_HELLO_RX) ||
                 candidate->identity_size != frame.identity.len)
               continue;
             if (frame.identity.len == 0u ||
@@ -969,14 +994,15 @@ static int flowmq_socket_process_receive(flowmq_socket_peer_t *peer) {
           peer->identity_size = frame.identity.len;
         }
         peer->remote_pattern = frame.pattern;
-        if (status == SALTS_OK) {
-          peer->hello_received = 1u;
-          if (peer->heartbeat_active)
-            flowmq_protocol_heartbeat_deadlines_on_receive(
-                &peer->heartbeat, salts_hrtime());
-        }
+        if (status == SALTS_OK)
+          status = flowmq_peer_state_handshake_mark(
+              &peer->state, FLOWMQ_PEER_HANDSHAKE_HELLO_RX);
+        if (status == SALTS_OK && peer->heartbeat_active)
+          flowmq_protocol_heartbeat_deadlines_on_receive(
+              &peer->heartbeat, salts_hrtime());
       }
-    } else if (!peer->settings_received) {
+    } else if (!flowmq_peer_state_handshake_has(
+                   &peer->state, FLOWMQ_PEER_HANDSHAKE_SETTINGS_RX)) {
       flowmq_protocol_settings_t settings;
       status = frame.pattern == peer->remote_pattern &&
                        frame.kind == FLOWMQ_PROTOCOL_FRAME_SETTINGS
@@ -988,12 +1014,12 @@ static int flowmq_socket_process_receive(flowmq_socket_peer_t *peer) {
       if (status == SALTS_OK)
         status = flowmq_flow_control_apply_settings(&peer->flow_control,
                                                     &settings);
-      if (status == SALTS_OK) {
-        peer->settings_received = 1u;
-        if (peer->heartbeat_active)
-          flowmq_protocol_heartbeat_deadlines_on_receive(
-              &peer->heartbeat, salts_hrtime());
-      }
+      if (status == SALTS_OK)
+        status = flowmq_peer_state_handshake_mark(
+            &peer->state, FLOWMQ_PEER_HANDSHAKE_SETTINGS_RX);
+      if (status == SALTS_OK && peer->heartbeat_active)
+        flowmq_protocol_heartbeat_deadlines_on_receive(
+            &peer->heartbeat, salts_hrtime());
     } else {
       status = frame.pattern == peer->remote_pattern
                    ? flowmq_pattern_data_direction_validate(
@@ -1074,12 +1100,16 @@ static void flowmq_socket_on_state(void *user, cnet_connection connection,
         flowmq_reconnect_reset(&endpoint->reconnect);
       }
     }
-    peer->connected = 1u;
+    if (flowmq_peer_state_transition(
+            &peer->state, FLOWMQ_PEER_LIFECYCLE_CONNECTED) != SALTS_OK) {
+      flowmq_socket_fail(socket, SALTS_EPROTO);
+      return;
+    }
     if (socket->pattern.desc->routing_class == FLOWMQ_PATTERN_ROUTE_SINGLE) {
       for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
         flowmq_socket_peer_t *candidate = &socket->peers[i];
-        if (candidate != peer && candidate->used && !candidate->retired &&
-            candidate->connected) {
+        if (candidate != peer &&
+            flowmq_peer_state_is_connected(&candidate->state)) {
           flowmq_socket_peer_fail(peer);
           return;
         }
@@ -1134,19 +1164,16 @@ static void flowmq_socket_on_receive(void *user, cnet_connection connection,
 static void flowmq_socket_on_send(void *user, cnet_connection connection,
                                   size_t size) {
   flowmq_socket_peer_t *peer = (flowmq_socket_peer_t *)user;
+  flowmq_peer_write_lane_t completed = FLOWMQ_PEER_WRITE_IDLE;
+  int status;
   (void)connection;
   (void)size;
-  peer->write_busy = 0u;
-  if (peer->writing_hello) {
-    peer->writing_hello = 0u;
-    peer->hello_sent = 1u;
+  status = flowmq_peer_state_write_complete(&peer->state, &completed);
+  if (status != SALTS_OK) {
+    flowmq_socket_fail(peer->owner, SALTS_EPROTO);
+    return;
   }
-  if (peer->writing_settings) {
-    peer->writing_settings = 0u;
-    peer->settings_sent = 1u;
-  }
-  if (peer->writing_data) {
-    peer->writing_data = 0u;
+  if (completed == FLOWMQ_PEER_WRITE_DATA) {
     if (peer->outbound_bytes >= peer->inflight_payload_size)
       peer->outbound_bytes -= peer->inflight_payload_size;
     else
@@ -1362,7 +1389,8 @@ static int flowmq_socket_sync_subscription(flowmq_socket_peer_t *peer) {
   int status;
   if (socket->pattern.desc->subscription_class != FLOWMQ_PATTERN_SUB_SUBSCRIBER)
     return SALTS_OK;
-  if (!flowmq_socket_peer_ready(peer) || peer->write_busy)
+  if (!flowmq_socket_peer_ready(peer) ||
+      !flowmq_peer_state_write_idle(&peer->state))
     return SALTS_OK;
 
   for (size_t i = 0u;
@@ -1396,20 +1424,25 @@ static int flowmq_socket_sync_subscription(flowmq_socket_peer_t *peer) {
                                                topic,
                                                FLOWMQ_SOCKET_MAX_FRAME_SIZE,
                                                &encoded);
+  if (status == SALTS_OK)
+    status = flowmq_peer_state_write_begin(
+        &peer->state, FLOWMQ_PEER_WRITE_CONTROL);
   if (status == SALTS_OK && kind == FLOWMQ_PROTOCOL_FRAME_SUBSCRIBE)
     status = flowmq_subscription_set_update(&peer->synced_subscriptions, 1,
                                              topic, &changed);
   if (status == SALTS_OK)
     status = cnet_send(&socket->client, peer->connection, encoded,
                        tstr_len(encoded));
-  if (status != SALTS_OK && kind == FLOWMQ_PROTOCOL_FRAME_SUBSCRIBE)
-    (void)flowmq_subscription_set_update(&peer->synced_subscriptions, 0, topic,
-                                         &changed);
+  if (status != SALTS_OK) {
+    flowmq_peer_state_write_cancel(&peer->state);
+    if (kind == FLOWMQ_PROTOCOL_FRAME_SUBSCRIBE)
+      (void)flowmq_subscription_set_update(&peer->synced_subscriptions, 0,
+                                           topic, &changed);
+  }
   if (status == SALTS_OK && kind == FLOWMQ_PROTOCOL_FRAME_UNSUBSCRIBE)
     status = flowmq_subscription_set_update(&peer->synced_subscriptions, 0,
                                              topic, &changed);
   if (encoded != NULL) tstr_free(encoded);
-  if (status == SALTS_OK) peer->write_busy = 1u;
   return status;
 }
 
@@ -2189,11 +2222,13 @@ static int flowmq_socket_try_recv(flowmq_socket_t *socket, void *data,
     return SALTS_EPROTO;
   if (message->peer_index >= FLOWMQ_SOCKET_PEER_CAPACITY) return SALTS_EPROTO;
   peer = &socket->peers[message->peer_index];
-  if (!peer->used || message->peer_generation == 0u ||
+  if (!flowmq_peer_state_is_used(&peer->state) ||
+      message->peer_generation == 0u ||
       message->peer_generation != peer->flow_control.local_generation ||
       peer->queued_parts == 0u)
     return SALTS_EPROTO;
-  if (message->credit_size != 0u && !peer->retired) {
+  if (message->credit_size != 0u &&
+      !flowmq_peer_state_is_retired(&peer->state)) {
     uint64_t consumed_at_ns = peer->flow_control.update_pending
                                   ? 0u
                                   : salts_hrtime();
@@ -2207,7 +2242,7 @@ static int flowmq_socket_try_recv(flowmq_socket_t *socket, void *data,
   socket->last_rcvmore = message_more != 0;
   flowmq_pattern_state_receive_commit(&socket->pattern, message_more);
   if (!message_more && socket->pattern.desc->fsm_class == FLOWMQ_PATTERN_FSM_REP) {
-    if (peer->retired) {
+    if (flowmq_peer_state_is_retired(&peer->state)) {
       if (socket->send_cancel_error == SALTS_OK)
         socket->send_cancel_error = SALTS_ENOTCONN;
       socket->reply_peer_valid = 0u;
@@ -2232,7 +2267,8 @@ static int flowmq_socket_try_recv(flowmq_socket_t *socket, void *data,
   socket->inbound_read =
       (socket->inbound_read + 1u) % FLOWMQ_SOCKET_INBOUND_CAPACITY;
   --socket->inbound_count;
-  if (peer->retired && peer->queued_parts == 0u)
+  if (flowmq_peer_state_is_retired(&peer->state) &&
+      peer->queued_parts == 0u)
     flowmq_socket_peer_release(peer);
   return SALTS_OK;
 }
@@ -2284,11 +2320,15 @@ static int flowmq_socket_drive(flowmq_socket_t *socket, uint32_t timeout_ms,
   if (status != SALTS_OK) return status;
   for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
     flowmq_socket_peer_t *peer = &socket->peers[i];
-    if (!peer->used) continue;
-    if (peer->close_pending) {
+    if (!flowmq_peer_state_is_used(&peer->state)) continue;
+    if (flowmq_peer_state_needs_close_retry(&peer->state)) {
       status = cnet_close(&socket->client, peer->connection);
       if (status == SALTS_OK || status == SALTS_EALREADY) {
-        peer->close_pending = 0u;
+        if (flowmq_peer_state_transition(
+                &peer->state, FLOWMQ_PEER_LIFECYCLE_CLOSING) != SALTS_OK) {
+          flowmq_socket_fail(socket, SALTS_EPROTO);
+          return SALTS_EPROTO;
+        }
       } else if (status == SALTS_EBUSY || status == SALTS_ENOBUFS) {
         continue;
       } else {
@@ -2296,7 +2336,7 @@ static int flowmq_socket_drive(flowmq_socket_t *socket, uint32_t timeout_ms,
         return status;
       }
     }
-    if (peer->retired || !peer->connected) continue;
+    if (!flowmq_peer_state_is_connected(&peer->state)) continue;
     if (peer->commit_pending) {
       status = flowmq_socket_resume_receive(peer);
       if (status != SALTS_OK && status != SALTS_EBUSY &&
@@ -2305,8 +2345,11 @@ static int flowmq_socket_drive(flowmq_socket_t *socket, uint32_t timeout_ms,
         continue;
       }
     }
-    if (peer->connected && peer->hello_sent && !peer->settings_sent &&
-        !peer->writing_settings) {
+    if (flowmq_peer_state_handshake_has(
+            &peer->state, FLOWMQ_PEER_HANDSHAKE_HELLO_TX) &&
+        !flowmq_peer_state_handshake_has(
+            &peer->state, FLOWMQ_PEER_HANDSHAKE_SETTINGS_TX) &&
+        flowmq_peer_state_write_idle(&peer->state)) {
       status = flowmq_socket_send_settings(peer);
       if (status != SALTS_OK && status != SALTS_EBUSY &&
           status != SALTS_ENOBUFS) {
@@ -2332,7 +2375,8 @@ static int flowmq_socket_drive(flowmq_socket_t *socket, uint32_t timeout_ms,
         continue;
       }
     }
-    if (!peer->write_busy && peer->outbound_count != 0u) {
+    if (flowmq_peer_state_write_idle(&peer->state) &&
+        peer->outbound_count != 0u) {
       status = flowmq_socket_peer_flush(peer);
       if (status != SALTS_OK && status != SALTS_EBUSY &&
           status != SALTS_ENOBUFS) {
