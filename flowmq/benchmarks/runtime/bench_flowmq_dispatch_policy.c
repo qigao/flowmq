@@ -117,17 +117,20 @@ flowmq_dispatch_cached_ops(const flowmq_dispatch_case_t *c) {
   return c->ops((int)c->send_peer_active);
 }
 
-static void flowmq_dispatch_init_cases(void) {
+static void flowmq_dispatch_init_cases_for(
+    flowmq_protocol_pattern_t fixed_pattern, int mixed_patterns) {
   uint32_t state = UINT32_C(0x9e3779b9);
 
   for (size_t i = 0u; i < FLOWMQ_DISPATCH_CASES; ++i) {
-    flowmq_protocol_pattern_t pattern;
+    flowmq_protocol_pattern_t pattern = fixed_pattern;
     const flowmq_pattern_desc_t *desc;
 
     state = state * UINT32_C(1664525) + UINT32_C(1013904223);
-    pattern = (flowmq_protocol_pattern_t)(
-        FLOWMQ_PROTOCOL_PUB +
-        (state % (FLOWMQ_PROTOCOL_XSUB - FLOWMQ_PROTOCOL_PUB + 1u)));
+    if (mixed_patterns) {
+      pattern = (flowmq_protocol_pattern_t)(
+          FLOWMQ_PROTOCOL_PUB +
+          (state % (FLOWMQ_PROTOCOL_XSUB - FLOWMQ_PROTOCOL_PUB + 1u)));
+    }
     desc = flowmq_pattern_descriptor(pattern);
 
     FLOWMQ_DISPATCH_CASE_DATA[i].desc = desc;
@@ -138,7 +141,21 @@ static void flowmq_dispatch_init_cases(void) {
         (unsigned)((state >> 13) & 1u);
     FLOWMQ_DISPATCH_CASE_DATA[i].send_peer_active =
         (unsigned)((state >> 21) & 1u);
+
+    /* Keep order-sensitive fixed-pattern cases close to reachable runtime
+     * states. ROUTER pins a peer only after the routing-id first part, and REP
+     * pins only while a multipart reply is in progress. */
+    if (!mixed_patterns && pattern == FLOWMQ_PROTOCOL_ROUTER)
+      FLOWMQ_DISPATCH_CASE_DATA[i].send_peer_active =
+          FLOWMQ_DISPATCH_CASE_DATA[i].sending_multipart;
+    if (!mixed_patterns && pattern == FLOWMQ_PROTOCOL_REP &&
+        !FLOWMQ_DISPATCH_CASE_DATA[i].sending_multipart)
+      FLOWMQ_DISPATCH_CASE_DATA[i].send_peer_active = 0u;
   }
+}
+
+static void flowmq_dispatch_init_mixed_cases(void) {
+  flowmq_dispatch_init_cases_for(FLOWMQ_PROTOCOL_PAIR, 1);
 }
 
 static uint64_t flowmq_dispatch_run_direct(void) {
@@ -163,44 +180,68 @@ static uint64_t flowmq_dispatch_run_cached_ops(void) {
   return result;
 }
 
+static void flowmq_dispatch_check_equivalence(void) {
+  uint64_t direct_result = flowmq_dispatch_run_direct();
+  uint64_t switch_result = flowmq_dispatch_run_switch();
+  uint64_t ops_result = flowmq_dispatch_run_cached_ops();
+
+  for (size_t i = 0u; i < FLOWMQ_DISPATCH_CASES; ++i) {
+    flowmq_dispatch_action_t direct =
+        flowmq_dispatch_direct(&FLOWMQ_DISPATCH_CASE_DATA[i]);
+    check_equal(flowmq_dispatch_switch(&FLOWMQ_DISPATCH_CASE_DATA[i]),
+                direct);
+    check_equal(flowmq_dispatch_cached_ops(&FLOWMQ_DISPATCH_CASE_DATA[i]),
+                direct);
+  }
+  check_equal(switch_result, direct_result);
+  check_equal(ops_result, direct_result);
+}
+
+#define FLOWMQ_DISPATCH_BENCH_TRIPLET(prefix, samples_)                           \
+  benchmark_ops(prefix " direct", samples_, FLOWMQ_DISPATCH_CASES) {              \
+    FLOWMQ_DISPATCH_SINK = flowmq_dispatch_run_direct();                          \
+  }                                                                               \
+  benchmark_ops(prefix " switch", samples_, FLOWMQ_DISPATCH_CASES) {              \
+    FLOWMQ_DISPATCH_SINK = flowmq_dispatch_run_switch();                          \
+  }                                                                               \
+  benchmark_ops(prefix " cached-ops", samples_, FLOWMQ_DISPATCH_CASES) {          \
+    FLOWMQ_DISPATCH_SINK = flowmq_dispatch_run_cached_ops();                      \
+  }
+
 spec("FlowMQ dispatch policy candidates") {
-  bench("same semantic cases") {
-    uint64_t direct_result;
-    uint64_t switch_result;
-    uint64_t ops_result;
+  bench("mixed-pattern stress and per-socket steady state") {
+    const size_t steady_samples = FLOWMQ_DISPATCH_SAMPLES / 2u;
+    uint64_t expected;
 
-    flowmq_dispatch_init_cases();
+    flowmq_dispatch_init_mixed_cases();
+    flowmq_dispatch_check_equivalence();
+    expected = flowmq_dispatch_run_direct();
 
-    for (size_t i = 0u; i < FLOWMQ_DISPATCH_CASES; ++i) {
-      flowmq_dispatch_action_t direct =
-          flowmq_dispatch_direct(&FLOWMQ_DISPATCH_CASE_DATA[i]);
-      check_equal(flowmq_dispatch_switch(&FLOWMQ_DISPATCH_CASE_DATA[i]),
-                  direct);
-      check_equal(flowmq_dispatch_cached_ops(&FLOWMQ_DISPATCH_CASE_DATA[i]),
-                  direct);
-    }
+    FLOWMQ_DISPATCH_BENCH_TRIPLET("mixed", FLOWMQ_DISPATCH_SAMPLES)
+    check_equal(FLOWMQ_DISPATCH_SINK, expected);
 
-    direct_result = flowmq_dispatch_run_direct();
-    switch_result = flowmq_dispatch_run_switch();
-    ops_result = flowmq_dispatch_run_cached_ops();
-    check_equal(switch_result, direct_result);
-    check_equal(ops_result, direct_result);
+    flowmq_dispatch_init_cases_for(FLOWMQ_PROTOCOL_PUB, 0);
+    flowmq_dispatch_check_equivalence();
+    expected = flowmq_dispatch_run_direct();
+    FLOWMQ_DISPATCH_BENCH_TRIPLET("PUB steady", steady_samples)
+    check_equal(FLOWMQ_DISPATCH_SINK, expected);
 
-    benchmark_ops("current direct branches", FLOWMQ_DISPATCH_SAMPLES,
-                  FLOWMQ_DISPATCH_CASES) {
-      FLOWMQ_DISPATCH_SINK = flowmq_dispatch_run_direct();
-    }
+    flowmq_dispatch_init_cases_for(FLOWMQ_PROTOCOL_PUSH, 0);
+    flowmq_dispatch_check_equivalence();
+    expected = flowmq_dispatch_run_direct();
+    FLOWMQ_DISPATCH_BENCH_TRIPLET("PUSH steady", steady_samples)
+    check_equal(FLOWMQ_DISPATCH_SINK, expected);
 
-    benchmark_ops("switch routing_class", FLOWMQ_DISPATCH_SAMPLES,
-                  FLOWMQ_DISPATCH_CASES) {
-      FLOWMQ_DISPATCH_SINK = flowmq_dispatch_run_switch();
-    }
+    flowmq_dispatch_init_cases_for(FLOWMQ_PROTOCOL_ROUTER, 0);
+    flowmq_dispatch_check_equivalence();
+    expected = flowmq_dispatch_run_direct();
+    FLOWMQ_DISPATCH_BENCH_TRIPLET("ROUTER steady", steady_samples)
+    check_equal(FLOWMQ_DISPATCH_SINK, expected);
 
-    benchmark_ops("cached ops pointer", FLOWMQ_DISPATCH_SAMPLES,
-                  FLOWMQ_DISPATCH_CASES) {
-      FLOWMQ_DISPATCH_SINK = flowmq_dispatch_run_cached_ops();
-    }
-
-    check_equal(FLOWMQ_DISPATCH_SINK, direct_result);
+    flowmq_dispatch_init_cases_for(FLOWMQ_PROTOCOL_REP, 0);
+    flowmq_dispatch_check_equivalence();
+    expected = flowmq_dispatch_run_direct();
+    FLOWMQ_DISPATCH_BENCH_TRIPLET("REP steady", steady_samples)
+    check_equal(FLOWMQ_DISPATCH_SINK, expected);
   }
 }
