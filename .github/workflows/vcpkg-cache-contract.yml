@@ -73,7 +73,7 @@ jobs:
           <Project Sdk="Microsoft.NET.Sdk">
             <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
             <ItemGroup>
-              <PackageReference Include="Salts.Native" Version="[1.2.0]" />
+              <PackageReference Include="Salts.Native" Version="[1.5.0]" />
               <PackageReference Include="SaltsUtils.Native" Version="[2.0.2]" />
             </ItemGroup>
           </Project>
@@ -83,7 +83,7 @@ jobs:
             --name github --username qigao --password "$GITHUB_TOKEN" \
             --store-password-in-clear-text --configfile "$config"
           dotnet restore "$project" --configfile "$config" --packages "$packages"
-          echo "SALTS_ROOT=$packages/salts.native/1.2.0/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "SALTS_ROOT=$packages/salts.native/1.5.0/sdk/linux-x64" >> "$GITHUB_ENV"
           echo "SALTS_UTILS_ROOT=$packages/saltsutils.native/2.0.2/sdk/linux-x64" >> "$GITHUB_ENV"
       - name: Configure, build and test against released SDKs
         shell: bash
