@@ -167,6 +167,39 @@ static bool flowmq_q_build_commit_before_admit(cflow_graph *graph) {
          FLOWMQ_Q_ADD(graph, flowmq_q_submit_io);
 }
 
+static bool flowmq_q_build_admit_before_encode(cflow_graph *graph) {
+  cflow_graph_init(graph, &cmeta_type_int);
+  if (graph->root == CMETA_INVALID_ID) return false;
+  return FLOWMQ_Q_ADD(graph, flowmq_q_validate) &&
+         FLOWMQ_Q_ADD(graph, flowmq_q_route) &&
+         FLOWMQ_Q_ADD(graph, flowmq_q_local_capacity) &&
+         FLOWMQ_Q_ADD(graph, flowmq_q_remote_credit) &&
+         FLOWMQ_Q_ADD(graph, flowmq_q_admit) &&
+         FLOWMQ_Q_ADD(graph, flowmq_q_encode) &&
+         FLOWMQ_Q_ADD(graph, flowmq_q_commit_credit) &&
+         FLOWMQ_Q_ADD(graph, flowmq_q_submit_io);
+}
+
+static bool flowmq_q_build_io_before_commit(cflow_graph *graph) {
+  cflow_graph_init(graph, &cmeta_type_int);
+  if (graph->root == CMETA_INVALID_ID) return false;
+  return FLOWMQ_Q_ADD(graph, flowmq_q_validate) &&
+         FLOWMQ_Q_ADD(graph, flowmq_q_route) &&
+         FLOWMQ_Q_ADD(graph, flowmq_q_local_capacity) &&
+         FLOWMQ_Q_ADD(graph, flowmq_q_remote_credit) &&
+         FLOWMQ_Q_ADD(graph, flowmq_q_encode) &&
+         FLOWMQ_Q_ADD(graph, flowmq_q_admit) &&
+         FLOWMQ_Q_ADD(graph, flowmq_q_submit_io) &&
+         FLOWMQ_Q_ADD(graph, flowmq_q_commit_credit);
+}
+
+static bool flowmq_q_result_invalid(const cflow_result *result) {
+  return result != NULL && result->count == 1u &&
+         cmeta_type_equal(result->type, &cmeta_type_int) &&
+         result->data != NULL &&
+         (*(const int *)result->data & FLOWMQ_Q_INVALID) != 0;
+}
+
 static bool flowmq_q_result_is(const cflow_result *result, int expected) {
   return result != NULL && result->count == 1u &&
          cmeta_type_equal(result->type, &cmeta_type_int) &&
@@ -212,6 +245,38 @@ spec("FlowMQ CFlow control-plane qualification") {
     check_true(cflow_verify_pipeline(&graph, &initial, 1u, &report));
     check_true(cflow_eval_array(&graph, &initial, 1u, &result));
     check_true((*(const int *)result.data & FLOWMQ_Q_INVALID) != 0);
+    check_false(flowmq_q_graph_accepts(&graph, &report));
+
+    cflow_result_destroy(&result);
+    cflow_graph_destroy(&graph);
+  }
+
+  it("rejects admission before encode through the qualification state") {
+    cflow_graph graph = {0};
+    cflow_verify_report report = {0};
+    const int initial = 0;
+    cflow_result result = {0};
+
+    check_true(flowmq_q_build_admit_before_encode(&graph));
+    check_true(cflow_verify_pipeline(&graph, &initial, 1u, &report));
+    check_true(cflow_eval_array(&graph, &initial, 1u, &result));
+    check_true(flowmq_q_result_invalid(&result));
+    check_false(flowmq_q_graph_accepts(&graph, &report));
+
+    cflow_result_destroy(&result);
+    cflow_graph_destroy(&graph);
+  }
+
+  it("rejects IO submission before credit commit") {
+    cflow_graph graph = {0};
+    cflow_verify_report report = {0};
+    const int initial = 0;
+    cflow_result result = {0};
+
+    check_true(flowmq_q_build_io_before_commit(&graph));
+    check_true(cflow_verify_pipeline(&graph, &initial, 1u, &report));
+    check_true(cflow_eval_array(&graph, &initial, 1u, &result));
+    check_true(flowmq_q_result_invalid(&result));
     check_false(flowmq_q_graph_accepts(&graph, &report));
 
     cflow_result_destroy(&result);
