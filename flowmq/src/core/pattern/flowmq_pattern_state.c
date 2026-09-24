@@ -5,70 +5,70 @@
 #include <string.h>
 
 int flowmq_pattern_can_send(flowmq_protocol_pattern_t pattern) {
-  if (pattern < FLOWMQ_PROTOCOL_PUB || pattern > FLOWMQ_PROTOCOL_XSUB) return 0;
-  return pattern != FLOWMQ_PROTOCOL_SUB && pattern != FLOWMQ_PROTOCOL_PULL;
+  return flowmq_pattern_has_capability(pattern, FLOWMQ_PATTERN_CAP_API_SEND);
 }
 
 int flowmq_pattern_can_receive(flowmq_protocol_pattern_t pattern) {
-  if (pattern < FLOWMQ_PROTOCOL_PUB || pattern > FLOWMQ_PROTOCOL_XSUB) return 0;
-  return pattern != FLOWMQ_PROTOCOL_PUB && pattern != FLOWMQ_PROTOCOL_PUSH;
+  return flowmq_pattern_has_capability(pattern, FLOWMQ_PATTERN_CAP_API_RECV);
 }
 
 int flowmq_pattern_state_init(flowmq_pattern_state_t *state,
                               flowmq_protocol_pattern_t pattern) {
-  if (state == NULL || pattern < FLOWMQ_PROTOCOL_PUB ||
-      pattern > FLOWMQ_PROTOCOL_XSUB)
-    return SALTS_EINVAL;
+  const flowmq_pattern_desc_t *desc = flowmq_pattern_descriptor(pattern);
+  if (state == NULL || desc == NULL) return SALTS_EINVAL;
   memset(state, 0, sizeof(*state));
+  state->desc = desc;
   state->pattern = pattern;
   return SALTS_OK;
 }
 
 int flowmq_pattern_state_send_validate(const flowmq_pattern_state_t *state) {
-  if (state == NULL || !flowmq_pattern_can_send(state->pattern))
+  if (state == NULL || state->desc == NULL ||
+      (state->desc->capabilities & FLOWMQ_PATTERN_CAP_API_SEND) == 0u)
     return SALTS_ENOTSUP;
   if (state->receiving_multipart) return SALTS_EPROTO;
   if (state->sending_multipart) return SALTS_OK;
-  if (state->pattern == FLOWMQ_PROTOCOL_REQ &&
+  if (state->desc->fsm_class == FLOWMQ_PATTERN_FSM_REQ &&
       state->phase != FLOWMQ_PATTERN_PHASE_READY)
     return SALTS_EPROTO;
-  if (state->pattern == FLOWMQ_PROTOCOL_REP &&
+  if (state->desc->fsm_class == FLOWMQ_PATTERN_FSM_REP &&
       state->phase != FLOWMQ_PATTERN_PHASE_REP_SEND_REPLY)
     return SALTS_EPROTO;
   return SALTS_OK;
 }
 
 void flowmq_pattern_state_send_commit(flowmq_pattern_state_t *state, int more) {
-  if (state == NULL) return;
+  if (state == NULL || state->desc == NULL) return;
   state->sending_multipart = more != 0;
   if (more) return;
-  if (state->pattern == FLOWMQ_PROTOCOL_REQ)
+  if (state->desc->fsm_class == FLOWMQ_PATTERN_FSM_REQ)
     state->phase = FLOWMQ_PATTERN_PHASE_REQ_WAIT_REPLY;
-  else if (state->pattern == FLOWMQ_PROTOCOL_REP)
+  else if (state->desc->fsm_class == FLOWMQ_PATTERN_FSM_REP)
     state->phase = FLOWMQ_PATTERN_PHASE_READY;
 }
 
 int flowmq_pattern_state_receive_validate(const flowmq_pattern_state_t *state) {
-  if (state == NULL || !flowmq_pattern_can_receive(state->pattern))
+  if (state == NULL || state->desc == NULL ||
+      (state->desc->capabilities & FLOWMQ_PATTERN_CAP_API_RECV) == 0u)
     return SALTS_ENOTSUP;
   if (state->sending_multipart) return SALTS_EPROTO;
   if (state->receiving_multipart) return SALTS_OK;
-  if (state->pattern == FLOWMQ_PROTOCOL_REQ &&
+  if (state->desc->fsm_class == FLOWMQ_PATTERN_FSM_REQ &&
       state->phase != FLOWMQ_PATTERN_PHASE_REQ_WAIT_REPLY)
     return SALTS_EPROTO;
-  if (state->pattern == FLOWMQ_PROTOCOL_REP &&
+  if (state->desc->fsm_class == FLOWMQ_PATTERN_FSM_REP &&
       state->phase != FLOWMQ_PATTERN_PHASE_READY)
     return SALTS_EPROTO;
   return SALTS_OK;
 }
 
 void flowmq_pattern_state_receive_commit(flowmq_pattern_state_t *state, int more) {
-  if (state == NULL) return;
+  if (state == NULL || state->desc == NULL) return;
   state->receiving_multipart = more != 0;
   if (more) return;
-  if (state->pattern == FLOWMQ_PROTOCOL_REQ)
+  if (state->desc->fsm_class == FLOWMQ_PATTERN_FSM_REQ)
     state->phase = FLOWMQ_PATTERN_PHASE_READY;
-  else if (state->pattern == FLOWMQ_PROTOCOL_REP)
+  else if (state->desc->fsm_class == FLOWMQ_PATTERN_FSM_REP)
     state->phase = FLOWMQ_PATTERN_PHASE_REP_SEND_REPLY;
 }
 
