@@ -82,6 +82,28 @@ flowmq_dispatch_direct(const flowmq_dispatch_case_t *c) {
  * Candidate B: use the already-canonical routing_class as the dispatch key
  * after the two order-sensitive multipart checks.
  */
+/*
+ * Candidate B0: stay with direct branches, but source reply-peer routing from
+ * routing_class instead of loading the independent transaction fsm_class.
+ * This is the narrow semantic cleanup suggested by the steady REP result.
+ */
+static inline flowmq_dispatch_action_t
+flowmq_dispatch_direct_route_reply(const flowmq_dispatch_case_t *c) {
+  if (c->desc->routing_class == FLOWMQ_PATTERN_ROUTE_IDENTITY &&
+      !c->sending_multipart)
+    return FLOWMQ_DISPATCH_IDENTITY;
+  if (c->sending_multipart || c->sndmore)
+    return FLOWMQ_DISPATCH_MULTIPART;
+  if (c->desc->routing_class == FLOWMQ_PATTERN_ROUTE_FANOUT)
+    return FLOWMQ_DISPATCH_FANOUT;
+  if (c->desc->routing_class == FLOWMQ_PATTERN_ROUTE_REPLY_PEER &&
+      !c->send_peer_active)
+    return FLOWMQ_DISPATCH_REPLY_PEER;
+  if (c->send_peer_active)
+    return FLOWMQ_DISPATCH_PINNED;
+  return FLOWMQ_DISPATCH_SCAN;
+}
+
 static inline flowmq_dispatch_action_t
 flowmq_dispatch_switch(const flowmq_dispatch_case_t *c) {
   if (c->desc->routing_class == FLOWMQ_PATTERN_ROUTE_IDENTITY &&
@@ -165,6 +187,14 @@ static uint64_t flowmq_dispatch_run_direct(void) {
   return result;
 }
 
+static uint64_t flowmq_dispatch_run_direct_route_reply(void) {
+  uint64_t result = 0u;
+  for (size_t i = 0u; i < FLOWMQ_DISPATCH_CASES; ++i)
+    result += (uint64_t)flowmq_dispatch_direct_route_reply(
+        &FLOWMQ_DISPATCH_CASE_DATA[i]);
+  return result;
+}
+
 static uint64_t flowmq_dispatch_run_switch(void) {
   uint64_t result = 0u;
   for (size_t i = 0u; i < FLOWMQ_DISPATCH_CASES; ++i)
@@ -182,24 +212,32 @@ static uint64_t flowmq_dispatch_run_cached_ops(void) {
 
 static void flowmq_dispatch_check_equivalence(void) {
   uint64_t direct_result = flowmq_dispatch_run_direct();
+  uint64_t route_reply_result = flowmq_dispatch_run_direct_route_reply();
   uint64_t switch_result = flowmq_dispatch_run_switch();
   uint64_t ops_result = flowmq_dispatch_run_cached_ops();
 
   for (size_t i = 0u; i < FLOWMQ_DISPATCH_CASES; ++i) {
     flowmq_dispatch_action_t direct =
         flowmq_dispatch_direct(&FLOWMQ_DISPATCH_CASE_DATA[i]);
+    check_equal(
+        flowmq_dispatch_direct_route_reply(&FLOWMQ_DISPATCH_CASE_DATA[i]),
+        direct);
     check_equal(flowmq_dispatch_switch(&FLOWMQ_DISPATCH_CASE_DATA[i]),
                 direct);
     check_equal(flowmq_dispatch_cached_ops(&FLOWMQ_DISPATCH_CASE_DATA[i]),
                 direct);
   }
+  check_equal(route_reply_result, direct_result);
   check_equal(switch_result, direct_result);
   check_equal(ops_result, direct_result);
 }
 
-#define FLOWMQ_DISPATCH_BENCH_TRIPLET(prefix, samples_)                           \
+#define FLOWMQ_DISPATCH_BENCH_SET(prefix, samples_)                               \
   benchmark_ops(prefix " direct", samples_, FLOWMQ_DISPATCH_CASES) {              \
     FLOWMQ_DISPATCH_SINK = flowmq_dispatch_run_direct();                          \
+  }                                                                               \
+  benchmark_ops(prefix " route-reply-direct", samples_, FLOWMQ_DISPATCH_CASES) {  \
+    FLOWMQ_DISPATCH_SINK = flowmq_dispatch_run_direct_route_reply();              \
   }                                                                               \
   benchmark_ops(prefix " switch", samples_, FLOWMQ_DISPATCH_CASES) {              \
     FLOWMQ_DISPATCH_SINK = flowmq_dispatch_run_switch();                          \
@@ -217,31 +255,31 @@ spec("FlowMQ dispatch policy candidates") {
     flowmq_dispatch_check_equivalence();
     expected = flowmq_dispatch_run_direct();
 
-    FLOWMQ_DISPATCH_BENCH_TRIPLET("mixed", FLOWMQ_DISPATCH_SAMPLES)
+    FLOWMQ_DISPATCH_BENCH_SET("mixed", FLOWMQ_DISPATCH_SAMPLES)
     check_equal(FLOWMQ_DISPATCH_SINK, expected);
 
     flowmq_dispatch_init_cases_for(FLOWMQ_PROTOCOL_PUB, 0);
     flowmq_dispatch_check_equivalence();
     expected = flowmq_dispatch_run_direct();
-    FLOWMQ_DISPATCH_BENCH_TRIPLET("PUB steady", steady_samples)
+    FLOWMQ_DISPATCH_BENCH_SET("PUB steady", steady_samples)
     check_equal(FLOWMQ_DISPATCH_SINK, expected);
 
     flowmq_dispatch_init_cases_for(FLOWMQ_PROTOCOL_PUSH, 0);
     flowmq_dispatch_check_equivalence();
     expected = flowmq_dispatch_run_direct();
-    FLOWMQ_DISPATCH_BENCH_TRIPLET("PUSH steady", steady_samples)
+    FLOWMQ_DISPATCH_BENCH_SET("PUSH steady", steady_samples)
     check_equal(FLOWMQ_DISPATCH_SINK, expected);
 
     flowmq_dispatch_init_cases_for(FLOWMQ_PROTOCOL_ROUTER, 0);
     flowmq_dispatch_check_equivalence();
     expected = flowmq_dispatch_run_direct();
-    FLOWMQ_DISPATCH_BENCH_TRIPLET("ROUTER steady", steady_samples)
+    FLOWMQ_DISPATCH_BENCH_SET("ROUTER steady", steady_samples)
     check_equal(FLOWMQ_DISPATCH_SINK, expected);
 
     flowmq_dispatch_init_cases_for(FLOWMQ_PROTOCOL_REP, 0);
     flowmq_dispatch_check_equivalence();
     expected = flowmq_dispatch_run_direct();
-    FLOWMQ_DISPATCH_BENCH_TRIPLET("REP steady", steady_samples)
+    FLOWMQ_DISPATCH_BENCH_SET("REP steady", steady_samples)
     check_equal(FLOWMQ_DISPATCH_SINK, expected);
   }
 }
