@@ -99,7 +99,8 @@ endif()
 
 set(FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS
     "PATH=path_list_prepend:$<TARGET_FILE_DIR:Salts::CNet>"
-    "PATH=path_list_prepend:$<TARGET_FILE_DIR:Salts::Core>")
+    "PATH=path_list_prepend:$<TARGET_FILE_DIR:Salts::Core>"
+    "PATH=path_list_prepend:$<TARGET_FILE_DIR:Salts::CFlow>")
 if(WIN32)
   list(APPEND FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS
        "PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenSSL::SSL>")
