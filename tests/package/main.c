@@ -1,5 +1,6 @@
 #include <flowmq_socket.h>
 #include <flowmq_tls_identity_map.h>
+#include <salts_error.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -31,6 +32,7 @@ int main(void)
     int reconnect_read = 0;
     size_t reconnect_read_size = sizeof(reconnect_read);
     size_t send_hwm_bytes = 4096u;
+    flowmq_router_peer_status_t peer_status = FLOWMQ_ROUTER_PEER_STATUS_INIT;
     int result = 1;
 
     policy.bindings = &binding;
@@ -63,6 +65,11 @@ int main(void)
     /* public struct ABI + ROUTER pattern restriction */
     if (flowmq_setsockopt(router, FLOWMQ_TLS_IDENTITY_POLICY, &policy,
                           sizeof(policy)) != 0)
+        goto cleanup;
+
+    /* installed public struct + function ABI; no peer exists yet */
+    if (flowmq_router_peer_status(router, identity, strlen(identity),
+                                  &peer_status) != SALTS_ENOENT)
         goto cleanup;
 
     result = 0;
