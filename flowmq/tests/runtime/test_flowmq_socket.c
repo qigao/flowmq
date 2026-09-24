@@ -2173,11 +2173,17 @@ spec("flowmq_socket lifecycle and pattern surface") {
     }
     check_equal(status, SALTS_ENOENT);
 
-    healthy_status =
-        (flowmq_router_peer_status_t)FLOWMQ_ROUTER_PEER_STATUS_INIT;
-    check_equal(flowmq_router_peer_status(
-                    router, healthy_identity, sizeof(healthy_identity) - 1u,
-                    &healthy_status), SALTS_OK);
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT; ++i) {
+      healthy_status =
+          (flowmq_router_peer_status_t)FLOWMQ_ROUTER_PEER_STATUS_INIT;
+      check_equal(flowmq_router_peer_status(
+                      router, healthy_identity,
+                      sizeof(healthy_identity) - 1u, &healthy_status),
+                  SALTS_OK);
+      if (healthy_status.completed_messages == HEALTHY_DURING_RETIRE)
+        break;
+      check_equal(progress_pair(healthy, router), SALTS_OK);
+    }
     check_equal(healthy_status.admitted_messages, HEALTHY_DURING_RETIRE);
     check_equal(healthy_status.completed_messages, HEALTHY_DURING_RETIRE);
 
