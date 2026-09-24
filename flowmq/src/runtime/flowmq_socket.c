@@ -62,6 +62,14 @@ _Static_assert(FLOWMQ_SOCKET_FRAME_SEGMENT_CAPACITY <=
                    FLOWMQ_SOCKET_OUTBOUND_CAPACITY,
                "frame descriptors must fit the reusable CNet vector");
 
+#if defined(FLOWMQ_EXPERIMENT_ROUTE_REPLY_FACT_SOURCE)
+#define FLOWMQ_SOCKET_IS_REPLY_PEER_PATTERN(socket_)                              \
+  ((socket_)->pattern.desc->routing_class == FLOWMQ_PATTERN_ROUTE_REPLY_PEER)
+#else
+#define FLOWMQ_SOCKET_IS_REPLY_PEER_PATTERN(socket_)                              \
+  ((socket_)->pattern.desc->fsm_class == FLOWMQ_PATTERN_FSM_REP)
+#endif
+
 typedef struct flowmq_socket_peer_s flowmq_socket_peer_t;
 
 /* Endpoint policy survives a connection; all mutable wire/session state does not. */
@@ -1928,7 +1936,7 @@ static int flowmq_socket_try_send_multipart(flowmq_socket_t *socket, const void 
       }
     }
   } else if (starting_message) {
-    if (socket->pattern.desc->fsm_class == FLOWMQ_PATTERN_FSM_REP) {
+    if (FLOWMQ_SOCKET_IS_REPLY_PEER_PATTERN(socket)) {
       if (!socket->reply_peer_valid ||
           socket->reply_peer_index >= FLOWMQ_SOCKET_PEER_CAPACITY)
         return SALTS_EBUSY;
@@ -2126,7 +2134,7 @@ static int flowmq_socket_try_send(flowmq_socket_t *socket, const void *data,
                                      (flags & FLOWMQ_SNDMORE) != 0);
     return SALTS_OK;
   }
-  if (socket->pattern.desc->fsm_class == FLOWMQ_PATTERN_FSM_REP &&
+  if (FLOWMQ_SOCKET_IS_REPLY_PEER_PATTERN(socket) &&
       !socket->send_peer_active) {
     if (!socket->reply_peer_valid ||
         socket->reply_peer_index >= FLOWMQ_SOCKET_PEER_CAPACITY)
@@ -2455,7 +2463,7 @@ static int flowmq_socket_pollout_ready(const flowmq_socket_t *socket) {
     return flowmq_socket_peer_can_admit(
         &socket->peers[socket->send_peer_index], 1u, 1);
   }
-  if (socket->pattern.desc->fsm_class == FLOWMQ_PATTERN_FSM_REP) {
+  if (FLOWMQ_SOCKET_IS_REPLY_PEER_PATTERN(socket)) {
     if (!socket->reply_peer_valid ||
         socket->reply_peer_index >= FLOWMQ_SOCKET_PEER_CAPACITY)
       return 0;
