@@ -8,6 +8,7 @@
 #include "flowmq_reconnect.h"
 #include "flowmq_stream_decoder.h"
 #include "flowmq_subscription_set.h"
+#include "flowmq_socket_option.h"
 #include "flowmq_tls_identity_map.h"
 #include "salts_error.h"
 #include "salts_buffer.h"
@@ -26,13 +27,13 @@ enum {
   FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY = FLOWMQ_SOCKET_PEER_CAPACITY,
   FLOWMQ_SOCKET_ENDPOINT_NONE = FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY,
   FLOWMQ_SOCKET_INBOUND_CAPACITY = 1024u,
-  FLOWMQ_SOCKET_OUTBOUND_CAPACITY = 1024u,
+  FLOWMQ_SOCKET_OUTBOUND_CAPACITY = FLOWMQ_SOCKET_OPTION_MESSAGE_HWM_MAX,
   FLOWMQ_SOCKET_MULTIPART_CAPACITY = 64u,
   FLOWMQ_SOCKET_DEFAULT_HWM = 1000u,
   FLOWMQ_SOCKET_DEFAULT_HWM_BYTES = 16u * 1024u * 1024u,
   FLOWMQ_SOCKET_DEFAULT_RECONNECT_IVL_MS = 100,
   FLOWMQ_SOCKET_DEFAULT_RECONNECT_IVL_MAX_MS = 0,
-  FLOWMQ_SOCKET_HARD_HWM_BYTES = 64u * 1024u * 1024u,
+  FLOWMQ_SOCKET_HARD_HWM_BYTES = FLOWMQ_SOCKET_OPTION_HWM_BYTES_MAX,
   FLOWMQ_SOCKET_MAX_FRAME_SIZE = 1024u * 1024u,
   FLOWMQ_SOCKET_FRAME_PACKET_CAPACITY =
       (FLOWMQ_SOCKET_MAX_FRAME_SIZE + FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE - 1u) /
@@ -46,10 +47,10 @@ enum {
   FLOWMQ_SOCKET_SHUTDOWN_TIMEOUT_MS = 1000u,
   FLOWMQ_SOCKET_DEFAULT_TIMEOUT_MS = 1000u,
   FLOWMQ_SOCKET_CNET_COMMAND_CAPACITY = 16u,
-  FLOWMQ_SOCKET_HOST_CAPACITY = 256u,
+  FLOWMQ_SOCKET_HOST_CAPACITY = FLOWMQ_SOCKET_OPTION_TLS_SERVER_NAME_CAPACITY,
   FLOWMQ_SOCKET_ENDPOINT_CAPACITY = 320u,
-  FLOWMQ_SOCKET_TLS_PATH_CAPACITY = 1024u,
-  FLOWMQ_SOCKET_TLS_PASSWORD_CAPACITY = 512u,
+  FLOWMQ_SOCKET_TLS_PATH_CAPACITY = FLOWMQ_SOCKET_OPTION_TLS_PATH_CAPACITY,
+  FLOWMQ_SOCKET_TLS_PASSWORD_CAPACITY = FLOWMQ_SOCKET_OPTION_TLS_PASSWORD_CAPACITY,
   FLOWMQ_SOCKET_TLS_FINGERPRINT_PREFIX_SIZE = 7u,
   FLOWMQ_SOCKET_TLS_FINGERPRINT_CAPACITY =
       FLOWMQ_SOCKET_TLS_FINGERPRINT_PREFIX_SIZE +
@@ -1256,11 +1257,14 @@ static void flowmq_socket_clear_secret(char *value, size_t size) {
   for (size_t i = 0u; i < size; ++i) bytes[i] = 0;
 }
 
-static int flowmq_socket_copy_option(char *destination, size_t capacity,
-                                     const void *value, size_t size) {
-  if (destination == NULL || value == NULL || size == 0u || size >= capacity ||
-      memchr(value, '\0', size) != NULL)
-    return SALTS_EINVAL;
+static int flowmq_socket_store_string(char *destination, size_t capacity,
+                                      const void *value, size_t size) {
+  /*
+   * ABI/range/string validation is owned by the option descriptor layer.
+   * This capacity check is only a defensive implementation-drift guard.
+   */
+  if (destination == NULL || value == NULL || size >= capacity)
+    return SALTS_EPROTO;
   memcpy(destination, value, size);
   destination[size] = '\0';
   return SALTS_OK;
@@ -1660,45 +1664,46 @@ int flowmq_last_endpoint(const flowmq_socket_t *socket, char *buffer,
 
 int flowmq_setsockopt(flowmq_socket_t *socket, int option, const void *value,
                       size_t size) {
+  const flowmq_socket_option_desc_t *desc = NULL;
+  int status;
   if (socket == NULL || socket->ctx == NULL) return SALTS_EINVAL;
-  if (option == FLOWMQ_SUBSCRIBE || option == FLOWMQ_UNSUBSCRIBE) {
+
+  status = flowmq_socket_option_validate_set(
+      option, socket->runtime_initialized, socket->pattern.desc, value, size,
+      &desc);
+  if (status != SALTS_OK) return status;
+  if (desc == NULL) return SALTS_EPROTO;
+
+  switch (option) {
+  case FLOWMQ_SUBSCRIBE:
+  case FLOWMQ_UNSUBSCRIBE: {
     int changed = 0;
-    if ((socket->pattern.desc->subscription_class != FLOWMQ_PATTERN_SUB_SUBSCRIBER) ||
-        (value == NULL && size != 0u) || size > FLOWMQ_PROTOCOL_MAX_TOPIC_SIZE)
-      return SALTS_EINVAL;
     return flowmq_subscription_set_update(
         &socket->subscriptions, option == FLOWMQ_SUBSCRIBE,
         (vstr){.data = (char *)value, .len = size}, &changed);
   }
-  if (socket->runtime_initialized) return SALTS_EBUSY;
-  switch (option) {
+
   case FLOWMQ_IDENTITY:
-    if (value == NULL || size == 0u ||
-        size > FLOWMQ_PROTOCOL_MAX_IDENTITY_SIZE || memchr(value, '\0', size) != NULL)
-      return SALTS_EINVAL;
     memcpy(socket->identity, value, size);
     socket->identity[size] = '\0';
     socket->identity_size = size;
     return SALTS_OK;
+
   case FLOWMQ_SNDHWM:
   case FLOWMQ_RCVHWM: {
     int value_int;
-    if (value == NULL || size != sizeof(value_int)) return SALTS_EINVAL;
-    value_int = *(const int *)value;
-    if (value_int <= 0 || value_int > FLOWMQ_SOCKET_OUTBOUND_CAPACITY)
-      return SALTS_EINVAL;
+    memcpy(&value_int, value, sizeof(value_int));
     if (option == FLOWMQ_SNDHWM)
       socket->send_hwm = (size_t)value_int;
     else
       socket->receive_hwm = (size_t)value_int;
     return SALTS_OK;
   }
+
   case FLOWMQ_HEARTBEAT_IVL:
   case FLOWMQ_HEARTBEAT_TIMEOUT: {
     int value_int;
-    if (value == NULL || size != sizeof(value_int)) return SALTS_EINVAL;
-    value_int = *(const int *)value;
-    if (value_int < 0) return SALTS_EINVAL;
+    memcpy(&value_int, value, sizeof(value_int));
     if (option == FLOWMQ_HEARTBEAT_IVL)
       socket->heartbeat_interval_ms = value_int;
     else {
@@ -1707,45 +1712,37 @@ int flowmq_setsockopt(flowmq_socket_t *socket, int option, const void *value,
     }
     return SALTS_OK;
   }
+
   case FLOWMQ_RECONNECT_IVL:
   case FLOWMQ_RECONNECT_IVL_MAX: {
     int value_int;
-    if (value == NULL || size != sizeof(value_int)) return SALTS_EINVAL;
-    value_int = *(const int *)value;
-    if ((option == FLOWMQ_RECONNECT_IVL && value_int < -1) ||
-        (option == FLOWMQ_RECONNECT_IVL_MAX && value_int < 0))
-      return SALTS_EINVAL;
+    memcpy(&value_int, value, sizeof(value_int));
     if (option == FLOWMQ_RECONNECT_IVL)
       socket->reconnect_interval_ms = value_int;
     else
       socket->reconnect_interval_max_ms = value_int;
     return SALTS_OK;
   }
+
   case FLOWMQ_FLOW_UPDATE_IVL: {
     int value_int;
-    if (value == NULL || size != sizeof(value_int)) return SALTS_EINVAL;
-    value_int = *(const int *)value;
-    if (value_int <= 0) return SALTS_EINVAL;
+    memcpy(&value_int, value, sizeof(value_int));
     socket->flow_update_interval_ms = value_int;
     return SALTS_OK;
   }
+
   case FLOWMQ_FLOW_UPDATE_QUANTUM: {
     size_t value_size;
-    if (value == NULL || size != sizeof(value_size)) return SALTS_EINVAL;
-    value_size = *(const size_t *)value;
-    if (value_size == 0u || value_size > socket->receive_hwm_bytes ||
-        value_size > UINT32_MAX)
-      return SALTS_EINVAL;
+    memcpy(&value_size, value, sizeof(value_size));
+    if (value_size > socket->receive_hwm_bytes) return SALTS_EINVAL;
     socket->flow_update_quantum = (uint32_t)value_size;
     return SALTS_OK;
   }
+
   case FLOWMQ_SNDHWM_BYTES:
   case FLOWMQ_RCVHWM_BYTES: {
     size_t value_size;
-    if (value == NULL || size != sizeof(value_size)) return SALTS_EINVAL;
-    value_size = *(const size_t *)value;
-    if (value_size == 0u || value_size > FLOWMQ_SOCKET_HARD_HWM_BYTES)
-      return SALTS_EINVAL;
+    memcpy(&value_size, value, sizeof(value_size));
     if (option == FLOWMQ_SNDHWM_BYTES)
       socket->send_hwm_bytes = value_size;
     else {
@@ -1756,33 +1753,35 @@ int flowmq_setsockopt(flowmq_socket_t *socket, int option, const void *value,
     }
     return SALTS_OK;
   }
+
   case FLOWMQ_TLS_CA_FILE:
-    return flowmq_socket_copy_option(socket->tls_ca_file,
-                                     sizeof(socket->tls_ca_file), value, size);
+    return flowmq_socket_store_string(socket->tls_ca_file,
+                                      sizeof(socket->tls_ca_file), value, size);
   case FLOWMQ_TLS_CERT_FILE:
-    return flowmq_socket_copy_option(socket->tls_cert_file,
-                                     sizeof(socket->tls_cert_file), value, size);
+    return flowmq_socket_store_string(socket->tls_cert_file,
+                                      sizeof(socket->tls_cert_file), value,
+                                      size);
   case FLOWMQ_TLS_KEY_FILE:
-    return flowmq_socket_copy_option(socket->tls_key_file,
-                                     sizeof(socket->tls_key_file), value, size);
+    return flowmq_socket_store_string(socket->tls_key_file,
+                                      sizeof(socket->tls_key_file), value, size);
   case FLOWMQ_TLS_KEY_PASSWORD:
-    return flowmq_socket_copy_option(socket->tls_key_password,
-                                     sizeof(socket->tls_key_password), value,
-                                     size);
+    return flowmq_socket_store_string(socket->tls_key_password,
+                                      sizeof(socket->tls_key_password), value,
+                                      size);
   case FLOWMQ_TLS_SERVER_NAME:
-    return flowmq_socket_copy_option(socket->tls_server_name,
-                                     sizeof(socket->tls_server_name), value,
-                                     size);
-  case FLOWMQ_TLS_REQUIRE_CLIENT_CERTIFICATE:
-    if (value == NULL || size != sizeof(int)) return SALTS_EINVAL;
-    socket->tls_require_client_certificate = *(const int *)value != 0;
+    return flowmq_socket_store_string(socket->tls_server_name,
+                                      sizeof(socket->tls_server_name), value,
+                                      size);
+
+  case FLOWMQ_TLS_REQUIRE_CLIENT_CERTIFICATE: {
+    int value_int;
+    memcpy(&value_int, value, sizeof(value_int));
+    socket->tls_require_client_certificate = value_int != 0;
     return SALTS_OK;
+  }
+
   case FLOWMQ_TLS_IDENTITY_POLICY: {
     flowmq_tls_identity_map_t *replacement = NULL;
-    int status;
-    if (socket->pattern.desc->routing_class != FLOWMQ_PATTERN_ROUTE_IDENTITY || value == NULL ||
-        size != sizeof(flowmq_tls_identity_map_config_t))
-      return SALTS_EINVAL;
     status = flowmq_tls_identity_map_create(
         (const flowmq_tls_identity_map_config_t *)value, &replacement);
     if (status != SALTS_OK) return status;
@@ -1790,47 +1789,45 @@ int flowmq_setsockopt(flowmq_socket_t *socket, int option, const void *value,
     socket->tls_identity_policy = replacement;
     return SALTS_OK;
   }
-  default: return SALTS_ENOTSUP;
+
+  default:
+    /* A SET-capable schema row without an apply path is an internal drift. */
+    return SALTS_EPROTO;
   }
 }
 
 int flowmq_getsockopt(const flowmq_socket_t *socket, int option, void *value,
                       size_t *size) {
-  size_t required;
+  int status;
   if (socket == NULL || socket->ctx == NULL || size == NULL)
     return SALTS_EINVAL;
+  status = flowmq_socket_option_prepare_get(option, value, size, NULL);
+  if (status != SALTS_OK) return status;
+
   switch (option) {
-  case FLOWMQ_RECONNECT_IVL:
-  case FLOWMQ_RECONNECT_IVL_MAX:
-    required = sizeof(int);
-    if (value == NULL || *size < required) {
-      *size = required;
-      return value == NULL ? SALTS_EINVAL : SALTS_EMSGSIZE;
-    }
-    *(int *)value = option == FLOWMQ_RECONNECT_IVL
-                        ? socket->reconnect_interval_ms
-                        : socket->reconnect_interval_max_ms;
-    *size = required;
+  case FLOWMQ_RECONNECT_IVL: {
+    int result = socket->reconnect_interval_ms;
+    memcpy(value, &result, sizeof(result));
     return SALTS_OK;
-  case FLOWMQ_RCVMORE:
-    required = sizeof(int);
-    if (value == NULL || *size < required) {
-      *size = required;
-      return value == NULL ? SALTS_EINVAL : SALTS_EMSGSIZE;
-    }
-    *(int *)value = socket->last_rcvmore;
-    *size = required;
+  }
+  case FLOWMQ_RECONNECT_IVL_MAX: {
+    int result = socket->reconnect_interval_max_ms;
+    memcpy(value, &result, sizeof(result));
     return SALTS_OK;
-  case FLOWMQ_TLS_IDENTITY_REJECTIONS:
-    required = sizeof(uint64_t);
-    if (value == NULL || *size < required) {
-      *size = required;
-      return value == NULL ? SALTS_EINVAL : SALTS_EMSGSIZE;
-    }
-    *(uint64_t *)value = socket->tls_identity_rejections;
-    *size = required;
+  }
+  case FLOWMQ_RCVMORE: {
+    int result = socket->last_rcvmore;
+    memcpy(value, &result, sizeof(result));
     return SALTS_OK;
-  default: return SALTS_ENOTSUP;
+  }
+  case FLOWMQ_TLS_IDENTITY_REJECTIONS: {
+    uint64_t result = socket->tls_identity_rejections;
+    memcpy(value, &result, sizeof(result));
+    return SALTS_OK;
+  }
+  default:
+    /* A GET-capable schema row without a read path is an internal drift. */
+    return SALTS_EPROTO;
   }
 }
 

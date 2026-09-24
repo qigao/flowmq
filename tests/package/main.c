@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 _Static_assert(FLOWMQ_TLS_IDENTITY_MAP_API_VERSION == 1u,
                "TLS identity-map API version changed");
@@ -17,16 +18,57 @@ _Static_assert(FLOWMQ_TLS_CERTIFICATE_SHA256_CAPACITY == 72u,
 
 int main(void)
 {
+    static const char fingerprint[] =
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    static const char identity[] = "package-consumer";
+    flowmq_tls_identity_binding_t binding = {
+        sizeof(binding), fingerprint, identity};
     flowmq_tls_identity_map_config_t policy =
         FLOWMQ_TLS_IDENTITY_MAP_CONFIG_INIT;
-    int (*setopt_fn)(flowmq_socket_t *, int, const void *, size_t) =
-        flowmq_setsockopt;
-    int (*getopt_fn)(const flowmq_socket_t *, int, void *, size_t *) =
-        flowmq_getsockopt;
+    flowmq_ctx_t *ctx = NULL;
+    flowmq_socket_t *router = NULL;
+    int reconnect_ms = 25;
+    int reconnect_read = 0;
+    size_t reconnect_read_size = sizeof(reconnect_read);
+    size_t send_hwm_bytes = 4096u;
+    int result = 1;
 
-    policy.binding_count = 0u;
-    return setopt_fn == NULL || getopt_fn == NULL ||
-                   policy.size != sizeof(policy)
-               ? 1
-               : 0;
+    policy.bindings = &binding;
+    policy.binding_count = 1u;
+
+    ctx = flowmq_ctx_new();
+    if (ctx == NULL) goto cleanup;
+    router = flowmq_socket(ctx, FLOWMQ_ROUTER);
+    if (router == NULL) goto cleanup;
+
+    /* int ABI */
+    if (flowmq_setsockopt(router, FLOWMQ_RECONNECT_IVL, &reconnect_ms,
+                          sizeof(reconnect_ms)) != 0)
+        goto cleanup;
+    if (flowmq_getsockopt(router, FLOWMQ_RECONNECT_IVL, &reconnect_read,
+                          &reconnect_read_size) != 0 ||
+        reconnect_read != reconnect_ms)
+        goto cleanup;
+
+    /* size_t ABI */
+    if (flowmq_setsockopt(router, FLOWMQ_SNDHWM_BYTES, &send_hwm_bytes,
+                          sizeof(send_hwm_bytes)) != 0)
+        goto cleanup;
+
+    /* variable string ABI */
+    if (flowmq_setsockopt(router, FLOWMQ_TLS_SERVER_NAME, "localhost",
+                          strlen("localhost")) != 0)
+        goto cleanup;
+
+    /* public struct ABI + ROUTER pattern restriction */
+    if (flowmq_setsockopt(router, FLOWMQ_TLS_IDENTITY_POLICY, &policy,
+                          sizeof(policy)) != 0)
+        goto cleanup;
+
+    result = 0;
+
+cleanup:
+    if (router != NULL && flowmq_close(router) != 0) result = 1;
+    if (ctx != NULL && flowmq_ctx_term(ctx) != 0) result = 1;
+    return result;
 }
