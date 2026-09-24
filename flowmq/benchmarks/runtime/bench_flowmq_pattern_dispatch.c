@@ -17,9 +17,16 @@ enum {
 
 static size_t bench_pattern_samples(void) {
   const char *smoke = getenv("FLOWMQ_BENCH_SMOKE");
-  return smoke != NULL && strcmp(smoke, "0") != 0
-             ? (size_t)1u
-             : (size_t)BENCH_PATTERN_SAMPLES;
+  const char *override = getenv("FLOWMQ_BENCH_SAMPLES");
+  if (smoke != NULL && strcmp(smoke, "0") != 0) return (size_t)1u;
+  if (override != NULL && override[0] != '\0') {
+    char *end = NULL;
+    unsigned long parsed = strtoul(override, &end, 10);
+    if (end != override && *end == '\0' && parsed > 0u &&
+        parsed <= 100000u)
+      return (size_t)parsed;
+  }
+  return (size_t)BENCH_PATTERN_SAMPLES;
 }
 
 typedef struct bench_socket_group_s {
