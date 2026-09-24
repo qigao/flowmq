@@ -1,7 +1,7 @@
 #ifndef FLOWMQ_PATTERN_STATE_H
 #define FLOWMQ_PATTERN_STATE_H
 
-#include "flowmq_protocol.h"
+#include "flowmq_pattern.h"
 
 #include <stdint.h>
 
@@ -12,13 +12,14 @@ typedef enum flowmq_pattern_phase_e {
 } flowmq_pattern_phase_t;
 
 typedef struct flowmq_pattern_state_s {
+  const flowmq_pattern_desc_t *desc;
   flowmq_protocol_pattern_t pattern;
   uint8_t phase;
   uint8_t sending_multipart;
   uint8_t receiving_multipart;
 } flowmq_pattern_state_t;
 
-#define FLOWMQ_PATTERN_STATE_INIT {0u, 0u, 0u, 0u}
+#define FLOWMQ_PATTERN_STATE_INIT {NULL, 0u, 0u, 0u, 0u}
 
 int flowmq_pattern_can_send(flowmq_protocol_pattern_t pattern);
 int flowmq_pattern_can_receive(flowmq_protocol_pattern_t pattern);
