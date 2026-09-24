@@ -67,6 +67,37 @@ typedef struct flowmq_pollitem_s {
   short revents;
 } flowmq_pollitem_t;
 
+/**
+ * Read-only status for one current ROUTER peer session.
+ *
+ * outstanding_* counts application DATA accepted by FlowMQ but not yet
+ * acknowledged by CNet send completion. It includes direct in-flight DATA and
+ * retained per-peer outbound DATA. send_credit_bytes is the currently usable
+ * remote DATA credit; it does not expose FMQ cumulative wire counters.
+ *
+ * All counters are scoped to the current live peer session. Reconnect with the
+ * same routing identity creates a new session with fresh counters.
+ */
+typedef struct flowmq_router_peer_status_s {
+  size_t size;
+  uint64_t admitted_messages;
+  uint64_t admitted_bytes;
+  uint64_t completed_messages;
+  uint64_t completed_bytes;
+  uint64_t rejected_messages;
+  uint64_t rejected_bytes;
+  uint64_t send_credit_bytes;
+  size_t outstanding_messages;
+  size_t outstanding_bytes;
+  size_t peak_outstanding_messages;
+  size_t peak_outstanding_bytes;
+  int connected;
+  int ready;
+} flowmq_router_peer_status_t;
+
+#define FLOWMQ_ROUTER_PEER_STATUS_INIT \
+  { sizeof(flowmq_router_peer_status_t) }
+
 /** Create a context. The context owns no progress thread. */
 FLOWMQ_C_API flowmq_ctx_t *flowmq_ctx_new(void);
 
@@ -130,6 +161,23 @@ FLOWMQ_C_API int flowmq_setsockopt(flowmq_socket_t *socket, int option,
  */
 FLOWMQ_C_API int flowmq_getsockopt(const flowmq_socket_t *socket, int option,
                                    void *value, size_t *size);
+
+/**
+ * Snapshot one ROUTER peer by its current live routing identity without
+ * driving transport progress.
+ *
+ * The caller must initialize status->size to at least
+ * sizeof(flowmq_router_peer_status_t), normally with
+ * FLOWMQ_ROUTER_PEER_STATUS_INIT. A larger caller struct is accepted and only
+ * the canonical current prefix is written.
+ *
+ * @return SALTS_OK on success; SALTS_ENOTSUP for non-ROUTER sockets;
+ * SALTS_ENOENT when no current non-retired peer has the identity; or
+ * SALTS_EINVAL for malformed arguments/status size.
+ */
+FLOWMQ_C_API int flowmq_router_peer_status(
+    const flowmq_socket_t *socket, const void *identity, size_t identity_size,
+    flowmq_router_peer_status_t *status);
 
 /**
  * Copy one message part into the socket data path. A FLOWMQ_SNDMORE success

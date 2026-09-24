@@ -64,6 +64,14 @@ ROUTER 的 routing identity 与 ZeroMQ 一样表示当前 live peer，不是可�
 token；同 identity 重连后的 delayed reply 会指向新 session。单条 outbound multipart
 内部会绑定 connection generation，peer 断线后取消，不能把剩余 parts 交给 replacement。
 
+需要诊断慢 peer/backpressure 时，可用
+`flowmq_router_peer_status(router, identity, identity_size, &status)` 读取当前 live session 的
+只读快照。该查询不推进网络。它公开 admission/completion/rejection、当前及峰值 outstanding
+payload、剩余 send credit，以及 connected/ready；不会公开内部 slot、generation、CNet
+handle 或累计 wire counter。这里 outstanding 表示已经被 FlowMQ 接纳、但 CNet send completion
+尚未确认的应用 DATA，因此可能在远端 credit 仍为 0 时已经回到 0。同 identity 重连后是新
+session，统计重新开始。
+
 ### TLS certificate 与 HELLO identity 绑定
 
 TLS 只证明 peer 持有受信证书；HELLO identity 仍是 peer 自己声明的 routing identity。需要

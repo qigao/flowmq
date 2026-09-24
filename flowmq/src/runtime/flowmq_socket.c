@@ -114,6 +114,14 @@ struct flowmq_socket_peer_s {
   size_t queued_parts;
   size_t inflight_payload_size;
   size_t inflight_messages;
+  uint64_t admitted_messages;
+  uint64_t admitted_bytes;
+  uint64_t completed_messages;
+  uint64_t completed_bytes;
+  uint64_t rejected_messages;
+  uint64_t rejected_bytes;
+  size_t peak_outstanding_messages;
+  size_t peak_outstanding_bytes;
   char identity[FLOWMQ_PROTOCOL_MAX_IDENTITY_SIZE + 1u];
   unsigned receiving_multipart : 1;
   unsigned commit_pending : 1;
@@ -283,6 +291,46 @@ static flowmq_socket_peer_t *flowmq_socket_peer_acquire(flowmq_socket_t *socket)
 static size_t flowmq_socket_peer_index(const flowmq_socket_t *socket,
                                        const flowmq_socket_peer_t *peer) {
   return (size_t)(peer - socket->peers);
+}
+
+static uint64_t flowmq_socket_counter_add_saturating(uint64_t current,
+                                                     size_t increment) {
+  uint64_t value;
+  if (increment > (size_t)UINT64_MAX) return UINT64_MAX;
+  value = (uint64_t)increment;
+  return value > UINT64_MAX - current ? UINT64_MAX : current + value;
+}
+
+static void flowmq_socket_peer_record_admission(flowmq_socket_peer_t *peer,
+                                                size_t payload_size,
+                                                int message_end) {
+  if (peer == NULL) return;
+  peer->admitted_bytes =
+      flowmq_socket_counter_add_saturating(peer->admitted_bytes, payload_size);
+  if (message_end)
+    peer->admitted_messages =
+        flowmq_socket_counter_add_saturating(peer->admitted_messages, 1u);
+  if (peer->outbound_messages > peer->peak_outstanding_messages)
+    peer->peak_outstanding_messages = peer->outbound_messages;
+  if (peer->outbound_bytes > peer->peak_outstanding_bytes)
+    peer->peak_outstanding_bytes = peer->outbound_bytes;
+}
+
+static void flowmq_socket_peer_record_completion(flowmq_socket_peer_t *peer) {
+  if (peer == NULL) return;
+  peer->completed_bytes = flowmq_socket_counter_add_saturating(
+      peer->completed_bytes, peer->inflight_payload_size);
+  peer->completed_messages = flowmq_socket_counter_add_saturating(
+      peer->completed_messages, peer->inflight_messages);
+}
+
+static void flowmq_socket_peer_record_rejection(flowmq_socket_peer_t *peer,
+                                                size_t payload_size) {
+  if (peer == NULL) return;
+  peer->rejected_messages =
+      flowmq_socket_counter_add_saturating(peer->rejected_messages, 1u);
+  peer->rejected_bytes =
+      flowmq_socket_counter_add_saturating(peer->rejected_bytes, payload_size);
 }
 
 static void flowmq_socket_peer_storage_release(flowmq_socket_peer_t *peer) {
@@ -650,6 +698,8 @@ static int flowmq_socket_peer_admit_staged(flowmq_socket_peer_t *peer,
   }
   peer->outbound_bytes += socket->send_staged_bytes;
   ++peer->outbound_messages;
+  flowmq_socket_peer_record_admission(
+      peer, socket->send_staged_bytes, 1);
   return SALTS_OK;
 }
 
@@ -702,6 +752,7 @@ static int flowmq_socket_peer_admit(flowmq_socket_peer_t *peer,
     flowmq_socket_fail(socket, SALTS_EPROTO);
     return SALTS_EPROTO;
   }
+  flowmq_socket_peer_record_admission(peer, payload_size, message_end);
   return SALTS_OK;
 }
 
@@ -1174,6 +1225,7 @@ static void flowmq_socket_on_send(void *user, cnet_connection connection,
     return;
   }
   if (completed == FLOWMQ_PEER_WRITE_DATA) {
+    flowmq_socket_peer_record_completion(peer);
     if (peer->outbound_bytes >= peer->inflight_payload_size)
       peer->outbound_bytes -= peer->inflight_payload_size;
     else
@@ -1877,6 +1929,56 @@ int flowmq_getsockopt(const flowmq_socket_t *socket, int option, void *value,
   }
 }
 
+int flowmq_router_peer_status(
+    const flowmq_socket_t *socket, const void *identity, size_t identity_size,
+    flowmq_router_peer_status_t *status) {
+  size_t caller_size;
+  if (socket == NULL || socket->ctx == NULL || status == NULL ||
+      identity == NULL || identity_size == 0u ||
+      identity_size > FLOWMQ_PROTOCOL_MAX_IDENTITY_SIZE)
+    return SALTS_EINVAL;
+  caller_size = status->size;
+  if (caller_size < sizeof(*status)) return SALTS_EINVAL;
+  if (socket->pattern.desc == NULL ||
+      socket->pattern.desc->routing_class != FLOWMQ_PATTERN_ROUTE_IDENTITY)
+    return SALTS_ENOTSUP;
+
+  for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
+    const flowmq_socket_peer_t *peer = &socket->peers[i];
+    flowmq_router_peer_status_t snapshot = FLOWMQ_ROUTER_PEER_STATUS_INIT;
+    if (!flowmq_peer_state_is_used(&peer->state) ||
+        flowmq_peer_state_is_retired(&peer->state) ||
+        peer->identity_size != identity_size ||
+        memcmp(peer->identity, identity, identity_size) != 0)
+      continue;
+
+    snapshot.admitted_messages = peer->admitted_messages;
+    snapshot.admitted_bytes = peer->admitted_bytes;
+    snapshot.completed_messages = peer->completed_messages;
+    snapshot.completed_bytes = peer->completed_bytes;
+    snapshot.rejected_messages = peer->rejected_messages;
+    snapshot.rejected_bytes = peer->rejected_bytes;
+    if (peer->flow_control.remote_initialized &&
+        peer->flow_control.sent_data <= peer->flow_control.remote_max_data)
+      snapshot.send_credit_bytes =
+          peer->flow_control.remote_max_data - peer->flow_control.sent_data;
+    snapshot.outstanding_messages = peer->outbound_messages;
+    snapshot.outstanding_bytes = peer->outbound_bytes;
+    snapshot.peak_outstanding_messages = peer->peak_outstanding_messages;
+    snapshot.peak_outstanding_bytes = peer->peak_outstanding_bytes;
+    snapshot.connected = flowmq_peer_state_is_connected(&peer->state);
+    snapshot.ready = flowmq_socket_peer_ready(peer);
+
+    /*
+     * Only the current canonical prefix is written. A newer caller may pass a
+     * larger struct; unknown tail bytes remain caller-owned.
+     */
+    memcpy(status, &snapshot, sizeof(snapshot));
+    return SALTS_OK;
+  }
+  return SALTS_ENOENT;
+}
+
 /* All fallible validation and allocation precedes peer-ring mutation, so the
  * final commit cannot leave a subset of parts admitted. Time is O(peers +
  * parts), space is O(parts), with both dimensions bounded by socket constants. */
@@ -1972,8 +2074,10 @@ static int flowmq_socket_try_send_multipart(flowmq_socket_t *socket, const void 
      * cross-peer HOL blocking. Other multipart patterns retain their staged
      * retry semantics.
      */
-    if (socket->pattern.desc->routing_class == FLOWMQ_PATTERN_ROUTE_IDENTITY)
+    if (socket->pattern.desc->routing_class == FLOWMQ_PATTERN_ROUTE_IDENTITY) {
+      flowmq_socket_peer_record_rejection(peer, message_size);
       flowmq_socket_cancel_send_route(socket);
+    }
     return SALTS_ENOBUFS;
   }
   status = flowmq_socket_prepare_outbound(socket, data, size, !message_end, &part);
