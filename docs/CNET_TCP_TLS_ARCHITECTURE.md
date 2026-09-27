@@ -61,22 +61,40 @@ readiness/wait-set，可替换该等待策略以降低空闲唤醒延迟，但�
 
 ## 发送内存与所有权
 
-`flowmq_send` 使用 FMQ/6 分段编码：协议头写入 socket 自有的有界 framing storage，payload
-只在本次普通函数调用期间借用。`cnet_sendv` 校验分段总长，并在成功返回前按顺序复制到
-CNet 已有的固定 command slot；因此调用者可在 `flowmq_send` 返回后立即修改或释放输入。
-一次 frame 最多 16 个 packet、32 个 segment；排队 flush 最多引用 1024 个已持有 frame，
-并受同一个 `max_encoded_size` 总字节上限约束。
+`flowmq_send` 仍保持 borrowed-input/copy 契约：FMQ/6 协议头写入 socket 自有的
+有界 framing storage，payload 只在本次普通函数调用期间借用。立即发送继续通过
+`cnet_sendv` 在成功返回前复制到 CNet-owned storage，因此调用者可在 `flowmq_send`
+返回后立即修改或释放输入；普通 `flowmq_send(const void *)` 不会偷偷升级成 borrowed
+zero-copy。
+
+需要排队的完整 frame 只平铺一次到其 canonical `mem_buffer_t`。plaintext TCP flush
+将这些 owner buffers 转成 `mem_slice_t` 并通过 `cnet_send_slicev` retained admission
+提交；FlowMQ 随即释放自己的 slice/queue 引用，CNet 在 logical terminal 前保持 backing
+ownership。一个 FlowMQ queued batch 最多使用 `CNET_RETAINED_VECTOR_MAX`（当前 32）
+个 logical ranges；CNet 再按 `NATIVE_IO_VECTOR_MAX`（当前 16）切成 successive native
+windows，期间不 flatten、不复制 payload，也不发布中间 send terminal。TLS 仍明确使用
+copy/encryption path，不从 rejected retained-SG 隐式 fallback。
 
 立即发送的数据路径从 `payload -> FlowMQ 1MiB scratch -> CNet slot` 缩短为
-`payload -> CNet slot`，payload copy 从两次减为一次。需要排队的完整 frame 只平铺一次到
-其 `mem_buffer_t`；flush 时这些 buffer 直接组成一个 CNet vector，所以排队路径从四次
-payload copy 减为两次。原来的每 socket 约 1MiB 连续 scratch allocation 已删除，替换为
-固定 framing 和 descriptor storage。
+`payload -> CNet slot`，payload copy 从两次减为一次。queued TCP 的 frame payload
+在 FlowMQ 排队时仅形成 canonical owned buffer，flush 不再额外 flatten。原来的每 socket
+约 1MiB 连续 scratch allocation 已删除，替换为固定 framing 和 descriptor storage。
 
 这不是跨 poll 的 borrowed-send，也不改变完成语义。CNet command slot 在 TCP NativeIO 写入
 完成前保持有效；TLS 还必须让 OpenSSL 接受连续 plaintext 并刷出 ciphertext。因此 owner、
 NativeIO 与 TLS 状态机仍使用连续内部 storage，且本次改动没有把用户 buffer 生命周期扩展到
 网络完成。admission 失败时 peer credit/HWM 状态不提交，排队 buffer 仍由原 owner 持有。
+
+## TCP latency policy
+
+FlowMQ plaintext TCP runtime 在 CNet client 启动后显式设置
+`cnet_stream_socket_options.nodelay = 1`。这是 FlowMQ 的 messaging latency policy，
+不是 CNet 的全局默认：Salts 保持 `nodelay=0` 时的 platform/Nagle default。
+
+该策略是 retained-SG 跨 native window 的必要配套。64 KiB logical write 从 16 ranges
+跨到 17/32 ranges 时，Linux 默认 Nagle 与 delayed ACK 可形成约 40 ms 的 latency cliff；
+显式 `TCP_NODELAY` 后恢复到几十微秒，同时仍保持两个 NativeIO vector windows 和一个
+CNet logical terminal。FlowMQ 不用 copy fallback 掩盖这一 transport effect。
 
 ## TLS
 
