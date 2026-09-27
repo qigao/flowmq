@@ -756,30 +756,58 @@ static int flowmq_socket_peer_admit(flowmq_socket_peer_t *peer,
   return SALTS_OK;
 }
 
+static void flowmq_socket_release_send_slices(mem_slice_t *slices,
+                                              size_t slice_count) {
+  for (size_t i = 0u; i < slice_count; ++i)
+    mem_slice_release(&slices[i]);
+}
+
 static int flowmq_socket_peer_flush(flowmq_socket_peer_t *peer) {
-  /* CNet permits one pending write per connection. A vector admission copies
-   * queued frames directly into that final command slot before returning. */
+  /*
+   * Plain TCP keeps queued frame ownership in canonical mem_buffer_t objects
+   * and hands retained slices to CNet/NativeIO scatter-gather. TLS deliberately
+   * keeps the copy-based vector path because retained SG is not a TLS surface;
+   * there is no runtime fallback from a rejected retained-vector admission.
+   */
   flowmq_socket_t *socket = peer->owner;
   flowmq_socket_outbound_t *outbound;
+  mem_slice_t slices[NATIVE_IO_VECTOR_MAX] = {0};
   size_t batch_count = 0u;
   size_t batch_encoded_size = 0u;
   size_t batch_payload_size = 0u;
   size_t batch_messages = 0u;
+  int use_retained_sg;
   int status;
   if (!flowmq_peer_state_is_connected(&peer->state) ||
       !flowmq_peer_state_write_idle(&peer->state) ||
       peer->outbound_count == 0u)
     return SALTS_OK;
+  if (socket->transport != FLOWMQ_TRANSPORT_TCP &&
+      socket->transport != FLOWMQ_TRANSPORT_TLS)
+    return SALTS_ENOTSUP;
+  use_retained_sg = socket->transport == FLOWMQ_TRANSPORT_TCP;
   while (batch_count < peer->outbound_count) {
-    size_t index = (peer->outbound_read + batch_count) %
-                   FLOWMQ_SOCKET_OUTBOUND_CAPACITY;
+    size_t index;
+    if (use_retained_sg && batch_count == NATIVE_IO_VECTOR_MAX) break;
+    index = (peer->outbound_read + batch_count) %
+            FLOWMQ_SOCKET_OUTBOUND_CAPACITY;
     outbound = &peer->outbound[index];
     if (outbound->encoded_size >
         socket->max_encoded_size - batch_encoded_size)
       break;
-    socket->send_segments[batch_count] = (cnet_const_buffer){
-        .data = mem_buffer_const_data(outbound->buffer),
-        .size = outbound->encoded_size};
+    if (use_retained_sg) {
+      slices[batch_count] =
+          mem_slice(outbound->buffer, 0u, outbound->encoded_size);
+      if (slices[batch_count].buffer == NULL ||
+          slices[batch_count].length != outbound->encoded_size) {
+        flowmq_socket_release_send_slices(slices, batch_count + 1u);
+        return SALTS_EPROTO;
+      }
+    } else {
+      socket->send_segments[batch_count] = (cnet_const_buffer){
+          .data = mem_buffer_const_data(outbound->buffer),
+          .size = outbound->encoded_size};
+    }
     batch_encoded_size += outbound->encoded_size;
     batch_payload_size += outbound->payload_size;
     if (outbound->message_end) ++batch_messages;
@@ -788,9 +816,19 @@ static int flowmq_socket_peer_flush(flowmq_socket_peer_t *peer) {
   if (batch_count == 0u) return SALTS_EMSGSIZE;
   status =
       flowmq_peer_state_write_begin(&peer->state, FLOWMQ_PEER_WRITE_DATA);
-  if (status != SALTS_OK) return status;
-  status = cnet_sendv(&socket->client, peer->connection,
-                      socket->send_segments, batch_count);
+  if (status != SALTS_OK) {
+    if (use_retained_sg)
+      flowmq_socket_release_send_slices(slices, batch_count);
+    return status;
+  }
+  if (use_retained_sg) {
+    status = cnet_send_slicev(&socket->client, peer->connection, slices,
+                              batch_count);
+    flowmq_socket_release_send_slices(slices, batch_count);
+  } else {
+    status = cnet_sendv(&socket->client, peer->connection,
+                        socket->send_segments, batch_count);
+  }
   if (status != SALTS_OK) {
     flowmq_peer_state_write_cancel(&peer->state);
     return status;
