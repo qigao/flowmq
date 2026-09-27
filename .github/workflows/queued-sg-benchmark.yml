@@ -72,8 +72,9 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
+          import os
           from pathlib import Path
-          roots = [Path("$RUNNER_TEMP/flowmq-base"), Path(".")]
+          roots = [Path(os.environ["RUNNER_TEMP"]) / "flowmq-base", Path(".")]
           for root in roots:
               path = root / "flowmq/benchmarks/runtime/bench_flowmq_socket.c"
               text = path.read_text()
