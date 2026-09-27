@@ -75,31 +75,32 @@ foreach(_flowmq_host_root IN ITEMS SALTS_HOST_ROOT SALTS_UTILS_HOST_ROOT)
 endforeach()
 
 find_package(
-  Salts CONFIG REQUIRED
+  Salts 1.7.9 EXACT CONFIG REQUIRED
   PATHS "${FLOWMQ_SALTS_ROOT_PATH}"
   NO_DEFAULT_PATH
   NO_CMAKE_FIND_ROOT_PATH)
 find_package(
-  SaltsUtils CONFIG REQUIRED
+  SaltsUtils 4.0.1 EXACT CONFIG REQUIRED
   PATHS "${FLOWMQ_SALTS_UTILS_ROOT_PATH}"
   NO_DEFAULT_PATH
   NO_CMAKE_FIND_ROOT_PATH)
 find_package(OpenSSL CONFIG REQUIRED)
 
-unset(FLOWMQ_TBE_COMPILER_EXECUTABLE)
-unset(FLOWMQ_TBE_COMPILER_EXECUTABLE CACHE)
-find_program(FLOWMQ_TBE_COMPILER_EXECUTABLE NAMES tbe_compiler
+unset(FLOWMQ_DATABINDC_EXECUTABLE)
+unset(FLOWMQ_DATABINDC_EXECUTABLE CACHE)
+find_program(FLOWMQ_DATABINDC_EXECUTABLE NAMES databindc
              PATHS "${FLOWMQ_SALTS_UTILS_HOST_ROOT_PATH}/bin"
              NO_DEFAULT_PATH
              NO_CMAKE_FIND_ROOT_PATH)
-if(NOT FLOWMQ_TBE_COMPILER_EXECUTABLE)
+if(NOT FLOWMQ_DATABINDC_EXECUTABLE)
   message(FATAL_ERROR
-    "FlowMQ media-provider contract requires the host SaltsUtils tbe_compiler")
+    "FlowMQ media-provider contract requires the host SaltsUtils databindc")
 endif()
 
 set(FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS
     "PATH=path_list_prepend:$<TARGET_FILE_DIR:Salts::CNet>"
-    "PATH=path_list_prepend:$<TARGET_FILE_DIR:Salts::Core>")
+    "PATH=path_list_prepend:$<TARGET_FILE_DIR:Salts::Core>"
+    "PATH=path_list_prepend:$<TARGET_FILE_DIR:Salts::DataBind>")
 if(WIN32)
   list(APPEND FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS
        "PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenSSL::SSL>")
@@ -151,7 +152,7 @@ target_include_directories(
           ${CMAKE_CURRENT_SOURCE_DIR}/flowmq/src/core/session
           ${CMAKE_CURRENT_SOURCE_DIR}/flowmq/src/transport/cnet)
 target_link_libraries(flowmq
-                      PUBLIC Salts::Core Salts::TbeSchema
+                      PUBLIC Salts::Core Salts::DataBind
                       PRIVATE Salts::CSTL Salts::CMeta Salts::CNet)
 if(TARGET flowmq_media_provider_codegen)
   add_dependencies(flowmq flowmq_media_provider_codegen)
