@@ -77,7 +77,7 @@ jobs:
             <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
             <ItemGroup>
               <PackageReference Include="Salts.Native" Version="[1.7.12]" />
-              <PackageReference Include="SaltsUtils.Native" Version="[4.0.1]" />
+              <PackageReference Include="SaltsUtils.Native" Version="[4.0.3]" />
             </ItemGroup>
           </Project>
           EOF
@@ -87,7 +87,7 @@ jobs:
             --store-password-in-clear-text --configfile "$config"
           dotnet restore "$project" --configfile "$config" --packages "$packages"
           echo "SALTS_ROOT=$packages/salts.native/1.7.12/sdk/linux-x64" >> "$GITHUB_ENV"
-          echo "SALTS_UTILS_ROOT=$packages/saltsutils.native/4.0.1/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_ROOT=$packages/saltsutils.native/4.0.3/sdk/linux-x64" >> "$GITHUB_ENV"
       - name: Configure, build and test against released SDKs
         shell: bash
         run: |
@@ -218,7 +218,7 @@ jobs:
             <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
             <ItemGroup>
               <PackageReference Include="Salts.Native" Version="[1.7.12]" />
-              <PackageReference Include="SaltsUtils.Native" Version="[4.0.1]" />
+              <PackageReference Include="SaltsUtils.Native" Version="[4.0.3]" />
             </ItemGroup>
           </Project>
           '@ | Set-Content -LiteralPath $project
@@ -231,12 +231,12 @@ jobs:
           dotnet restore "$project" --configfile "$config" --packages "$packages"
           if ($LASTEXITCODE -ne 0) { throw "SDK restore failed" }
           $saltsRoot = Join-Path $packages "salts.native\1.7.12\sdk\windows-x64"
-          $saltsUtilsRoot = Join-Path $packages "saltsutils.native\4.0.1\sdk\windows-x64"
+          $saltsUtilsRoot = Join-Path $packages "saltsutils.native\4.0.3\sdk\windows-x64"
           if (-not (Test-Path -LiteralPath $saltsRoot -PathType Container)) {
             throw "missing Salts 1.7.12 windows-x64 SDK"
           }
           if (-not (Test-Path -LiteralPath $saltsUtilsRoot -PathType Container)) {
-            throw "missing SaltsUtils 4.0.1 windows-x64 SDK"
+            throw "missing SaltsUtils 4.0.3 windows-x64 SDK"
           }
           "SALTS_ROOT=$saltsRoot" >> $env:GITHUB_ENV
           "SALTS_UTILS_ROOT=$saltsUtilsRoot" >> $env:GITHUB_ENV
