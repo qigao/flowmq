@@ -274,6 +274,88 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
+  it("retains queued TCP SG buffers after FlowMQ releases its queue references") {
+    enum { SG_MESSAGES = 8u, SG_REUSE_MESSAGES = SG_MESSAGES - 1u,
+           SG_PAYLOAD_BYTES = 1024u };
+    static unsigned char first[SG_MESSAGES][SG_PAYLOAD_BYTES];
+    static unsigned char reuse[SG_REUSE_MESSAGES][SG_PAYLOAD_BYTES];
+    unsigned char received[SG_PAYLOAD_BYTES] = {0};
+    char endpoint[128] = {0};
+    size_t endpoint_size = 0u;
+    size_t received_size = 0u;
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *sender = flowmq_socket(ctx, FLOWMQ_PAIR);
+    flowmq_socket_t *receiver = flowmq_socket(ctx, FLOWMQ_PAIR);
+    flowmq_pollitem_t sender_item = {.socket = sender};
+    size_t ready = 0u;
+    int status = SALTS_EBUSY;
+
+    for (size_t message = 0u; message < SG_MESSAGES; ++message)
+      memset(first[message], (int)(0x10u + message), SG_PAYLOAD_BYTES);
+    for (size_t message = 0u; message < SG_REUSE_MESSAGES; ++message)
+      memset(reuse[message], (int)(0x80u + message), SG_PAYLOAD_BYTES);
+
+    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), SALTS_OK);
+    check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(sender, endpoint), SALTS_OK);
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == SALTS_EBUSY;
+         ++i) {
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
+      status = flowmq_send(sender, first[0], sizeof(first[0]),
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+
+    for (size_t message = 1u; message < SG_MESSAGES; ++message) {
+      check_equal(flowmq_send(sender, first[message], sizeof(first[message]),
+                              FLOWMQ_DONTWAIT),
+                  SALTS_OK);
+    }
+
+    /*
+     * This owner-only drive completes the first copied write, then the FlowMQ
+     * post-poll peer loop admits the queued frames through cnet_send_slicev().
+     * CNet has not had another progress turn for that retained SG write yet.
+     */
+    check_equal(flowmq_poll(&sender_item, 1u, 100u, &ready), SALTS_OK);
+
+    /*
+     * The SG admission released FlowMQ's queue references. These sends should
+     * immediately reuse the message-pool buffers while CNet alone retains the
+     * first queued batch. Any borrowed-without-retain implementation corrupts
+     * the first batch here.
+     */
+    for (size_t message = 0u; message < SG_REUSE_MESSAGES; ++message) {
+      check_equal(flowmq_send(sender, reuse[message], sizeof(reuse[message]),
+                              FLOWMQ_DONTWAIT),
+                  SALTS_OK);
+    }
+
+    for (size_t message = 0u;
+         message < SG_MESSAGES + SG_REUSE_MESSAGES; ++message) {
+      const unsigned char *expected =
+          message < SG_MESSAGES ? first[message]
+                                : reuse[message - SG_MESSAGES];
+      status = SALTS_EBUSY;
+      for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                          status == SALTS_EBUSY;
+           ++i) {
+        check_equal(progress_pair(sender, receiver), SALTS_OK);
+        status = flowmq_recv(receiver, received, sizeof(received),
+                             &received_size, FLOWMQ_DONTWAIT);
+      }
+      check_equal(status, SALTS_OK);
+      check_equal(received_size, SG_PAYLOAD_BYTES);
+      check_equal(memcmp(received, expected, SG_PAYLOAD_BYTES), 0);
+    }
+
+    check_equal(flowmq_close(sender), SALTS_OK);
+    check_equal(flowmq_close(receiver), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+  }
+
   it("isolates an incompatible peer without poisoning a ROUTER socket") {
     static const char identity[] = "healthy";
     static const char payload[] = "still-works";
