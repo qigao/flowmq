@@ -80,7 +80,7 @@ jobs:
               text = path.read_text()
               text = text.replace("BENCH_SAMPLES = 100000u,", "BENCH_SAMPLES = 1u,")
               text = text.replace("BENCH_LARGE_SAMPLES = 5000u,", "BENCH_LARGE_SAMPLES = 1u,")
-              text = text.replace("BENCH_BATCH_SAMPLES = 10000u,", "BENCH_BATCH_SAMPLES = 5000u,")
+              text = text.replace("BENCH_BATCH_SAMPLES = 10000u,", "BENCH_BATCH_SAMPLES = 500u,")
               path.write_text(text)
           PY
 
