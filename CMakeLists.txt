@@ -74,6 +74,28 @@ foreach(_flowmq_host_root IN ITEMS SALTS_HOST_ROOT SALTS_UTILS_HOST_ROOT)
   endif()
 endforeach()
 
+function(flowmq_require_sdk_version root package expected_version)
+  set(_version_file
+      "${root}/lib/cmake/${package}/${package}ConfigVersion.cmake")
+  if(NOT EXISTS "${_version_file}")
+    message(FATAL_ERROR
+            "${package} host SDK is missing package-version metadata: "
+            "${_version_file}")
+  endif()
+  file(READ "${_version_file}" _version_text LIMIT 4096)
+  string(FIND "${_version_text}"
+              "set(PACKAGE_VERSION \"${expected_version}\")"
+              _version_match)
+  if(_version_match EQUAL -1)
+    message(FATAL_ERROR
+            "${package} host SDK must be exactly ${expected_version}: "
+            "${_version_file}")
+  endif()
+endfunction()
+
+flowmq_require_sdk_version("${FLOWMQ_SALTS_HOST_ROOT_PATH}" Salts 1.7.9)
+flowmq_require_sdk_version("${FLOWMQ_SALTS_UTILS_HOST_ROOT_PATH}" SaltsUtils 4.0.1)
+
 find_package(
   Salts 1.7.9 EXACT CONFIG REQUIRED
   PATHS "${FLOWMQ_SALTS_ROOT_PATH}"
