@@ -265,8 +265,8 @@ jobs:
         run: |
           call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
           if errorlevel 1 exit /b 1
-          set "PATH=%SALTS_UTILS_ROOT%\bin;%SALTS_ROOT%\bin;%FLOWMQ_VCPKG_INSTALLED%\x64-windows\bin;%PATH%"
           set "FLOWMQ_ROOT=%RUNNER_TEMP%\flowmq-sdk"
+          set "PATH=%FLOWMQ_ROOT%\bin;%SALTS_UTILS_ROOT%\bin;%SALTS_ROOT%\bin;%FLOWMQ_VCPKG_INSTALLED%\x64-windows\bin;%PATH%"
           if exist "%FLOWMQ_ROOT%" rmdir /s /q "%FLOWMQ_ROOT%"
           if exist build\package-consumer-windows rmdir /s /q build\package-consumer-windows
           cmake --install build\cache-contract-windows --prefix "%FLOWMQ_ROOT%"
