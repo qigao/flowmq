@@ -5,22 +5,34 @@ if(NOT DEFINED ENV{FLOWMQ_ROOT} OR "$ENV{FLOWMQ_ROOT}" STREQUAL "")
   message(FATAL_ERROR "FLOWMQ_ROOT must name the installed FlowMQ prefix")
 endif()
 
+file(TO_CMAKE_PATH "$ENV{FLOWMQ_ROOT}" FLOWMQ_ROOT_PATH)
 find_package(FlowMQ 1.1 CONFIG REQUIRED
-             PATHS "$ENV{FLOWMQ_ROOT}" NO_DEFAULT_PATH)
+             PATHS "${FLOWMQ_ROOT_PATH}" NO_DEFAULT_PATH)
 
 get_target_property(_flowmq_public_links
                     FlowMQ::FlowMQ INTERFACE_LINK_LIBRARIES)
 if(NOT _flowmq_public_links)
   set(_flowmq_public_links "")
 endif()
-foreach(_flowmq_private_dependency IN ITEMS Salts::CMeta Salts::CFlow)
-  string(FIND "${_flowmq_public_links}"
-              "${_flowmq_private_dependency}"
-              _flowmq_private_dependency_index)
-  if(NOT _flowmq_private_dependency_index EQUAL -1)
+foreach(_flowmq_required_dependency IN ITEMS Salts::Core Salts::DataBind)
+  if(NOT _flowmq_required_dependency IN_LIST _flowmq_public_links)
     message(FATAL_ERROR
-            "installed FlowMQ::FlowMQ leaks private dependency "
-            "${_flowmq_private_dependency}: ${_flowmq_public_links}")
+            "installed FlowMQ::FlowMQ is missing canonical public dependency "
+            "${_flowmq_required_dependency}: ${_flowmq_public_links}")
+  endif()
+endforeach()
+
+foreach(_flowmq_forbidden_dependency IN ITEMS
+        Salts::TbeSchema
+        Salts::DataBindSchema
+        Salts::CMeta
+        Salts::CFlow
+        Salts::CSTL
+        Salts::CNet)
+  if(_flowmq_forbidden_dependency IN_LIST _flowmq_public_links)
+    message(FATAL_ERROR
+            "installed FlowMQ::FlowMQ leaks obsolete/private dependency "
+            "${_flowmq_forbidden_dependency}: ${_flowmq_public_links}")
   endif()
 endforeach()
 

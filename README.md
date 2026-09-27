@@ -18,9 +18,10 @@ FlowMQ 是 C11 的 pattern-oriented messaging library。它提供 FMQ/6 wire cod
 | `FlowMQ::Transport` | build-tree ZeroMQ-style socket 与 CNet TCP/TLS runtime |
 | `FlowMQ::FlowMQ` | 唯一安装 target；合并上述公开能力 |
 
-安装包的公开依赖是 `Salts::Core` 与 SaltsUtils 的 `Salts::TbeSchema`；
-`Salts::CNet`、`Salts::CSTL` 和 `Salts::CMeta` 是实现私有依赖。FMP/1 使用
-header-only TBE wire view/builder，不依赖 JSON typed codec。
+安装包严格要求 `Salts 1.7.9` 与 `SaltsUtils 4.0.1`，公开链接依赖是
+`Salts::Core` 与 SaltsUtils 提供的 `Salts::DataBind`；`Salts::CNet`、`Salts::CSTL`
+和 `Salts::CMeta` 是实现私有依赖。FMP/1 保持现有 header-only wire view/builder ABI，
+但生成入口统一使用 DataBind `databindc`，不再依赖已废止的 TBE producer target/tool。
 
 ## Caller-driven transport
 
@@ -210,8 +211,8 @@ GitHub Packages 二进制缓存，并使用 cache-only gate 防止 CI 静默回�
 交叉编译时 target SDK 与 host code-generation 工具必须分开。设置
 `SALTS_ROOT` / `SALTS_UTILS_ROOT` 指向目标平台 SDK，同时设置
 `SALTS_HOST_ROOT` / `SALTS_UTILS_HOST_ROOT` 指向构建主机 SDK；FlowMQ 使用 host
-SaltsUtils 中的 `tbe_compiler` 生成 FMP/1 头文件，再用 target Salts/SaltsUtils 编译和链接。
-非交叉编译时 host roots 可省略，并自动回退到对应 target roots。
+SaltsUtils 中的 `databindc` 生成 FMP/1 头文件，再用 target Salts/SaltsUtils 编译和链接。
+交叉编译必须显式提供 host roots；native build 的 host tool 则来自同一已解析的 SDK profile。
 
 详细所有权和关闭顺序见 [架构说明](docs/ARCHITECTURE.md)，wire 契约见
 [FMQ/6 协议](docs/FMQ_WIRE_PROTOCOL.md)。

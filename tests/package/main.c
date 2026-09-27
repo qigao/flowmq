@@ -1,11 +1,12 @@
-#include <flowmq_socket.h>
-#include <flowmq_tls_identity_map.h>
+#include <flowmq.h>
 #include <salts_error.h>
 
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
+_Static_assert(FLOWMQ_MEDIA_PROVIDER_API_VERSION == 3u,
+               "media-provider API version changed");
 _Static_assert(FLOWMQ_TLS_IDENTITY_MAP_API_VERSION == 1u,
                "TLS identity-map API version changed");
 _Static_assert(FLOWMQ_TLS_IDENTITY_POLICY == 1007,

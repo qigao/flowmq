@@ -76,8 +76,8 @@ jobs:
           <Project Sdk="Microsoft.NET.Sdk">
             <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
             <ItemGroup>
-              <PackageReference Include="Salts.Native" Version="[1.2.0]" />
-              <PackageReference Include="SaltsUtils.Native" Version="[2.0.2]" />
+              <PackageReference Include="Salts.Native" Version="[1.7.9]" />
+              <PackageReference Include="SaltsUtils.Native" Version="[4.0.1]" />
             </ItemGroup>
           </Project>
           EOF
@@ -86,8 +86,8 @@ jobs:
             --name github --username qigao --password "$GITHUB_TOKEN" \
             --store-password-in-clear-text --configfile "$config"
           dotnet restore "$project" --configfile "$config" --packages "$packages"
-          echo "SALTS_ROOT=$packages/salts.native/1.2.0/sdk/linux-x64" >> "$GITHUB_ENV"
-          echo "SALTS_UTILS_ROOT=$packages/saltsutils.native/2.0.2/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "SALTS_ROOT=$packages/salts.native/1.7.9/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_ROOT=$packages/saltsutils.native/4.0.1/sdk/linux-x64" >> "$GITHUB_ENV"
       - name: Configure, build and test against released SDKs
         shell: bash
         run: |
@@ -155,3 +155,131 @@ jobs:
           cmake --build build/package-consumer --parallel 2
           export LD_LIBRARY_PATH="$flowmq_root/lib:$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$FLOWMQ_VCPKG_INSTALLED/x64-linux/lib"
           build/package-consumer/flowmq_package_consumer
+
+  windows-x64:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Verify direct-C runtime boundary
+        shell: pwsh
+        run: cmake -P cmake/ci/verify-runtime-boundary.cmake
+
+      - name: Prepare host toolchain
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          choco install nasm ninja -y --no-progress
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsInstall = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ([string]::IsNullOrWhiteSpace($vsInstall)) {
+            throw "Visual Studio x64 C++ toolchain not found"
+          }
+          "VSINSTALL=$vsInstall" >> $env:GITHUB_ENV
+
+      - name: Restore FlowMQ vcpkg dependencies from shared cache
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $installRoot = Join-Path $env:RUNNER_TEMP "flowmq-vcpkg-installed"
+          $log = Join-Path $env:RUNNER_TEMP "flowmq-vcpkg-cache.log"
+          if (Test-Path -LiteralPath $installRoot) {
+            Remove-Item -LiteralPath $installRoot -Recurse -Force
+          }
+          & (Join-Path $env:VCPKG_ROOT "vcpkg.exe") install `
+            --x-manifest-root=. `
+            --x-install-root="$installRoot" `
+            --triplet x64-windows `
+            --only-binarycaching 2>&1 | Tee-Object -FilePath $log
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg restore failed" }
+          if (Select-String -LiteralPath $log -Pattern '^Building ' -Quiet) {
+            throw "shared cache miss detected"
+          }
+          "FLOWMQ_VCPKG_INSTALLED=$installRoot" >> $env:GITHUB_ENV
+
+      - name: Restore released Salts SDKs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $config = Join-Path $env:RUNNER_TEMP "flowmq-sdk-nuget.config"
+          $project = Join-Path $env:RUNNER_TEMP "flowmq-sdk-restore.csproj"
+          $packages = Join-Path $env:RUNNER_TEMP "flowmq-sdk-packages"
+          @'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+            <ItemGroup>
+              <PackageReference Include="Salts.Native" Version="[1.7.9]" />
+              <PackageReference Include="SaltsUtils.Native" Version="[4.0.1]" />
+            </ItemGroup>
+          </Project>
+          '@ | Set-Content -LiteralPath $project
+          '<configuration><packageSources><clear /></packageSources></configuration>' |
+            Set-Content -LiteralPath $config
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json `
+            --name github --username qigao --password "$env:GITHUB_TOKEN" `
+            --store-password-in-clear-text --configfile "$config"
+          if ($LASTEXITCODE -ne 0) { throw "NuGet source configuration failed" }
+          dotnet restore "$project" --configfile "$config" --packages "$packages"
+          if ($LASTEXITCODE -ne 0) { throw "SDK restore failed" }
+          $saltsRoot = Join-Path $packages "salts.native\1.7.9\sdk\windows-x64"
+          $saltsUtilsRoot = Join-Path $packages "saltsutils.native\4.0.1\sdk\windows-x64"
+          if (-not (Test-Path -LiteralPath $saltsRoot -PathType Container)) {
+            throw "missing Salts 1.7.9 windows-x64 SDK"
+          }
+          if (-not (Test-Path -LiteralPath $saltsUtilsRoot -PathType Container)) {
+            throw "missing SaltsUtils 4.0.1 windows-x64 SDK"
+          }
+          "SALTS_ROOT=$saltsRoot" >> $env:GITHUB_ENV
+          "SALTS_UTILS_ROOT=$saltsUtilsRoot" >> $env:GITHUB_ENV
+
+      - name: Configure, build and test against released SDKs
+        shell: cmd
+        run: |
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          set "PATH=%SALTS_UTILS_ROOT%\bin;%SALTS_ROOT%\bin;%FLOWMQ_VCPKG_INSTALLED%\x64-windows\bin;%PATH%"
+          cmake -S . -B build\cache-contract-windows -G Ninja ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DCMAKE_TOOLCHAIN_FILE="%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake" ^
+            -DVCPKG_TARGET_TRIPLET=x64-windows ^
+            -DVCPKG_MANIFEST_MODE=OFF ^
+            -DVCPKG_INSTALLED_DIR="%FLOWMQ_VCPKG_INSTALLED%" ^
+            -DBUILD_TESTS=ON -DBUILD_EXAMPLES=OFF
+          if errorlevel 1 exit /b 1
+          cmake --build build\cache-contract-windows --parallel 2
+          if errorlevel 1 exit /b 1
+          ctest --test-dir build\cache-contract-windows --no-tests=error --output-on-failure
+          if errorlevel 1 exit /b 1
+
+      - name: Verify installed FlowMQ package contract
+        shell: cmd
+        run: |
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          set "FLOWMQ_ROOT=%RUNNER_TEMP%\flowmq-sdk"
+          set "PATH=%FLOWMQ_ROOT%\bin;%SALTS_UTILS_ROOT%\bin;%SALTS_ROOT%\bin;%FLOWMQ_VCPKG_INSTALLED%\x64-windows\bin;%PATH%"
+          if exist "%FLOWMQ_ROOT%" rmdir /s /q "%FLOWMQ_ROOT%"
+          if exist build\package-consumer-windows rmdir /s /q build\package-consumer-windows
+          cmake --install build\cache-contract-windows --prefix "%FLOWMQ_ROOT%"
+          if errorlevel 1 exit /b 1
+          if not exist "%FLOWMQ_ROOT%\lib\cmake\FlowMQ\FlowMQConfig.cmake" exit /b 1
+          cmake -S tests\package -B build\package-consumer-windows -G Ninja ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DCMAKE_TOOLCHAIN_FILE="%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake" ^
+            -DVCPKG_TARGET_TRIPLET=x64-windows ^
+            -DVCPKG_MANIFEST_MODE=OFF ^
+            -DVCPKG_INSTALLED_DIR="%FLOWMQ_VCPKG_INSTALLED%"
+          if errorlevel 1 exit /b 1
+          cmake --build build\package-consumer-windows --parallel 2
+          if errorlevel 1 exit /b 1
+          build\package-consumer-windows\flowmq_package_consumer.exe
+          if errorlevel 1 exit /b 1

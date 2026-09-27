@@ -1,9 +1,9 @@
-if(NOT DEFINED FLOWMQ_TBE_COMPILER_EXECUTABLE OR
-   NOT DEFINED FLOWMQ_TBE_SCHEMA OR
-   NOT DEFINED FLOWMQ_TBE_OUTPUT OR
+if(NOT DEFINED FLOWMQ_DATABINDC_EXECUTABLE OR
+   NOT DEFINED FLOWMQ_DATABIND_SCHEMA OR
+   NOT DEFINED FLOWMQ_DATABIND_OUTPUT OR
    NOT DEFINED FLOWMQ_SALTS_HOST_ROOT OR
    NOT DEFINED FLOWMQ_SALTS_UTILS_HOST_ROOT)
-  message(FATAL_ERROR "FlowMQ TBE codegen wrapper is missing required inputs")
+  message(FATAL_ERROR "FlowMQ DataBind codegen wrapper is missing required inputs")
 endif()
 
 if(WIN32)
@@ -22,11 +22,11 @@ else()
 endif()
 
 execute_process(
-  COMMAND "${FLOWMQ_TBE_COMPILER_EXECUTABLE}"
-          "${FLOWMQ_TBE_SCHEMA}"
+  COMMAND "${FLOWMQ_DATABINDC_EXECUTABLE}"
+          "${FLOWMQ_DATABIND_SCHEMA}"
           --lang c
-          --output "${FLOWMQ_TBE_OUTPUT}"
-  RESULT_VARIABLE _flowmq_tbe_status)
-if(NOT _flowmq_tbe_status EQUAL 0)
-  message(FATAL_ERROR "FlowMQ tbe_compiler failed with status ${_flowmq_tbe_status}")
+          --output "${FLOWMQ_DATABIND_OUTPUT}"
+  RESULT_VARIABLE _flowmq_databind_status)
+if(NOT _flowmq_databind_status EQUAL 0)
+  message(FATAL_ERROR "FlowMQ databindc failed with status ${_flowmq_databind_status}")
 endif()
