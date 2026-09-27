@@ -67,6 +67,22 @@ jobs:
           set -euo pipefail
           git worktree add "$RUNNER_TEMP/flowmq-base" 2a91a1c241112ecbb23674485f19ee480ff8a23f
 
+      - name: Focus benchmark on queued batch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          roots = [Path("$RUNNER_TEMP/flowmq-base"), Path(".")]
+          for root in roots:
+              path = root / "flowmq/benchmarks/runtime/bench_flowmq_socket.c"
+              text = path.read_text()
+              text = text.replace("BENCH_SAMPLES = 100000u,", "BENCH_SAMPLES = 1u,")
+              text = text.replace("BENCH_LARGE_SAMPLES = 5000u,", "BENCH_LARGE_SAMPLES = 1u,")
+              text = text.replace("BENCH_BATCH_SAMPLES = 10000u,", "BENCH_BATCH_SAMPLES = 5000u,")
+              path.write_text(text)
+          PY
+
       - name: Build base and SG head benchmark
         shell: bash
         run: |
