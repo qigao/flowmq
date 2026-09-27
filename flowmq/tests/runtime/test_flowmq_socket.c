@@ -189,6 +189,8 @@ spec("flowmq_socket lifecycle and pattern surface") {
     for (size_t i = 0u; i < sizeof(payload); ++i)
       payload[i] = (unsigned char)((i * 31u + 7u) & 0xffu);
     memcpy(expected, payload, sizeof(payload));
+    check_equal(flowmq_setsockopt(sender, FLOWMQ_SNDHWM, &send_hwm,
+                                  sizeof(send_hwm)), SALTS_OK);
     check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
                                      &endpoint_size), SALTS_OK);
@@ -275,7 +277,7 @@ spec("flowmq_socket lifecycle and pattern surface") {
   }
 
   it("retains queued TCP SG buffers after FlowMQ releases its queue references") {
-    enum { SG_MESSAGES = 8u, SG_REUSE_MESSAGES = SG_MESSAGES - 1u,
+    enum { SG_MESSAGES = 8u, SG_REUSE_MESSAGES = 1u,
            SG_PAYLOAD_BYTES = 1024u };
     static unsigned char first[SG_MESSAGES][SG_PAYLOAD_BYTES];
     static unsigned char reuse[SG_REUSE_MESSAGES][SG_PAYLOAD_BYTES];
@@ -288,6 +290,7 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_socket_t *receiver = flowmq_socket(ctx, FLOWMQ_PAIR);
     flowmq_pollitem_t sender_item = {.socket = sender};
     size_t ready = 0u;
+    int send_hwm = SG_MESSAGES;
     int status = SALTS_EBUSY;
 
     for (size_t message = 0u; message < SG_MESSAGES; ++message)
@@ -322,16 +325,15 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_poll(&sender_item, 1u, 100u, &ready), SALTS_OK);
 
     /*
-     * The SG admission released FlowMQ's queue references. These sends should
-     * immediately reuse the message-pool buffers while CNet alone retains the
-     * first queued batch. Any borrowed-without-retain implementation corrupts
-     * the first batch here.
+     * The HWM was full before the owner-only drive. This send can succeed only
+     * after the first DATA terminal reduced outstanding_messages and the peer
+     * loop admitted the remaining queued batch through retained SG. It then
+     * allocates from the same message pool after FlowMQ released those queue
+     * references, while CNet alone owns the retained first batch.
      */
-    for (size_t message = 0u; message < SG_REUSE_MESSAGES; ++message) {
-      check_equal(flowmq_send(sender, reuse[message], sizeof(reuse[message]),
-                              FLOWMQ_DONTWAIT),
-                  SALTS_OK);
-    }
+    check_equal(flowmq_send(sender, reuse[0], sizeof(reuse[0]),
+                            FLOWMQ_DONTWAIT),
+                SALTS_OK);
 
     for (size_t message = 0u;
          message < SG_MESSAGES + SG_REUSE_MESSAGES; ++message) {
