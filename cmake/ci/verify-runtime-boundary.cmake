@@ -49,3 +49,33 @@ endforeach()
 
 message(STATUS
         "FlowMQ runtime boundary verified: no CFlow execution or reflected-function machinery")
+
+
+set(FLOWMQ_SOCKET_SOURCE
+    "${FLOWMQ_RUNTIME_ROOT}/flowmq_socket.c")
+file(READ "${FLOWMQ_SOCKET_SOURCE}" _flowmq_socket_text)
+
+foreach(_flowmq_sg_required IN ITEMS
+        "use_retained_sg = socket->transport == FLOWMQ_TRANSPORT_TCP;"
+        "status = cnet_send_slicev(&socket->client, peer->connection, slices,"
+        "status = cnet_sendv(&socket->client, peer->connection,")
+  string(FIND "${_flowmq_socket_text}"
+              "${_flowmq_sg_required}"
+              _flowmq_sg_required_index)
+  if(_flowmq_sg_required_index EQUAL -1)
+    message(FATAL_ERROR
+      "FlowMQ CNet SG contract is missing required runtime fragment: "
+      "${_flowmq_sg_required}")
+  endif()
+endforeach()
+
+string(FIND "${_flowmq_socket_text}"
+            "status == SALTS_ENOTSUP"
+            _flowmq_sg_fallback_index)
+if(NOT _flowmq_sg_fallback_index EQUAL -1)
+  message(FATAL_ERROR
+    "FlowMQ runtime must not retry a retained-SG SALTS_ENOTSUP through a copy fallback")
+endif()
+
+message(STATUS
+        "FlowMQ CNet SG contract verified: TCP retained SG, explicit TLS copy path, no ENOTSUP fallback")
