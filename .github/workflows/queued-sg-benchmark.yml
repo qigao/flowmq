@@ -80,7 +80,9 @@ jobs:
               text = path.read_text()
               text = text.replace("BENCH_SAMPLES = 100000u,", "BENCH_SAMPLES = 1u,")
               text = text.replace("BENCH_LARGE_SAMPLES = 5000u,", "BENCH_LARGE_SAMPLES = 1u,")
-              text = text.replace("BENCH_BATCH_SAMPLES = 10000u,", "BENCH_BATCH_SAMPLES = 500u,")
+              text = text.replace("BENCH_PAYLOAD_BYTES = 64u,", "BENCH_PAYLOAD_BYTES = 60u * 1024u,")
+              text = text.replace("BENCH_BATCH_SAMPLES = 10000u,", "BENCH_BATCH_SAMPLES = 300u,")
+              text = text.replace("BENCH_BATCH_MESSAGES = 64u,", "BENCH_BATCH_MESSAGES = 16u,")
               path.write_text(text)
           PY
 
