@@ -189,8 +189,6 @@ spec("flowmq_socket lifecycle and pattern surface") {
     for (size_t i = 0u; i < sizeof(payload); ++i)
       payload[i] = (unsigned char)((i * 31u + 7u) & 0xffu);
     memcpy(expected, payload, sizeof(payload));
-    check_equal(flowmq_setsockopt(sender, FLOWMQ_SNDHWM, &send_hwm,
-                                  sizeof(send_hwm)), SALTS_OK);
     check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
                                      &endpoint_size), SALTS_OK);
@@ -298,6 +296,8 @@ spec("flowmq_socket lifecycle and pattern surface") {
     for (size_t message = 0u; message < SG_REUSE_MESSAGES; ++message)
       memset(reuse[message], (int)(0x80u + message), SG_PAYLOAD_BYTES);
 
+    check_equal(flowmq_setsockopt(sender, FLOWMQ_SNDHWM, &send_hwm,
+                                  sizeof(send_hwm)), SALTS_OK);
     check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
                                      &endpoint_size), SALTS_OK);
