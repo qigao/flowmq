@@ -2007,7 +2007,9 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_ctx_t *ctx = flowmq_ctx_new();
     flowmq_socket_t *router = flowmq_socket(ctx, FLOWMQ_ROUTER);
     flowmq_socket_t *dealer = flowmq_socket(ctx, FLOWMQ_DEALER);
+    flowmq_pollitem_t router_item = {.socket = router};
     flowmq_router_peer_status_t peer_status = FLOWMQ_ROUTER_PEER_STATUS_INIT;
+    size_t ready = 0u;
     int status = SALTS_EBUSY;
 
     check_equal(flowmq_setsockopt(router, FLOWMQ_SNDHWM, &send_hwm,
@@ -2066,6 +2068,43 @@ spec("flowmq_socket lifecycle and pattern surface") {
       check_equal(peer_status.outstanding_messages, MESSAGES_PER_CYCLE);
       check_equal(peer_status.outstanding_bytes,
                   MESSAGES_PER_CYCLE * sizeof(payload));
+
+      /*
+       * No dealer progress occurs here. The first owner turn settles the one
+       * direct copied write and admits all 31 queued messages as one retained
+       * logical SG write. The next logical send terminal must therefore
+       * account for all 31 queued messages at once, even though CNet may span
+       * that logical write across two NativeIO vector windows.
+       *
+       * A stale FlowMQ cap at NATIVE_IO_VECTOR_MAX would expose an intermediate
+       * completed_messages value of baseline + 17 and fail this contract.
+       */
+      {
+        const uint64_t baseline =
+            (uint64_t)cycle * MESSAGES_PER_CYCLE;
+        for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT; ++i) {
+          peer_status =
+              (flowmq_router_peer_status_t)FLOWMQ_ROUTER_PEER_STATUS_INIT;
+          check_equal(flowmq_router_peer_status(
+                          router, identity, sizeof(identity) - 1u,
+                          &peer_status), SALTS_OK);
+          if (peer_status.completed_messages > baseline) break;
+          check_equal(flowmq_poll(&router_item, 1u, 100u, &ready), SALTS_OK);
+        }
+        check_equal(peer_status.completed_messages, baseline + 1u);
+
+        for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT; ++i) {
+          peer_status =
+              (flowmq_router_peer_status_t)FLOWMQ_ROUTER_PEER_STATUS_INIT;
+          check_equal(flowmq_router_peer_status(
+                          router, identity, sizeof(identity) - 1u,
+                          &peer_status), SALTS_OK);
+          if (peer_status.completed_messages > baseline + 1u) break;
+          check_equal(flowmq_poll(&router_item, 1u, 100u, &ready), SALTS_OK);
+        }
+        check_equal(peer_status.completed_messages,
+                    baseline + MESSAGES_PER_CYCLE);
+      }
 
       for (size_t message = 0u; message < MESSAGES_PER_CYCLE; ++message) {
         uint64_t sequence = UINT64_MAX;
