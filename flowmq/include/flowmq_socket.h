@@ -206,12 +206,21 @@ FLOWMQ_C_API int flowmq_send(flowmq_socket_t *socket, const void *data,
  * buffer data/used/capacity must remain immutable until the ordinary FlowMQ
  * send completion settles.
  *
- * This first retained surface is intentionally immediate-only: FLOWMQ_SNDMORE
- * and user multipart staging are not supported, and a busy DATA lane is
- * reported instead of silently copying into the outbound queue. ROUTER may
- * select its routing identity with flowmq_send(..., FLOWMQ_SNDMORE) and then
- * submit the final DATA part with this function. TLS returns SALTS_ENOTSUP;
- * there is no retained-to-copy fallback.
+ * FLOWMQ_SNDMORE stages retained DATA ownership in a fixed-capacity socket
+ * transaction. Every successful staged part may be released immediately by the
+ * caller. The complete multipart message is admitted as exactly one CNet
+ * logical retained vector when the final part arrives; the aggregate encoded
+ * range count must fit CNET_RETAINED_VECTOR_MAX and the aggregate encoded bytes
+ * must fit the configured CNet send bound. An over-bound final/staged shape
+ * fails explicitly without flattening or copying and leaves already-staged
+ * retained ownership intact for retry/cancel.
+ *
+ * Copy-staged and retained-staged DATA are not mixed in one multipart message.
+ * ROUTER may still select its routing identity with
+ * flowmq_send(..., FLOWMQ_SNDMORE) before retained DATA staging. Retained
+ * multipart PUB/XPUB fanout is fail-closed with SALTS_ENOTSUP in this bounded
+ * single-logical-terminal design. TLS also returns SALTS_ENOTSUP; there is no
+ * retained-to-copy fallback.
  *
  * FLOWMQ_DONTWAIT has the same would-block meaning as flowmq_send(). Without
  * it, the owner thread advances this socket until immediate retained admission
