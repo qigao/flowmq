@@ -74,12 +74,24 @@ FlowMQ-owned framing buffer，而 payload ranges 继续引用调用者 slice 的
 `mem_slice_release()` 自己的引用，CNet 在 logical send terminal 前保留 backing；
 这段时间 backing bytes 以及 buffer 的 data/used/capacity 必须保持不可变。
 
-该 retained surface 第一阶段故意保持 immediate-only：不接受
-`FLOWMQ_SNDMORE` 用户 multipart staging，busy DATA lane 返回 would-block，而不是
-复制进 outbound queue。ROUTER 仍先用现有 `flowmq_send(..., FLOWMQ_SNDMORE)`
-提交 routing-id envelope，再用 `flowmq_send_slice(..., 0)` 提交 final DATA。
-plaintext TCP 支持该路径；TLS 明确返回 `SALTS_ENOTSUP`，不会隐式转成 copy/encryption
-fallback。PUB/XPUB 对 busy/mute peer 继续采用 drop 语义。
+`flowmq_send_slice` 同时支持有界 retained multipart。每个成功的
+`FLOWMQ_SNDMORE` part 都把其 canonical slice ownership 同步转移到 socket 的独立 retained
+staging；调用者可立即释放自己的引用。retained staging 与 copied `send_staged` 不混用，
+唯一例外是 ROUTER 可先用普通 `flowmq_send(..., FLOWMQ_SNDMORE)` 选择 routing-id envelope，
+随后所有 DATA parts 使用 retained surface。
+
+final retained part 到来时，FlowMQ 按 FMQ/6 wire 顺序组合 staged ranges 与 final ranges；
+只有 aggregate range count 不超过 `CNET_RETAINED_VECTOR_MAX`（当前 32）且 aggregate encoded
+bytes 在 CNet send bound 内时，才通过一次 `cnet_send_slicev` 提交。因此一个 retained
+multipart message 仍只有一个 CNet logical send terminal。超限返回显式
+`SALTS_EMSGSIZE`，不 split、不 flatten、不 copy；已经成功 staged 的前缀仍由 socket 持有，
+可由调用者重试 final part，或在 disconnect/cancel/close 时精确释放。
+
+PAIR/PUSH/DEALER/REQ/REP 与 ROUTER 的 retained multipart 都保持选定 peer/generation pinning；
+REQ/REP FSM 只在 final aggregate admission 成功后完成本次 send transaction。retained
+multipart PUB/XPUB 暂时 `SALTS_ENOTSUP`，因为 multi-peer atomic retained ownership 需要独立
+设计；final-only retained publication 维持现有 mute/drop 语义。plaintext TCP 支持 retained
+surface；TLS 仍明确返回 `SALTS_ENOTSUP`，不会隐式转成 copy/encryption fallback。
 
 需要排队的完整 frame 只平铺一次到其 canonical `mem_buffer_t`。plaintext TCP flush
 将这些 owner buffers 转成 `mem_slice_t` 并通过 `cnet_send_slicev` retained admission
