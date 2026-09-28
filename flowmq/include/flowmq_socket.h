@@ -259,8 +259,12 @@ FLOWMQ_C_API int flowmq_recv(flowmq_socket_t *socket, void *data,
  *
  * Flow credit, HWM occupancy, multipart state and REQ/REP state advance when
  * the message part is dequeued, exactly as for flowmq_recv(); application hold
- * time for the returned slice does not delay transport credit. On any error or
- * would-block result, `out` is reset to an empty slice and owns nothing.
+ * time for the returned slice does not delay transport credit.
+ *
+ * `out` must be an empty/zero-initialized slice. Passing a descriptor that
+ * still owns a buffer returns SALTS_EINVAL without modifying it, so this API
+ * can never discard the caller's live reference. With a valid empty output,
+ * error and would-block results leave it empty and owning nothing.
  *
  * Without FLOWMQ_DONTWAIT, advance this socket on the calling thread until a
  * part is available or progress fails.
