@@ -119,5 +119,28 @@ if(_flowmq_retained_api_index EQUAL -1)
     "FlowMQ public API must expose explicit retained flowmq_send_slice()")
 endif()
 
+string(FIND "${_flowmq_socket_header_text}"
+            "FLOWMQ_C_API int flowmq_recv_slice("
+            _flowmq_owned_recv_api_index)
+if(_flowmq_owned_recv_api_index EQUAL -1)
+  message(FATAL_ERROR
+    "FlowMQ public API must expose explicit owned flowmq_recv_slice()")
+endif()
+
+foreach(_flowmq_owned_recv_required IN ITEMS
+        "static int flowmq_socket_try_recv_slice("
+        "out->buffer = message->buffer;"
+        "message->buffer = NULL;"
+        "status = flowmq_socket_try_recv_slice(socket, out, flags);")
+  string(FIND "${_flowmq_socket_text}"
+              "${_flowmq_owned_recv_required}"
+              _flowmq_owned_recv_required_index)
+  if(_flowmq_owned_recv_required_index EQUAL -1)
+    message(FATAL_ERROR
+      "FlowMQ owned receive contract is missing required ownership-transfer fragment: "
+      "${_flowmq_owned_recv_required}")
+  endif()
+endforeach()
+
 message(STATUS
-        "FlowMQ CNet SG contract verified: bounded retained multipart, no copy mixing, TCP_NODELAY policy, explicit TLS copy path, no fallback")
+        "FlowMQ CNet SG / owned receive contract verified: bounded retained multipart, no copy mixing, TCP_NODELAY policy, explicit TLS copy path, direct inbound owner transfer, no fallback")
