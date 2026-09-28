@@ -10,7 +10,8 @@ on:
       - "vcpkg.json"
       - ".github/workflows/vcpkg-cache-contract.yml"
   push:
-    branches: [main]
+    tags-ignore:
+      - "**"
     paths:
       - "CMakeLists.txt"
       - "cmake/**"
@@ -18,7 +19,6 @@ on:
       - "tests/package/**"
       - "vcpkg.json"
       - ".github/workflows/vcpkg-cache-contract.yml"
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -80,8 +80,8 @@ jobs:
           <Project Sdk="Microsoft.NET.Sdk">
             <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
             <ItemGroup>
-              <PackageReference Include="Salts.Native" Version="[1.8.2]" />
-              <PackageReference Include="SaltsUtils.Native" Version="[4.1.2]" />
+              <PackageReference Include="Salts.Native" Version="[1.8.3]" />
+              <PackageReference Include="SaltsUtils.Native" Version="[4.1.3]" />
             </ItemGroup>
           </Project>
           EOF
@@ -90,8 +90,8 @@ jobs:
             --name github --username qigao --password "$GITHUB_TOKEN" \
             --store-password-in-clear-text --configfile "$config"
           dotnet restore "$project" --configfile "$config" --packages "$packages"
-          echo "SALTS_ROOT=$packages/salts.native/1.8.2/sdk/linux-x64" >> "$GITHUB_ENV"
-          echo "SALTS_UTILS_ROOT=$packages/saltsutils.native/4.1.2/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "SALTS_ROOT=$packages/salts.native/1.8.3/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_ROOT=$packages/saltsutils.native/4.1.3/sdk/linux-x64" >> "$GITHUB_ENV"
 
       - name: Qualify CFlow send ordering on control plane
         shell: bash
@@ -99,7 +99,7 @@ jobs:
           set -euo pipefail
           export FLOWMQ_CFLOW_SALTS_ROOT="$SALTS_ROOT"
           export LD_LIBRARY_PATH="$SALTS_ROOT/lib:$FLOWMQ_VCPKG_INSTALLED/x64-linux/lib:${LD_LIBRARY_PATH:-}"
-          cmake -S flowmq/tests/qualification -B build/cflow-qualification -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"             -DVCPKG_TARGET_TRIPLET=x64-linux             -DVCPKG_MANIFEST_MODE=OFF             -DVCPKG_INSTALLED_DIR="$FLOWMQ_VCPKG_INSTALLED"
+          cmake -S flowmq/tests/qualification -B build/cflow-qualification -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE"             -DVCPKG_TARGET_TRIPLET=x64-linux             -DVCPKG_MANIFEST_MODE=OFF             -DVCPKG_INSTALLED_DIR="$FLOWMQ_VCPKG_INSTALLED"
           cmake --build build/cflow-qualification --parallel 2
           ctest --test-dir build/cflow-qualification             --no-tests=error --output-on-failure
 
@@ -109,7 +109,7 @@ jobs:
           set -euo pipefail
           cmake -S . -B build/cache-contract -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
             -DVCPKG_TARGET_TRIPLET=x64-linux \
             -DVCPKG_MANIFEST_MODE=OFF \
             -DVCPKG_INSTALLED_DIR="$FLOWMQ_VCPKG_INSTALLED" \
@@ -118,34 +118,13 @@ jobs:
           cmake --build build/cache-contract --parallel 2
           ctest --test-dir build/cache-contract --no-tests=error --output-on-failure
 
-      - name: Measure dispatch policy candidates
-        shell: bash
-        run: |
-          set -euo pipefail
-          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$FLOWMQ_VCPKG_INSTALLED/x64-linux/lib"
-          build/cache-contract/bin/bench_flowmq_dispatch_policy
-
-      - name: Smoke pattern dispatch benchmark workloads
-        shell: bash
-        run: |
-          set -euo pipefail
-          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$FLOWMQ_VCPKG_INSTALLED/x64-linux/lib"
-          FLOWMQ_BENCH_SMOKE=1 build/cache-contract/bin/bench_flowmq_pattern_dispatch
-
-      - name: Measure copy vs retained immediate DATA benchmark
-        shell: bash
-        run: |
-          set -euo pipefail
-          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$FLOWMQ_VCPKG_INSTALLED/x64-linux/lib"
-          build/cache-contract/bin/bench_flowmq_socket
-
       - name: Verify peer lifecycle in Debug with ASan
         shell: bash
         run: |
           set -euo pipefail
           cmake -S . -B build/peer-state-asan -G Ninja \
             -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
             -DVCPKG_TARGET_TRIPLET=x64-linux \
             -DVCPKG_MANIFEST_MODE=OFF \
             -DVCPKG_INSTALLED_DIR="$FLOWMQ_VCPKG_INSTALLED" \
@@ -169,7 +148,7 @@ jobs:
           export FLOWMQ_ROOT="$flowmq_root"
           cmake -S tests/package -B build/package-consumer -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
             -DVCPKG_TARGET_TRIPLET=x64-linux \
             -DVCPKG_MANIFEST_MODE=OFF \
             -DVCPKG_INSTALLED_DIR="$FLOWMQ_VCPKG_INSTALLED"
@@ -238,8 +217,8 @@ jobs:
           <Project Sdk="Microsoft.NET.Sdk">
             <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
             <ItemGroup>
-              <PackageReference Include="Salts.Native" Version="[1.8.2]" />
-              <PackageReference Include="SaltsUtils.Native" Version="[4.1.2]" />
+              <PackageReference Include="Salts.Native" Version="[1.8.3]" />
+              <PackageReference Include="SaltsUtils.Native" Version="[4.1.3]" />
             </ItemGroup>
           </Project>
           '@ | Set-Content -LiteralPath $project
@@ -251,13 +230,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "NuGet source configuration failed" }
           dotnet restore "$project" --configfile "$config" --packages "$packages"
           if ($LASTEXITCODE -ne 0) { throw "SDK restore failed" }
-          $saltsRoot = Join-Path $packages "salts.native\1.8.2\sdk\windows-x64"
-          $saltsUtilsRoot = Join-Path $packages "saltsutils.native\4.1.2\sdk\windows-x64"
+          $saltsRoot = Join-Path $packages "salts.native\1.8.3\sdk\windows-x64"
+          $saltsUtilsRoot = Join-Path $packages "saltsutils.native\4.1.3\sdk\windows-x64"
           if (-not (Test-Path -LiteralPath $saltsRoot -PathType Container)) {
-            throw "missing Salts 1.8.2 windows-x64 SDK"
+            throw "missing Salts 1.8.3 windows-x64 SDK"
           }
           if (-not (Test-Path -LiteralPath $saltsUtilsRoot -PathType Container)) {
-            throw "missing SaltsUtils 4.1.2 windows-x64 SDK"
+            throw "missing SaltsUtils 4.1.3 windows-x64 SDK"
           }
           "SALTS_ROOT=$saltsRoot" >> $env:GITHUB_ENV
           "SALTS_UTILS_ROOT=$saltsUtilsRoot" >> $env:GITHUB_ENV
