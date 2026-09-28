@@ -1,4 +1,4 @@
-if(NOT DEFINED FLOWMQ_DATABINDC_EXECUTABLE OR
+if(NOT DEFINED FLOWMQ_SALTS_IDLC_EXECUTABLE OR
    NOT DEFINED FLOWMQ_DATABIND_SCHEMA OR
    NOT DEFINED FLOWMQ_DATABIND_OUTPUT OR
    NOT DEFINED FLOWMQ_SALTS_HOST_ROOT OR
@@ -22,11 +22,11 @@ else()
 endif()
 
 execute_process(
-  COMMAND "${FLOWMQ_DATABINDC_EXECUTABLE}"
+  COMMAND "${FLOWMQ_SALTS_IDLC_EXECUTABLE}"
           "${FLOWMQ_DATABIND_SCHEMA}"
           --lang c
           --output "${FLOWMQ_DATABIND_OUTPUT}"
   RESULT_VARIABLE _flowmq_databind_status)
 if(NOT _flowmq_databind_status EQUAL 0)
-  message(FATAL_ERROR "FlowMQ databindc failed with status ${_flowmq_databind_status}")
+  message(FATAL_ERROR "FlowMQ salts-idlc failed with status ${_flowmq_databind_status}")
 endif()
