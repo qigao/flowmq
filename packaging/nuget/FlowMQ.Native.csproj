@@ -14,8 +14,8 @@
     <NoWarn>$(NoWarn);NU5128</NoWarn>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Salts.Native" Version="[1.7.12]" />
-    <PackageReference Include="SaltsUtils.Native" Version="[4.0.3]" />
+    <PackageReference Include="Salts.Native" Version="[1.8.0]" />
+    <PackageReference Include="SaltsUtils.Native" Version="[4.1.0]" />
     <None Include="README.md" Pack="true" PackagePath="\" />
     <None Include="$(PackageRoot)/sdk/**/*" Pack="true" PackagePath="sdk/" />
   </ItemGroup>
