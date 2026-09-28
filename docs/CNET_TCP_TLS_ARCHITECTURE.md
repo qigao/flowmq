@@ -112,6 +112,41 @@ Salts Core refcount 表达，不保留裸 caller pointer。TLS 仍必须让加�
 copy/encryption plaintext path。任何 retained admission 失败都不留下 backing retain，
 也不提交 peer credit/HWM；queued copy path 的 buffer 仍由原 owner 持有。
 
+## 接收内存与所有权
+
+当前 receive decode 之后存在两个明确的 copy boundary：
+
+```text
+flowmq_stream_decoder_next()
+        -> frame.payload borrowed view
+        -> flowmq_socket_stage_bytes()
+             copy -> socket message_pool mem_buffer_t
+        -> inbound ring owns mem_buffer_t
+        -> flowmq_recv()
+             copy -> caller storage
+```
+
+`flowmq_recv_slice` 只消除第二个边界，不伪装成 CNet-ingress zero-copy。成功 dequeue 时，
+inbound ring 的唯一 canonical `mem_buffer_t` reference 直接转移到 caller 的
+`mem_slice_t`；FlowMQ 不执行 retain+release 对，也不把 bytes 复制到新的 detached storage。
+这使 zero-length part 也能保持同样的 ownership-transfer 规则。
+
+receive credit、inbound HWM accounting、`RCVMORE` 与 pattern/REQ/REP FSM 都在 dequeue
+成功时推进，与 `flowmq_recv` 保持一致；应用随后持有 slice 的时间不会占用 transport
+credit 或 socket inbound occupancy。错误、DONTWAIT would-block 与非法 FSM 路径都会把
+输出 descriptor 保持为空且不取得 ownership。
+
+该 surface 的 lifetime 明确受 socket memory pool 约束。Salts 1.7.12 的 `mem_destroy()`
+会直接销毁 pool slab，并不等待 outstanding pooled buffers，所以返回的 slice 可以跨后续
+owner-thread `poll/send/recv` progress 持有，但必须在 `flowmq_close()` 前
+`mem_slice_release()`。FlowMQ 不通过隐藏 copy 来制造 close 后 lifetime。若未来要求 slice
+跨 socket/context destruction 存活，需要 Salts 提供 detachable/refcounted pool owner，
+或另行定义显式 non-pooled receive ownership。
+
+decoder payload -> message_pool 的第一次 copy 仍保留。是否让 stream decoder/CNet 直接产出
+canonical owned receive backing 是独立的后续优化，因为它会改变 decoder consume/lifetime
+边界，不应与 public recv-slice ABI 的第一阶段混合。
+
 ## TCP latency policy
 
 FlowMQ plaintext TCP runtime 在 CNet client 启动后显式设置
