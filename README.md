@@ -38,7 +38,10 @@ caller bytes；`flowmq_send_slice()` 则只用于 plaintext TCP 的 immediate re
 引用，但 backing bytes/data/used/capacity 必须保持不可变直到 send terminal。它不接受
 `FLOWMQ_SNDMORE` 用户 multipart staging，busy lane 不会偷偷 copy/queue，TLS 返回
 `SALTS_ENOTSUP`。ROUTER 可先用普通 `flowmq_send(..., FLOWMQ_SNDMORE)` 选择 routing id，
-再用 retained slice 发送最终 DATA。
+再用 retained slice 发送最终 DATA。基准显示该 API 不是小消息的默认替代：
+64-byte retained 会承担额外 slice/refcount/framing 固定成本，而 1 MiB owned payload
+已经能通过消除 admission copy 获得可测收益；普通/小 borrowed payload 继续优先使用
+`flowmq_send()`。
 
 `FLOWMQ_RECONNECT_IVL=18` 与 `FLOWMQ_RECONNECT_IVL_MAX=21` 采用 ZeroMQ 的编号和
 连接级退避语义：IVL 默认 100ms，`-1` 禁止重连，`0` 表示下一轮 owner progress 立即
