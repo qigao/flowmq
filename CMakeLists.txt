@@ -108,15 +108,15 @@ find_package(
   NO_CMAKE_FIND_ROOT_PATH)
 find_package(OpenSSL CONFIG REQUIRED)
 
-unset(FLOWMQ_DATABINDC_EXECUTABLE)
-unset(FLOWMQ_DATABINDC_EXECUTABLE CACHE)
-find_program(FLOWMQ_DATABINDC_EXECUTABLE NAMES databindc
+unset(FLOWMQ_SALTS_IDLC_EXECUTABLE)
+unset(FLOWMQ_SALTS_IDLC_EXECUTABLE CACHE)
+find_program(FLOWMQ_SALTS_IDLC_EXECUTABLE NAMES salts-idlc
              PATHS "${FLOWMQ_SALTS_UTILS_HOST_ROOT_PATH}/bin"
              NO_DEFAULT_PATH
              NO_CMAKE_FIND_ROOT_PATH)
-if(NOT FLOWMQ_DATABINDC_EXECUTABLE)
+if(NOT FLOWMQ_SALTS_IDLC_EXECUTABLE)
   message(FATAL_ERROR
-    "FlowMQ media-provider contract requires the host SaltsUtils databindc")
+    "FlowMQ media-provider contract requires the host SaltsUtils salts-idlc")
 endif()
 
 set(FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS
