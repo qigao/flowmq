@@ -230,6 +230,115 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
+  it("transfers inbound buffer ownership through recv slice across later progress") {
+    enum { OWNED_RECV_BYTES = 64u * 1024u + 17u };
+    static unsigned char first[OWNED_RECV_BYTES];
+    static unsigned char expected[OWNED_RECV_BYTES];
+    static unsigned char second[] = "second-after-owned-recv";
+    unsigned char received[sizeof(second)] = {0};
+    char endpoint[128] = {0};
+    size_t endpoint_size = 0u;
+    size_t received_size = 0u;
+    mem_slice_t slice = {0};
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *sender = flowmq_socket(ctx, FLOWMQ_PAIR);
+    flowmq_socket_t *receiver = flowmq_socket(ctx, FLOWMQ_PAIR);
+    int status = SALTS_EBUSY;
+
+    for (size_t i = 0u; i < sizeof(first); ++i)
+      first[i] = (unsigned char)((i * 29u + 11u) & 0xffu);
+    memcpy(expected, first, sizeof(first));
+
+    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), SALTS_OK);
+    check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(sender, endpoint), SALTS_OK);
+
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
+      status = flowmq_send(sender, first, sizeof(first), FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+
+    status = SALTS_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
+      status = flowmq_recv_slice(receiver, &slice, FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    check_not_null(slice.buffer);
+    check_not_null(slice.data);
+    check_equal(slice.length, sizeof(expected));
+    check_equal(memcmp(slice.data, expected, sizeof(expected)), 0);
+
+    /* Caller input and later socket progress cannot mutate the handed-off owner. */
+    memset(first, 0xa5, sizeof(first));
+    status = SALTS_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
+      status = flowmq_send(sender, second, sizeof(second) - 1u,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+
+    status = SALTS_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
+      check_equal(memcmp(slice.data, expected, sizeof(expected)), 0);
+      status = flowmq_recv(receiver, received, sizeof(received),
+                           &received_size, FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    check_equal(received_size, sizeof(second) - 1u);
+    check_equal(memcmp(received, second, received_size), 0);
+    check_equal(memcmp(slice.data, expected, sizeof(expected)), 0);
+
+    mem_slice_release(&slice);
+    check_null(slice.buffer);
+    check_null(slice.data);
+    check_equal(slice.length, 0u);
+
+    /*
+     * A live output owner must never be overwritten: reject it unchanged so
+     * the caller cannot lose a reference by accidentally reusing the slice.
+     */
+    {
+      static unsigned char occupied_bytes[] = "occupied-output";
+      mem_buffer_t *occupied_buffer =
+          mem_wrap_external(occupied_bytes, sizeof(occupied_bytes) - 1u,
+                            NULL, NULL);
+      mem_slice_t occupied_slice;
+      check_not_null(occupied_buffer);
+      occupied_slice =
+          mem_slice(occupied_buffer, 0u, sizeof(occupied_bytes) - 1u);
+      check_not_null(occupied_slice.buffer);
+      check_equal(flowmq_recv_slice(receiver, &occupied_slice,
+                                    FLOWMQ_DONTWAIT),
+                  SALTS_EINVAL);
+      check_true(occupied_slice.buffer == occupied_buffer);
+      check_equal(occupied_slice.length, sizeof(occupied_bytes) - 1u);
+      check_equal(memcmp(occupied_slice.data, occupied_bytes,
+                         occupied_slice.length), 0);
+      mem_slice_release(&occupied_slice);
+      mem_buffer_release(occupied_buffer);
+    }
+
+    /* A valid empty output stays empty when no message is ready. */
+    check_equal(flowmq_recv_slice(receiver, &slice, FLOWMQ_DONTWAIT),
+                SALTS_EBUSY);
+    check_null(slice.buffer);
+    check_null(slice.data);
+    check_equal(slice.length, 0u);
+
+    check_equal(flowmq_close(sender), SALTS_OK);
+    check_equal(flowmq_close(receiver), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+  }
+
   it("retains a 1 MiB offset TCP slice until the CNet terminal") {
     enum { RETAINED_BYTES = 1024u * 1024u, RETAINED_OFFSET = 13u,
            RETAINED_GUARD = 19u };
@@ -2167,7 +2276,10 @@ spec("flowmq_socket lifecycle and pattern surface") {
     char received[64] = {0};
     size_t endpoint_size = 0u;
     size_t received_size = 0u;
+    size_t option_size = sizeof(int);
+    int more = -1;
     mem_buffer_t *reply_buffer = NULL;
+    mem_slice_t received_slice = {0};
     mem_slice_t reply_slice = {0};
     flowmq_ctx_t *ctx = flowmq_ctx_new();
     flowmq_socket_t *router = flowmq_socket(ctx, FLOWMQ_ROUTER);
@@ -2189,16 +2301,26 @@ spec("flowmq_socket lifecycle and pattern surface") {
     status = SALTS_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
       check_equal(progress_pair(dealer, router), SALTS_OK);
-      status = flowmq_recv(router, received, sizeof(received), &received_size,
-                           FLOWMQ_DONTWAIT);
+      status = flowmq_recv_slice(router, &received_slice, FLOWMQ_DONTWAIT);
     }
     check_equal(status, SALTS_OK);
-    check_equal(received_size, sizeof(identity) - 1u);
-    check_equal(memcmp(received, identity, received_size), 0);
-    check_equal(flowmq_recv(router, received, sizeof(received), &received_size,
-                            FLOWMQ_DONTWAIT), SALTS_OK);
-    check_equal(received_size, sizeof(request) - 1u);
-    check_equal(memcmp(received, request, received_size), 0);
+    check_equal(received_slice.length, sizeof(identity) - 1u);
+    check_equal(memcmp(received_slice.data, identity, received_slice.length), 0);
+    option_size = sizeof(more);
+    check_equal(flowmq_getsockopt(router, FLOWMQ_RCVMORE, &more, &option_size),
+                SALTS_OK);
+    check_equal(more, 1);
+    mem_slice_release(&received_slice);
+
+    check_equal(flowmq_recv_slice(router, &received_slice, FLOWMQ_DONTWAIT),
+                SALTS_OK);
+    check_equal(received_slice.length, sizeof(request) - 1u);
+    check_equal(memcmp(received_slice.data, request, received_slice.length), 0);
+    option_size = sizeof(more);
+    check_equal(flowmq_getsockopt(router, FLOWMQ_RCVMORE, &more, &option_size),
+                SALTS_OK);
+    check_equal(more, 0);
+    mem_slice_release(&received_slice);
 
     reply_buffer =
         mem_wrap_external(reply, sizeof(reply) - 1u, NULL, NULL);
@@ -3855,6 +3977,7 @@ spec("flowmq_socket lifecycle and pattern surface") {
     size_t endpoint_size = 0u;
     size_t received_size = 0u;
     size_t receive_hwm_bytes = 9u;
+    mem_slice_t received_slice = {0};
     flowmq_ctx_t *ctx = flowmq_ctx_new();
     flowmq_socket_t *router = flowmq_socket(ctx, FLOWMQ_ROUTER);
     flowmq_socket_t *dealer = flowmq_socket(ctx, FLOWMQ_DEALER);
@@ -3886,9 +4009,11 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(received_size, sizeof(identity) - 1u);
     check_equal(flowmq_send(dealer, next, sizeof(next) - 1u, FLOWMQ_DONTWAIT),
                 SALTS_ENOBUFS);
-    check_equal(flowmq_recv(router, received, sizeof(received), &received_size,
-                            FLOWMQ_DONTWAIT), SALTS_OK);
-    check_equal(received_size, sizeof(payload) - 1u);
+    check_equal(flowmq_recv_slice(router, &received_slice, FLOWMQ_DONTWAIT),
+                SALTS_OK);
+    check_equal(received_slice.length, sizeof(payload) - 1u);
+    check_equal(memcmp(received_slice.data, payload, received_slice.length), 0);
+    mem_slice_release(&received_slice);
 
     status = SALTS_ENOBUFS;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_ENOBUFS;
@@ -3923,9 +4048,8 @@ spec("flowmq_socket lifecycle and pattern surface") {
     static const char request[] = "request";
     static const char reply[] = "reply";
     char endpoint[128] = {0};
-    char received[32] = {0};
     size_t endpoint_size = 0u;
-    size_t received_size = 0u;
+    mem_slice_t received_slice = {0};
     flowmq_ctx_t *ctx = flowmq_ctx_new();
     flowmq_socket_t *req = flowmq_socket(ctx, FLOWMQ_REQ);
     flowmq_socket_t *rep = flowmq_socket(ctx, FLOWMQ_REP);
@@ -3946,13 +4070,14 @@ spec("flowmq_socket lifecycle and pattern surface") {
     status = SALTS_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
       check_equal(progress_pair(req, rep), SALTS_OK);
-      status = flowmq_recv(rep, received, sizeof(received), &received_size,
-                           FLOWMQ_DONTWAIT);
+      status = flowmq_recv_slice(rep, &received_slice, FLOWMQ_DONTWAIT);
     }
     check_equal(status, SALTS_OK);
-    check_equal(received_size, sizeof(request) - 1u);
-    check_equal(flowmq_recv(rep, received, sizeof(received), &received_size, 0),
-                SALTS_EPROTO);
+    check_equal(received_slice.length, sizeof(request) - 1u);
+    check_equal(memcmp(received_slice.data, request, received_slice.length), 0);
+    mem_slice_release(&received_slice);
+    check_equal(flowmq_recv_slice(rep, &received_slice, 0), SALTS_EPROTO);
+    check_null(received_slice.buffer);
 
     status = SALTS_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
@@ -3963,11 +4088,12 @@ spec("flowmq_socket lifecycle and pattern surface") {
     status = SALTS_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
       check_equal(progress_pair(req, rep), SALTS_OK);
-      status = flowmq_recv(req, received, sizeof(received), &received_size,
-                           FLOWMQ_DONTWAIT);
+      status = flowmq_recv_slice(req, &received_slice, FLOWMQ_DONTWAIT);
     }
     check_equal(status, SALTS_OK);
-    check_equal(received_size, sizeof(reply) - 1u);
+    check_equal(received_slice.length, sizeof(reply) - 1u);
+    check_equal(memcmp(received_slice.data, reply, received_slice.length), 0);
+    mem_slice_release(&received_slice);
 
     check_equal(flowmq_close(req), SALTS_OK);
     check_equal(flowmq_close(rep), SALTS_OK);

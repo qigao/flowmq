@@ -109,6 +109,36 @@ static int bench_exchange(bench_pair_t *pair, const void *payload,
   return SALTS_OK;
 }
 
+static int bench_exchange_owned_recv(bench_pair_t *pair,
+                                     const void *payload,
+                                     size_t payload_size) {
+  mem_slice_t received = {0};
+  int result = SALTS_OK;
+  int status = flowmq_send(pair->sender, payload, payload_size,
+                           FLOWMQ_DONTWAIT);
+  for (size_t i = 0u; status == SALTS_EBUSY && i < BENCH_PROGRESS_LIMIT; ++i) {
+    status = bench_progress(pair);
+    if (status == SALTS_OK)
+      status = flowmq_send(pair->sender, payload, payload_size,
+                           FLOWMQ_DONTWAIT);
+  }
+  if (status != SALTS_OK) return status;
+
+  status = SALTS_EBUSY;
+  for (size_t i = 0u; status == SALTS_EBUSY && i < BENCH_PROGRESS_LIMIT; ++i) {
+    status = bench_progress(pair);
+    if (status == SALTS_OK)
+      status = flowmq_recv_slice(pair->receiver, &received, FLOWMQ_DONTWAIT);
+  }
+  if (status != SALTS_OK) return status;
+  if (received.length != payload_size ||
+      (payload_size != 0u &&
+       memcmp(received.data, payload, payload_size) != 0))
+    result = SALTS_EPROTO;
+  mem_slice_release(&received);
+  return result;
+}
+
 static int bench_exchange_retained(bench_pair_t *pair,
                                    const mem_slice_t *payload) {
   static unsigned char received[BENCH_RETAINED_LARGE_PAYLOAD_BYTES];
@@ -410,6 +440,14 @@ spec("FlowMQ direct socket benchmark") {
     }
     check_equal(status, SALTS_OK);
 
+    check_equal(bench_exchange_owned_recv(&pair, payload, sizeof(payload)),
+                SALTS_OK);
+    benchmark_bytes("PAIR 64-byte owned recv", samples,
+                    BENCH_PAYLOAD_BYTES) {
+      status = bench_exchange_owned_recv(&pair, payload, sizeof(payload));
+    }
+    check_equal(status, SALTS_OK);
+
     check_equal(bench_exchange_retained(&pair, &payload_slice), SALTS_OK);
     benchmark_bytes("PAIR 64-byte retained immediate", samples,
                     BENCH_PAYLOAD_BYTES) {
@@ -425,6 +463,15 @@ spec("FlowMQ direct socket benchmark") {
     }
     check_equal(status, SALTS_OK);
 
+    check_equal(bench_exchange_owned_recv(
+                    &pair, large_payload, sizeof(large_payload)), SALTS_OK);
+    benchmark_bytes("PAIR 64-KiB owned recv", large_samples,
+                    BENCH_LARGE_PAYLOAD_BYTES) {
+      status = bench_exchange_owned_recv(
+          &pair, large_payload, sizeof(large_payload));
+    }
+    check_equal(status, SALTS_OK);
+
     check_equal(bench_exchange(
                     &pair, retained_large_payload,
                     sizeof(retained_large_payload)), SALTS_OK);
@@ -432,6 +479,16 @@ spec("FlowMQ direct socket benchmark") {
                     BENCH_RETAINED_LARGE_PAYLOAD_BYTES) {
       status = bench_exchange(&pair, retained_large_payload,
                               sizeof(retained_large_payload));
+    }
+    check_equal(status, SALTS_OK);
+
+    check_equal(bench_exchange_owned_recv(
+                    &pair, retained_large_payload,
+                    sizeof(retained_large_payload)), SALTS_OK);
+    benchmark_bytes("PAIR 1-MiB owned recv", retained_large_samples,
+                    BENCH_RETAINED_LARGE_PAYLOAD_BYTES) {
+      status = bench_exchange_owned_recv(
+          &pair, retained_large_payload, sizeof(retained_large_payload));
     }
     check_equal(status, SALTS_OK);
 

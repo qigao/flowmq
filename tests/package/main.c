@@ -35,6 +35,7 @@ int main(void)
     size_t send_hwm_bytes = 4096u;
     flowmq_router_peer_status_t peer_status = FLOWMQ_ROUTER_PEER_STATUS_INIT;
     mem_slice_t invalid_slice = {0};
+    mem_slice_t recv_slice = {0};
     int result = 1;
 
     policy.bindings = &binding;
@@ -81,6 +82,13 @@ int main(void)
      */
     if (flowmq_send_slice(router, &invalid_slice, FLOWMQ_DONTWAIT) !=
         SALTS_EINVAL)
+        goto cleanup;
+
+    /* Pin the owned receive symbol without requiring a live transport. */
+    if (flowmq_recv_slice(router, &recv_slice, FLOWMQ_DONTWAIT) != SALTS_EBUSY)
+        goto cleanup;
+    if (recv_slice.buffer != NULL || recv_slice.data != NULL ||
+        recv_slice.length != 0u)
         goto cleanup;
 
     result = 0;

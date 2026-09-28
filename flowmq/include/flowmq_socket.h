@@ -247,6 +247,32 @@ FLOWMQ_C_API int flowmq_recv(flowmq_socket_t *socket, void *data,
                              size_t capacity, size_t *received, int flags);
 
 /**
+ * Transfer one available inbound message part as a canonical Salts Core slice
+ * without the final copy performed by flowmq_recv().
+ *
+ * On SALTS_OK, ownership of the dequeued inbound buffer is transferred to
+ * `out`; the caller releases it with mem_slice_release(). The returned slice
+ * remains valid across later owner-thread socket progress, sends, and receives.
+ * Because FlowMQ 1.1 receive storage is backed by the socket-owned Salts memory
+ * pool, every returned slice must be released before flowmq_close(). The API
+ * does not copy into a detached buffer to extend lifetime across socket close.
+ *
+ * Flow credit, HWM occupancy, multipart state and REQ/REP state advance when
+ * the message part is dequeued, exactly as for flowmq_recv(); application hold
+ * time for the returned slice does not delay transport credit.
+ *
+ * `out` must be an empty/zero-initialized slice. Passing a descriptor that
+ * still owns a buffer returns SALTS_EINVAL without modifying it, so this API
+ * can never discard the caller's live reference. With a valid empty output,
+ * error and would-block results leave it empty and owning nothing.
+ *
+ * Without FLOWMQ_DONTWAIT, advance this socket on the calling thread until a
+ * part is available or progress fails.
+ */
+FLOWMQ_C_API int flowmq_recv_slice(flowmq_socket_t *socket,
+                                   mem_slice_t *out, int flags);
+
+/**
  * Drive all listed sockets on the calling thread until an item is ready or the
  * timeout expires, then report the level-triggered ready items. A pending
  * transaction-cancellation error is reported as FLOWMQ_POLLERR until the
