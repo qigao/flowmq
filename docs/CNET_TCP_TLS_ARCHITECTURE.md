@@ -137,9 +137,9 @@ credit 或 socket inbound occupancy。caller 必须提供空的输出 slice；�
 直接返回 `SALTS_EINVAL` 且不修改原 owner，避免覆盖 live reference。对合法的空输出，
 错误、DONTWAIT would-block 与非法 FSM 路径都保持为空且不取得 ownership。
 
-Salts `1.8.0` 是本仓当前 released producer baseline；它发布早于 CNet owned-receive #594/#597，因此这里仍描述 FlowMQ 自己的 socket `message_pool` owner，而不是后续 CNet producer-owned backing。
+Salts `1.8.2` 是本仓当前 released producer baseline，并已包含 CNet owned-receive #594/#597 的 producer-owned receive contract。本次依赖对齐仍不改变 FlowMQ runtime ownership，因此这里继续描述现有 socket `message_pool` owner；迁移到 CNet producer-owned backing 由 FlowMQ #46 单独实现和验证。
 
-该 surface 的 lifetime 明确受 socket memory pool 约束。Salts 1.8.0 的 `mem_destroy()`
+该 surface 的 lifetime 明确受 socket memory pool 约束。Salts 1.8.2 的 `mem_destroy()`
 会直接销毁 pool slab，并不等待 outstanding pooled buffers，所以返回的 slice 可以跨后续
 owner-thread `poll/send/recv` progress 持有，但必须在 `flowmq_close()` 前
 `mem_slice_release()`。FlowMQ 不通过隐藏 copy 来制造 close 后 lifetime。若未来要求 slice
