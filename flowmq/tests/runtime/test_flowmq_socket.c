@@ -3955,6 +3955,7 @@ spec("flowmq_socket lifecycle and pattern surface") {
     size_t endpoint_size = 0u;
     size_t received_size = 0u;
     size_t receive_hwm_bytes = 9u;
+    mem_slice_t received_slice = {0};
     flowmq_ctx_t *ctx = flowmq_ctx_new();
     flowmq_socket_t *router = flowmq_socket(ctx, FLOWMQ_ROUTER);
     flowmq_socket_t *dealer = flowmq_socket(ctx, FLOWMQ_DEALER);
@@ -3986,9 +3987,11 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(received_size, sizeof(identity) - 1u);
     check_equal(flowmq_send(dealer, next, sizeof(next) - 1u, FLOWMQ_DONTWAIT),
                 SALTS_ENOBUFS);
-    check_equal(flowmq_recv(router, received, sizeof(received), &received_size,
-                            FLOWMQ_DONTWAIT), SALTS_OK);
-    check_equal(received_size, sizeof(payload) - 1u);
+    check_equal(flowmq_recv_slice(router, &received_slice, FLOWMQ_DONTWAIT),
+                SALTS_OK);
+    check_equal(received_slice.length, sizeof(payload) - 1u);
+    check_equal(memcmp(received_slice.data, payload, received_slice.length), 0);
+    mem_slice_release(&received_slice);
 
     status = SALTS_ENOBUFS;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_ENOBUFS;
