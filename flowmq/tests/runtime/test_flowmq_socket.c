@@ -261,7 +261,8 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(slice.length, RETAINED_BYTES);
     check_equal(flowmq_send_slice(sender, &slice,
                                   FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE),
-                SALTS_ENOTSUP);
+                SALTS_EBUSY);
+    check_equal(release.calls, 0u);
 
     check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
