@@ -146,7 +146,16 @@ static int bench_exchange_batch(bench_pair_t *pair, const void *payload,
         memcmp(received, payload, payload_size) != 0)
       return status == SALTS_OK ? SALTS_EPROTO : status;
   }
-  return SALTS_OK;
+
+  /*
+   * Flow credit is receiver-driven and may become interval-eligible only
+   * after the application consumes the final message. Two owner passes let
+   * the receiver publish a pending FLOW_UPDATE and then let the sender consume
+   * it before the next 64-message admission burst.
+   */
+  status = bench_progress(pair);
+  if (status != SALTS_OK) return status;
+  return bench_progress(pair);
 }
 
 #if defined(FLOWMQ_BENCH_WITH_ZMQ)
