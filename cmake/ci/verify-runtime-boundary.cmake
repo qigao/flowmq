@@ -129,6 +129,7 @@ endif()
 
 foreach(_flowmq_owned_recv_required IN ITEMS
         "static int flowmq_socket_try_recv_slice("
+        "out->buffer != NULL || out->data != NULL || out->length != 0u"
         "out->buffer = message->buffer;"
         "message->buffer = NULL;"
         "status = flowmq_socket_try_recv_slice(socket, out, flags);")
