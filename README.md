@@ -18,7 +18,9 @@ FlowMQ 是 C11 的 pattern-oriented messaging library。它提供 FMQ/6 wire cod
 | `FlowMQ::Transport` | build-tree ZeroMQ-style socket 与 CNet TCP/TLS runtime |
 | `FlowMQ::FlowMQ` | 唯一安装 target；合并上述公开能力 |
 
-安装包严格要求 `Salts 1.7.12` 与 `SaltsUtils 4.0.3`，公开链接依赖是
+> Release boundary: Salts `1.8.0` 发布早于 CNet owned-receive #594/#597；因此本次版本对齐不改变 FlowMQ receive ingress copy-count，`flowmq_recv_slice()` 仍只消除 inbound ring → caller 的最后一次 copy。后续 decoder/CNet producer-owned receive 对齐必须消费包含该 API 的新 Salts release。
+
+安装包严格要求 `Salts 1.8.0` 与 `SaltsUtils 4.1.0`，公开链接依赖是
 `Salts::Core` 与 SaltsUtils 提供的 `Salts::DataBind`；`Salts::CNet`、`Salts::CSTL`
 和 `Salts::CMeta` 是实现私有依赖。FMP/1 保持现有 header-only wire view/builder ABI，
 但生成入口统一使用 DataBind `databindc`，不再依赖已废止的 TBE producer target/tool。
@@ -51,7 +53,7 @@ retains。retained multipart PUB/XPUB 当前 fail-closed，TLS 仍返回 `SALTS_
 `mem_slice_t`；仍持有 backing 的 descriptor 会得到 `SALTS_EINVAL` 且保持原 owner 不变，
 避免覆盖 live reference。flow credit、HWM occupancy、
 `RCVMORE` 与 REQ/REP FSM 都在 dequeue 时推进，不会因为应用持有 slice 而冻结 transport credit。
-Salts 1.7.12 的 `mem_pool_t` 销毁不会等待 outstanding pooled buffers，所以该 zero-copy slice
+Salts 1.8.0 的 `mem_pool_t` 销毁不会等待 outstanding pooled buffers，所以该 zero-copy slice
 可以跨后续 `poll/send/recv` progress 持有，但必须在 `flowmq_close()` 前
 `mem_slice_release()`；FlowMQ 不会为了延长 close 后 lifetime 偷偷复制到 detached buffer。
 当前 decoder payload → inbound `message_pool` 仍有一次 copy，属于后续独立的 decoder-owned
