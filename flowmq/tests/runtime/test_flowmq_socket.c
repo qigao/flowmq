@@ -120,6 +120,7 @@ spec("flowmq_socket lifecycle and pattern surface") {
         {.socket = sub, .events = FLOWMQ_POLLOUT},
         {.socket = pull, .events = FLOWMQ_POLLOUT},
         {.socket = rep, .events = FLOWMQ_POLLOUT}};
+    size_t ready = 0u;
 
     check_equal(flowmq_poll(items, 3u, 0u, &ready), SALTS_OK);
     check_equal(ready, 0u);
