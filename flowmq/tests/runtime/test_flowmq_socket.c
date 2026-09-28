@@ -298,8 +298,8 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(memcmp(slice.data, expected, sizeof(expected)), 0);
 
     mem_slice_release(&slice);
-    check_equal(slice.buffer, NULL);
-    check_equal(slice.data, NULL);
+    check_null(slice.buffer);
+    check_null(slice.data);
     check_equal(slice.length, 0u);
 
     /* Would-block/error paths always leave the output descriptor empty. */
@@ -308,8 +308,8 @@ spec("flowmq_socket lifecycle and pattern surface") {
     slice.buffer = (mem_buffer_t *)(uintptr_t)1u;
     check_equal(flowmq_recv_slice(receiver, &slice, FLOWMQ_DONTWAIT),
                 SALTS_EBUSY);
-    check_equal(slice.buffer, NULL);
-    check_equal(slice.data, NULL);
+    check_null(slice.buffer);
+    check_null(slice.data);
     check_equal(slice.length, 0u);
 
     check_equal(flowmq_close(sender), SALTS_OK);
