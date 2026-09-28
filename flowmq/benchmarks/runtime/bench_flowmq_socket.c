@@ -56,11 +56,24 @@ static int bench_pair_open(bench_pair_t *pair) {
   return flowmq_connect(pair->sender, endpoint);
 }
 
-static void bench_pair_close(bench_pair_t *pair) {
-  if (pair->sender != NULL) (void)flowmq_close(pair->sender);
-  if (pair->receiver != NULL) (void)flowmq_close(pair->receiver);
-  if (pair->ctx != NULL) (void)flowmq_ctx_term(pair->ctx);
+static int bench_pair_close(bench_pair_t *pair) {
+  int result = SALTS_OK;
+  int status;
+  if (pair == NULL) return SALTS_EINVAL;
+  if (pair->sender != NULL) {
+    status = flowmq_close(pair->sender);
+    if (result == SALTS_OK && status != SALTS_OK) result = status;
+  }
+  if (pair->receiver != NULL) {
+    status = flowmq_close(pair->receiver);
+    if (result == SALTS_OK && status != SALTS_OK) result = status;
+  }
+  if (pair->ctx != NULL) {
+    status = flowmq_ctx_term(pair->ctx);
+    if (result == SALTS_OK && status != SALTS_OK) result = status;
+  }
   memset(pair, 0, sizeof(*pair));
+  return result;
 }
 
 static int bench_exchange(bench_pair_t *pair, const void *payload,
@@ -307,7 +320,7 @@ spec("FlowMQ direct socket benchmark") {
      * batch benchmark measures fresh-session queue admission instead of
      * inheriting transient credit/update state from a different workload.
      */
-    bench_pair_close(&pair);
+    check_equal(bench_pair_close(&pair), SALTS_OK);
     status = bench_pair_open(&pair);
     check_equal(status, SALTS_OK);
     check_equal(bench_exchange(&pair, payload, sizeof(payload)), SALTS_OK);
@@ -324,7 +337,7 @@ spec("FlowMQ direct socket benchmark") {
     mem_slice_release(&payload_slice);
     mem_buffer_release(retained_large_buffer);
     mem_buffer_release(payload_buffer);
-    bench_pair_close(&pair);
+    check_equal(bench_pair_close(&pair), SALTS_OK);
   }
 
 #if defined(FLOWMQ_BENCH_WITH_ZMQ)
