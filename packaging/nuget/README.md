@@ -11,10 +11,14 @@ Exact product dependencies:
 
 Third-party dependencies come from this repository's root `vcpkg.json`; `qigao/vcpkg-cache` supplies only the shared vcpkg setup/cache infrastructure.
 
-CI package versions use:
+PR and `main` qualification runs pack CI artifacts using:
 
 ```text
 <flowmq-version>-ci.<github-run-number>.<run-attempt>
 ```
+
+Those CI packages are workflow artifacts only; they are not pushed to GitHub Packages.
+Publishing is tag-only. A pushed `vX.Y.Z` tag must exactly match the FlowMQ project
+version and publishes `FlowMQ.Native X.Y.Z`.
 
 Each SDK profile records source/dependency provenance in `flowmq-sdk-manifest.txt`.
