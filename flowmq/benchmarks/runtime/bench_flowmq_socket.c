@@ -65,7 +65,7 @@ static void bench_pair_close(bench_pair_t *pair) {
 
 static int bench_exchange(bench_pair_t *pair, const void *payload,
                           size_t payload_size) {
-  static unsigned char received[BENCH_LARGE_PAYLOAD_BYTES];
+  static unsigned char received[BENCH_RETAINED_LARGE_PAYLOAD_BYTES];
   size_t received_size = 0u;
   int status = flowmq_send(pair->sender, payload, payload_size,
                            FLOWMQ_DONTWAIT);
