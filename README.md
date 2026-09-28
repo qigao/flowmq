@@ -32,6 +32,14 @@ CNet 仍由 socket owner 线程直接推进，不创建 worker/progress thread�
 包装成 MPSC、Actor 或 Reactive stream。TCP 与 verified TLS 使用同一 peer、decoder、FSM
 和 message queue 路径；TLS 只在连接适配层增加证书与主机名验证。
 
+发送 API 有两个明确的 ownership surface：`flowmq_send()` 在返回成功前复制 borrowed
+caller bytes；`flowmq_send_slice()` 则只用于 plaintext TCP 的 immediate retained DATA，
+接收 canonical non-empty Salts `mem_slice_t`。后者成功后 caller 可立即释放自己的 slice
+引用，但 backing bytes/data/used/capacity 必须保持不可变直到 send terminal。它不接受
+`FLOWMQ_SNDMORE` 用户 multipart staging，busy lane 不会偷偷 copy/queue，TLS 返回
+`SALTS_ENOTSUP`。ROUTER 可先用普通 `flowmq_send(..., FLOWMQ_SNDMORE)` 选择 routing id，
+再用 retained slice 发送最终 DATA。
+
 `FLOWMQ_RECONNECT_IVL=18` 与 `FLOWMQ_RECONNECT_IVL_MAX=21` 采用 ZeroMQ 的编号和
 连接级退避语义：IVL 默认 100ms，`-1` 禁止重连，`0` 表示下一轮 owner progress 立即
 尝试；IVL_MAX 默认 `0`，表示固定 IVL，设置为不小于 IVL 的正值后按上限做指数退避。
