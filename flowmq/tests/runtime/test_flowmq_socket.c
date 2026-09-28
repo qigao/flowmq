@@ -230,11 +230,14 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
-  it("retains a 1 MiB immediate TCP slice until the CNet terminal") {
-    enum { RETAINED_BYTES = 1024u * 1024u };
-    static unsigned char payload[RETAINED_BYTES];
+  it("retains a 1 MiB offset TCP slice until the CNet terminal") {
+    enum { RETAINED_BYTES = 1024u * 1024u, RETAINED_OFFSET = 13u,
+           RETAINED_GUARD = 19u };
+    static unsigned char backing[
+        RETAINED_OFFSET + RETAINED_BYTES + RETAINED_GUARD];
     static unsigned char expected[RETAINED_BYTES];
     static unsigned char received[RETAINED_BYTES];
+    unsigned char *payload = backing + RETAINED_OFFSET;
     flowmq_test_external_release_t release = {0};
     char endpoint[128] = {0};
     size_t endpoint_size = 0u;
@@ -246,15 +249,16 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_socket_t *receiver = flowmq_socket(ctx, FLOWMQ_PAIR);
     int status = SALTS_EBUSY;
 
-    for (size_t i = 0u; i < sizeof(payload); ++i)
+    memset(backing, 0x6d, sizeof(backing));
+    for (size_t i = 0u; i < RETAINED_BYTES; ++i)
       payload[i] = (unsigned char)((i * 17u + 3u) & 0xffu);
-    memcpy(expected, payload, sizeof(payload));
-    buffer = mem_wrap_external(payload, sizeof(payload),
+    memcpy(expected, payload, RETAINED_BYTES);
+    buffer = mem_wrap_external(backing, sizeof(backing),
                                flowmq_test_external_release, &release);
     check_not_null(buffer);
-    slice = mem_slice(buffer, 0u, sizeof(payload));
+    slice = mem_slice(buffer, RETAINED_OFFSET, RETAINED_BYTES);
     check_not_null(slice.buffer);
-    check_equal(slice.length, sizeof(payload));
+    check_equal(slice.length, RETAINED_BYTES);
     check_equal(flowmq_send_slice(sender, &slice,
                                   FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE),
                 SALTS_ENOTSUP);
