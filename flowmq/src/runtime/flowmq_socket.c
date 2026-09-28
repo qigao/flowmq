@@ -1021,6 +1021,52 @@ static int flowmq_socket_peer_admit_retained(
   return SALTS_OK;
 }
 
+static int flowmq_socket_peer_admit_retained_message(
+    flowmq_socket_peer_t *peer, const mem_slice_t *slices,
+    size_t slice_count, size_t payload_size) {
+  flowmq_socket_t *socket;
+  int status;
+  if (peer == NULL || slices == NULL || slice_count == 0u ||
+      slice_count > CNET_RETAINED_VECTOR_MAX || payload_size == 0u)
+    return SALTS_EINVAL;
+  socket = peer->owner;
+  if (socket->transport != FLOWMQ_TRANSPORT_TCP) return SALTS_ENOTSUP;
+  if (!flowmq_socket_peer_ready(peer)) return SALTS_EBUSY;
+  if (payload_size > socket->send_hwm_bytes ||
+      peer->outbound_bytes > socket->send_hwm_bytes - payload_size ||
+      peer->outbound_messages >= socket->send_hwm)
+    return SALTS_ENOBUFS;
+  status =
+      flowmq_flow_control_send_credit_check(&peer->flow_control, payload_size);
+  if (status != SALTS_OK) return status;
+  if (!flowmq_peer_state_write_idle(&peer->state) ||
+      peer->outbound_count != 0u)
+    return SALTS_EBUSY;
+
+  status =
+      flowmq_peer_state_write_begin(&peer->state, FLOWMQ_PEER_WRITE_DATA);
+  if (status != SALTS_OK) return status;
+  status =
+      cnet_send_slicev(&socket->client, peer->connection, slices, slice_count);
+  if (status != SALTS_OK) {
+    flowmq_peer_state_write_cancel(&peer->state);
+    return status;
+  }
+
+  peer->inflight_payload_size = payload_size;
+  peer->inflight_messages = 1u;
+  peer->outbound_bytes += payload_size;
+  ++peer->outbound_messages;
+  status =
+      flowmq_flow_control_send_credit_commit(&peer->flow_control, payload_size);
+  if (status != SALTS_OK) {
+    flowmq_socket_fail(socket, SALTS_EPROTO);
+    return SALTS_EPROTO;
+  }
+  flowmq_socket_peer_record_admission(peer, payload_size, 1);
+  return SALTS_OK;
+}
+
 static void flowmq_socket_release_send_slices(mem_slice_t *slices,
                                               size_t slice_count) {
   for (size_t i = 0u; i < slice_count; ++i)
