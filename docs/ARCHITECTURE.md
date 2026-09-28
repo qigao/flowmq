@@ -110,6 +110,37 @@ subscriptions 会从事实源重放。`FLOWMQ_RECONNECT_IVL` 默认 100ms，`-1`
 
 CFlow/CMeta 可服务于控制面配置、类型描述和 executor 组合，不参与逐消息数据热路径。
 
+### CFlow ordering qualification
+
+FlowMQ 在 test/control plane 上用 CMeta exact-ABI Function 描述与 CFlow Graph 验证一条抽象
+send ordering：
+
+```text
+VALIDATE
+  -> ROUTE
+  -> LOCAL_CAPACITY
+  -> REMOTE_CREDIT
+  -> ENCODE
+  -> ADMIT
+  -> CREDIT_COMMIT
+  -> IO_SUBMIT
+```
+
+这些 stage 是规范模型，不是 production message executor。validation/encoding 可以 fallible，
+peer/credit/admission/commit 对 mutable state 保守标记为 STATEFUL，CNet submission 是 IO
+barrier。qualification test 必须证明：
+
+- canonical ordering 能通过 exact CMeta ABI adapter 投影并完成；
+- ADMIT-before-ENCODE、CREDIT_COMMIT-before-ADMIT、IO-before-credit-commit 等错误顺序被模型拒绝；
+- normalization/optimization 不跨 STATEFUL/IO effect barrier 重排；
+- contract-equivalent mock adapter 可以替换实现而不改变 Graph topology；
+- incompatible reflected callable 在 projection admission 阶段被拒绝。
+
+该测试是 standalone target，只链接 released `Salts::CFlow` / `Salts::TinyTest`。
+`FlowMQ::FlowMQ` 不链接 CFlow，`flowmq_send/recv/poll` 不执行 Graph/Plan traversal，也不做
+per-message reflection lookup。现有 runtime source gate 与 installed package consumer 继续
+分别约束这两个 production boundary。
+
 ## Send 数据路径
 
 ```text
