@@ -6,8 +6,8 @@ The package contains Release SDK profiles for Linux x64, Windows x64, the macOS 
 
 Exact product dependencies:
 
-- `Salts.Native 1.8.0`
-- `SaltsUtils.Native 4.1.0`
+- `Salts.Native 1.8.2`
+- `SaltsUtils.Native 4.1.2`
 
 Third-party dependencies come from this repository's root `vcpkg.json`; `qigao/vcpkg-cache` supplies only the shared vcpkg setup/cache infrastructure.
 
