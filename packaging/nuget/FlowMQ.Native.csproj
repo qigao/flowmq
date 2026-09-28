@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <IsPackable>true</IsPackable>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <PackageId>FlowMQ.Native</PackageId>
+    <Authors>qigao</Authors>
+    <Description>FlowMQ native C SDK for Linux x64, Windows x64, macOS host architecture, and Android arm64-v8a Release builds.</Description>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <RepositoryUrl>https://github.com/qigao/flowmq</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageProjectUrl>https://github.com/qigao/flowmq</PackageProjectUrl>
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Salts.Native" Version="[1.7.12]" />
+    <PackageReference Include="SaltsUtils.Native" Version="[4.0.3]" />
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <None Include="$(PackageRoot)/sdk/**/*" Pack="true" PackagePath="sdk/" />
+  </ItemGroup>
+</Project>
