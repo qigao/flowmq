@@ -61,6 +61,10 @@ enum {
 _Static_assert(FLOWMQ_SOCKET_FRAME_SEGMENT_CAPACITY <=
                    FLOWMQ_SOCKET_OUTBOUND_CAPACITY,
                "frame descriptors must fit the reusable CNet vector");
+_Static_assert(CNET_RETAINED_VECTOR_MAX >= 32u,
+               "FlowMQ 1 MiB retained batching requires 32 logical CNet ranges");
+_Static_assert(CNET_RETAINED_VECTOR_MAX <= FLOWMQ_SOCKET_OUTBOUND_CAPACITY,
+               "CNet retained-vector bound must fit FlowMQ outbound storage");
 
 typedef struct flowmq_socket_peer_s flowmq_socket_peer_t;
 
@@ -771,7 +775,7 @@ static int flowmq_socket_peer_flush(flowmq_socket_peer_t *peer) {
    */
   flowmq_socket_t *socket = peer->owner;
   flowmq_socket_outbound_t *outbound;
-  mem_slice_t slices[NATIVE_IO_VECTOR_MAX] = {0};
+  mem_slice_t slices[CNET_RETAINED_VECTOR_MAX] = {0};
   size_t batch_count = 0u;
   size_t batch_encoded_size = 0u;
   size_t batch_payload_size = 0u;
@@ -788,7 +792,7 @@ static int flowmq_socket_peer_flush(flowmq_socket_peer_t *peer) {
   use_retained_sg = socket->transport == FLOWMQ_TRANSPORT_TCP;
   while (batch_count < peer->outbound_count) {
     size_t index;
-    if (use_retained_sg && batch_count == NATIVE_IO_VECTOR_MAX) break;
+    if (use_retained_sg && batch_count == CNET_RETAINED_VECTOR_MAX) break;
     index = (peer->outbound_read + batch_count) %
             FLOWMQ_SOCKET_OUTBOUND_CAPACITY;
     outbound = &peer->outbound[index];
@@ -1375,7 +1379,25 @@ static int flowmq_socket_runtime_init(flowmq_socket_t *socket,
       &io, &timeouts, transport, FLOWMQ_SOCKET_PEER_CAPACITY,
       socket->max_encoded_size, &config);
   if (status == SALTS_OK) status = cnet_client_init(&socket->client, &config);
-  if (status != SALTS_OK) return status;
+  if (status == SALTS_OK && transport == FLOWMQ_TRANSPORT_TCP) {
+    cnet_stream_socket_options socket_options = CNET_STREAM_SOCKET_OPTIONS_INIT;
+    socket_options.nodelay = 1;
+    status =
+        cnet_client_set_stream_socket_options(&socket->client, &socket_options);
+  }
+  if (status != SALTS_OK) {
+    if (socket->client.impl != NULL) {
+      const int stop_status =
+          cnet_client_stop(&socket->client, FLOWMQ_SOCKET_SHUTDOWN_TIMEOUT_MS);
+      if (stop_status == SALTS_OK || stop_status == SALTS_EALREADY) {
+        const int destroy_status = cnet_client_destroy(&socket->client);
+        if (destroy_status != SALTS_OK) return destroy_status;
+      } else {
+        return stop_status;
+      }
+    }
+    return status;
+  }
   socket->transport = (int)transport;
   socket->runtime_initialized = 1u;
   return SALTS_OK;

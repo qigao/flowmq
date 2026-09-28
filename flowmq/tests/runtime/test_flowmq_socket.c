@@ -2008,6 +2008,7 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_socket_t *router = flowmq_socket(ctx, FLOWMQ_ROUTER);
     flowmq_socket_t *dealer = flowmq_socket(ctx, FLOWMQ_DEALER);
     flowmq_router_peer_status_t peer_status = FLOWMQ_ROUTER_PEER_STATUS_INIT;
+    size_t ready = 0u;
     int status = SALTS_EBUSY;
 
     check_equal(flowmq_setsockopt(router, FLOWMQ_SNDHWM, &send_hwm,

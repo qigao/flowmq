@@ -57,8 +57,12 @@ file(READ "${FLOWMQ_SOCKET_SOURCE}" _flowmq_socket_text)
 
 foreach(_flowmq_sg_required IN ITEMS
         "use_retained_sg = socket->transport == FLOWMQ_TRANSPORT_TCP;"
+        "mem_slice_t slices[CNET_RETAINED_VECTOR_MAX] = {0};"
+        "batch_count == CNET_RETAINED_VECTOR_MAX"
         "status = cnet_send_slicev(&socket->client, peer->connection, slices,"
-        "status = cnet_sendv(&socket->client, peer->connection,")
+        "status = cnet_sendv(&socket->client, peer->connection,"
+        "socket_options.nodelay = 1;"
+        "cnet_client_set_stream_socket_options(&socket->client, &socket_options)")
   string(FIND "${_flowmq_socket_text}"
               "${_flowmq_sg_required}"
               _flowmq_sg_required_index)
@@ -70,6 +74,14 @@ foreach(_flowmq_sg_required IN ITEMS
 endforeach()
 
 string(FIND "${_flowmq_socket_text}"
+            "NATIVE_IO_VECTOR_MAX"
+            _flowmq_native_vector_index)
+if(NOT _flowmq_native_vector_index EQUAL -1)
+  message(FATAL_ERROR
+    "FlowMQ runtime must depend on CNet logical retained-vector bounds, not NativeIO physical vector windows")
+endif()
+
+string(FIND "${_flowmq_socket_text}"
             "status == SALTS_ENOTSUP"
             _flowmq_sg_fallback_index)
 if(NOT _flowmq_sg_fallback_index EQUAL -1)
@@ -78,4 +90,4 @@ if(NOT _flowmq_sg_fallback_index EQUAL -1)
 endif()
 
 message(STATUS
-        "FlowMQ CNet SG contract verified: TCP retained SG, explicit TLS copy path, no ENOTSUP fallback")
+        "FlowMQ CNet SG contract verified: CNet logical retained bound, TCP_NODELAY policy, explicit TLS copy path, no fallback")
