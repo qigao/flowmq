@@ -2,6 +2,7 @@
 #include "tinytest.h"
 #include "salts_error.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #if defined(FLOWMQ_BENCH_WITH_ZMQ)
@@ -11,12 +12,19 @@
 enum {
   BENCH_PAYLOAD_BYTES = 64u,
   BENCH_LARGE_PAYLOAD_BYTES = 64u * 1024u,
+  BENCH_RETAINED_LARGE_PAYLOAD_BYTES = 1024u * 1024u,
   BENCH_SAMPLES = 100000u,
   BENCH_LARGE_SAMPLES = 5000u,
+  BENCH_RETAINED_LARGE_SAMPLES = 512u,
   BENCH_BATCH_SAMPLES = 10000u,
   BENCH_BATCH_MESSAGES = 64u,
   BENCH_PROGRESS_LIMIT = 10000u
 };
+
+static size_t bench_socket_samples(size_t regular, size_t smoke_samples) {
+  const char *smoke = getenv("FLOWMQ_BENCH_SMOKE");
+  return smoke != NULL && strcmp(smoke, "0") != 0 ? smoke_samples : regular;
+}
 
 typedef struct bench_pair_s {
   flowmq_ctx_t *ctx;
@@ -48,16 +56,29 @@ static int bench_pair_open(bench_pair_t *pair) {
   return flowmq_connect(pair->sender, endpoint);
 }
 
-static void bench_pair_close(bench_pair_t *pair) {
-  if (pair->sender != NULL) (void)flowmq_close(pair->sender);
-  if (pair->receiver != NULL) (void)flowmq_close(pair->receiver);
-  if (pair->ctx != NULL) (void)flowmq_ctx_term(pair->ctx);
+static int bench_pair_close(bench_pair_t *pair) {
+  int result = SALTS_OK;
+  int status;
+  if (pair == NULL) return SALTS_EINVAL;
+  if (pair->sender != NULL) {
+    status = flowmq_close(pair->sender);
+    if (result == SALTS_OK && status != SALTS_OK) result = status;
+  }
+  if (pair->receiver != NULL) {
+    status = flowmq_close(pair->receiver);
+    if (result == SALTS_OK && status != SALTS_OK) result = status;
+  }
+  if (pair->ctx != NULL) {
+    status = flowmq_ctx_term(pair->ctx);
+    if (result == SALTS_OK && status != SALTS_OK) result = status;
+  }
   memset(pair, 0, sizeof(*pair));
+  return result;
 }
 
 static int bench_exchange(bench_pair_t *pair, const void *payload,
                           size_t payload_size) {
-  static unsigned char received[BENCH_LARGE_PAYLOAD_BYTES];
+  static unsigned char received[BENCH_RETAINED_LARGE_PAYLOAD_BYTES];
   size_t received_size = 0u;
   int status = flowmq_send(pair->sender, payload, payload_size,
                            FLOWMQ_DONTWAIT);
@@ -78,6 +99,39 @@ static int bench_exchange(bench_pair_t *pair, const void *payload,
   if (status != SALTS_OK) return status;
   if (received_size != payload_size ||
       memcmp(received, payload, payload_size) != 0)
+    return SALTS_EPROTO;
+  return SALTS_OK;
+}
+
+static int bench_exchange_retained(bench_pair_t *pair,
+                                   const mem_slice_t *payload) {
+  static unsigned char received[BENCH_RETAINED_LARGE_PAYLOAD_BYTES];
+  size_t received_size = 0u;
+  int status;
+  if (payload == NULL || payload->data == NULL || payload->length == 0u)
+    return SALTS_EINVAL;
+  if (payload->length > sizeof(received)) return SALTS_EMSGSIZE;
+
+  status = flowmq_send_slice(pair->sender, payload, FLOWMQ_DONTWAIT);
+  for (size_t i = 0u;
+       (status == SALTS_EBUSY || status == SALTS_ENOBUFS) &&
+       i < BENCH_PROGRESS_LIMIT; ++i) {
+    status = bench_progress(pair);
+    if (status == SALTS_OK)
+      status = flowmq_send_slice(pair->sender, payload, FLOWMQ_DONTWAIT);
+  }
+  if (status != SALTS_OK) return status;
+
+  status = SALTS_EBUSY;
+  for (size_t i = 0u; status == SALTS_EBUSY && i < BENCH_PROGRESS_LIMIT; ++i) {
+    status = bench_progress(pair);
+    if (status == SALTS_OK)
+      status = flowmq_recv(pair->receiver, received, sizeof(received),
+                           &received_size, FLOWMQ_DONTWAIT);
+  }
+  if (status != SALTS_OK) return status;
+  if (received_size != payload->length ||
+      memcmp(received, payload->data, payload->length) != 0)
     return SALTS_EPROTO;
   return SALTS_OK;
 }
@@ -105,7 +159,16 @@ static int bench_exchange_batch(bench_pair_t *pair, const void *payload,
         memcmp(received, payload, payload_size) != 0)
       return status == SALTS_OK ? SALTS_EPROTO : status;
   }
-  return SALTS_OK;
+
+  /*
+   * Flow credit is receiver-driven and may become interval-eligible only
+   * after the application consumes the final message. Two owner passes let
+   * the receiver publish a pending FLOW_UPDATE and then let the sender consume
+   * it before the next 64-message admission burst.
+   */
+  status = bench_progress(pair);
+  if (status != SALTS_OK) return status;
+  return bench_progress(pair);
 }
 
 #if defined(FLOWMQ_BENCH_WITH_ZMQ)
@@ -177,35 +240,104 @@ spec("FlowMQ direct socket benchmark") {
   bench("caller-driven loopback TCP") {
     static unsigned char payload[BENCH_PAYLOAD_BYTES];
     static unsigned char large_payload[BENCH_LARGE_PAYLOAD_BYTES];
+    static unsigned char retained_large_payload[
+        BENCH_RETAINED_LARGE_PAYLOAD_BYTES];
+    const size_t samples = bench_socket_samples(BENCH_SAMPLES, 8u);
+    const size_t large_samples =
+        bench_socket_samples(BENCH_LARGE_SAMPLES, 4u);
+    const size_t retained_large_samples =
+        bench_socket_samples(BENCH_RETAINED_LARGE_SAMPLES, 2u);
+    mem_buffer_t *payload_buffer;
+    mem_buffer_t *retained_large_buffer;
+    mem_slice_t payload_slice;
+    mem_slice_t retained_large_slice;
     bench_pair_t pair;
     int status;
+
     memset(payload, 0x5a, sizeof(payload));
     memset(large_payload, 0xa5, sizeof(large_payload));
+    memset(retained_large_payload, 0x3c, sizeof(retained_large_payload));
+    payload_buffer =
+        mem_wrap_external(payload, sizeof(payload), NULL, NULL);
+    retained_large_buffer =
+        mem_wrap_external(retained_large_payload,
+                          sizeof(retained_large_payload), NULL, NULL);
+    check_not_null(payload_buffer);
+    check_not_null(retained_large_buffer);
+    payload_slice = mem_slice(payload_buffer, 0u, sizeof(payload));
+    retained_large_slice =
+        mem_slice(retained_large_buffer, 0u, sizeof(retained_large_payload));
+    check_not_null(payload_slice.buffer);
+    check_not_null(retained_large_slice.buffer);
+
     status = bench_pair_open(&pair);
     check_equal(status, SALTS_OK);
     check_equal(bench_exchange(&pair, payload, sizeof(payload)), SALTS_OK);
 
-    benchmark_bytes("PAIR 64-byte one-way", BENCH_SAMPLES,
+    benchmark_bytes("PAIR 64-byte copy immediate", samples,
                     BENCH_PAYLOAD_BYTES) {
       status = bench_exchange(&pair, payload, sizeof(payload));
     }
     check_equal(status, SALTS_OK);
 
+    check_equal(bench_exchange_retained(&pair, &payload_slice), SALTS_OK);
+    benchmark_bytes("PAIR 64-byte retained immediate", samples,
+                    BENCH_PAYLOAD_BYTES) {
+      status = bench_exchange_retained(&pair, &payload_slice);
+    }
+    check_equal(status, SALTS_OK);
+
     check_equal(bench_exchange(&pair, large_payload, sizeof(large_payload)),
                 SALTS_OK);
-    benchmark_bytes("PAIR 64-KiB one-way", BENCH_LARGE_SAMPLES,
+    benchmark_bytes("PAIR 64-KiB copy one-way", large_samples,
                     BENCH_LARGE_PAYLOAD_BYTES) {
       status = bench_exchange(&pair, large_payload, sizeof(large_payload));
     }
     check_equal(status, SALTS_OK);
 
-    benchmark_io("PAIR 64-message queued batch", BENCH_BATCH_SAMPLES,
+    check_equal(bench_exchange(
+                    &pair, retained_large_payload,
+                    sizeof(retained_large_payload)), SALTS_OK);
+    benchmark_bytes("PAIR 1-MiB copy immediate", retained_large_samples,
+                    BENCH_RETAINED_LARGE_PAYLOAD_BYTES) {
+      status = bench_exchange(&pair, retained_large_payload,
+                              sizeof(retained_large_payload));
+    }
+    check_equal(status, SALTS_OK);
+
+    check_equal(bench_exchange_retained(&pair, &retained_large_slice),
+                SALTS_OK);
+    benchmark_bytes("PAIR 1-MiB retained immediate", retained_large_samples,
+                    BENCH_RETAINED_LARGE_PAYLOAD_BYTES) {
+      status = bench_exchange_retained(&pair, &retained_large_slice);
+    }
+    check_equal(status, SALTS_OK);
+
+    /*
+     * Keep the queued-batch workload independent from the high-volume
+     * immediate benchmarks above. Those runs intentionally exercise flow
+     * credit and terminal timing for hundreds of thousands of messages; the
+     * batch benchmark measures fresh-session queue admission instead of
+     * inheriting transient credit/update state from a different workload.
+     */
+    check_equal(bench_pair_close(&pair), SALTS_OK);
+    status = bench_pair_open(&pair);
+    check_equal(status, SALTS_OK);
+    check_equal(bench_exchange(&pair, payload, sizeof(payload)), SALTS_OK);
+
+    benchmark_io("PAIR 64-message queued batch",
+                 bench_socket_samples(BENCH_BATCH_SAMPLES, 2u),
                  BENCH_BATCH_MESSAGES,
                  BENCH_BATCH_MESSAGES * BENCH_PAYLOAD_BYTES) {
       status = bench_exchange_batch(&pair, payload, sizeof(payload));
     }
     check_equal(status, SALTS_OK);
-    bench_pair_close(&pair);
+
+    mem_slice_release(&retained_large_slice);
+    mem_slice_release(&payload_slice);
+    mem_buffer_release(retained_large_buffer);
+    mem_buffer_release(payload_buffer);
+    check_equal(bench_pair_close(&pair), SALTS_OK);
   }
 
 #if defined(FLOWMQ_BENCH_WITH_ZMQ)

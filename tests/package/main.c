@@ -34,6 +34,7 @@ int main(void)
     size_t reconnect_read_size = sizeof(reconnect_read);
     size_t send_hwm_bytes = 4096u;
     flowmq_router_peer_status_t peer_status = FLOWMQ_ROUTER_PEER_STATUS_INIT;
+    mem_slice_t invalid_slice = {0};
     int result = 1;
 
     policy.bindings = &binding;
@@ -71,6 +72,15 @@ int main(void)
     /* installed public struct + function ABI; no peer exists yet */
     if (flowmq_router_peer_status(router, identity, strlen(identity),
                                   &peer_status) != SALTS_ENOENT)
+        goto cleanup;
+
+    /*
+     * Pin the retained public symbol and canonical Salts Core slice ABI in the
+     * installed shared library. An empty slice is invalid before any transport
+     * progress, so this is deterministic and does not require a live peer.
+     */
+    if (flowmq_send_slice(router, &invalid_slice, FLOWMQ_DONTWAIT) !=
+        SALTS_EINVAL)
         goto cleanup;
 
     result = 0;

@@ -24,6 +24,10 @@ permissions:
   contents: read
   packages: read
 
+concurrency:
+  group: flowmq-vcpkg-cache-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   linux-x64:
     runs-on: ubuntu-24.04
@@ -117,6 +121,12 @@ jobs:
           export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$FLOWMQ_VCPKG_INSTALLED/x64-linux/lib"
           FLOWMQ_BENCH_SMOKE=1 build/cache-contract/bin/bench_flowmq_pattern_dispatch
 
+      - name: Measure copy vs retained immediate DATA benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$FLOWMQ_VCPKG_INSTALLED/x64-linux/lib"
+          build/cache-contract/bin/bench_flowmq_socket
 
       - name: Verify peer lifecycle in Debug with ASan
         shell: bash
