@@ -67,6 +67,20 @@ readiness/wait-set，可替换该等待策略以降低空闲唤醒延迟，但�
 返回后立即修改或释放输入；普通 `flowmq_send(const void *)` 不会偷偷升级成 borrowed
 zero-copy。
 
+`flowmq_send_slice` 是显式的 owned/retained immediate DATA surface。它只接受
+canonical non-empty `mem_slice_t`，为 FMQ/6 header/identity/topic 单独分配一个
+FlowMQ-owned framing buffer，而 payload ranges 继续引用调用者 slice 的原 backing；
+最终用 `cnet_send_slicev` 一次 admission。成功后调用者可以立即
+`mem_slice_release()` 自己的引用，CNet 在 logical send terminal 前保留 backing；
+这段时间 backing bytes 以及 buffer 的 data/used/capacity 必须保持不可变。
+
+该 retained surface 第一阶段故意保持 immediate-only：不接受
+`FLOWMQ_SNDMORE` 用户 multipart staging，busy DATA lane 返回 would-block，而不是
+复制进 outbound queue。ROUTER 仍先用现有 `flowmq_send(..., FLOWMQ_SNDMORE)`
+提交 routing-id envelope，再用 `flowmq_send_slice(..., 0)` 提交 final DATA。
+plaintext TCP 支持该路径；TLS 明确返回 `SALTS_ENOTSUP`，不会隐式转成 copy/encryption
+fallback。PUB/XPUB 对 busy/mute peer 继续采用 drop 语义。
+
 需要排队的完整 frame 只平铺一次到其 canonical `mem_buffer_t`。plaintext TCP flush
 将这些 owner buffers 转成 `mem_slice_t` 并通过 `cnet_send_slicev` retained admission
 提交；FlowMQ 随即释放自己的 slice/queue 引用，CNet 在 logical terminal 前保持 backing
@@ -80,10 +94,11 @@ copy/encryption path，不从 rejected retained-SG 隐式 fallback。
 在 FlowMQ 排队时仅形成 canonical owned buffer，flush 不再额外 flatten。原来的每 socket
 约 1MiB 连续 scratch allocation 已删除，替换为固定 framing 和 descriptor storage。
 
-这不是跨 poll 的 borrowed-send，也不改变完成语义。CNet command slot 在 TCP NativeIO 写入
-完成前保持有效；TLS 还必须让 OpenSSL 接受连续 plaintext 并刷出 ciphertext。因此 owner、
-NativeIO 与 TLS 状态机仍使用连续内部 storage，且本次改动没有把用户 buffer 生命周期扩展到
-网络完成。admission 失败时 peer credit/HWM 状态不提交，排队 buffer 仍由原 owner 持有。
+普通 `flowmq_send` 仍不是跨 poll 的 borrowed-send，也不改变原有完成语义。
+只有显式 `flowmq_send_slice` 把 canonical owner lifetime 延伸到网络 terminal，而且通过
+Salts Core refcount 表达，不保留裸 caller pointer。TLS 仍必须让加密层接受其明确的
+copy/encryption plaintext path。任何 retained admission 失败都不留下 backing retain，
+也不提交 peer credit/HWM；queued copy path 的 buffer 仍由原 owner 持有。
 
 ## TCP latency policy
 
