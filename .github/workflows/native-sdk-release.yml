@@ -12,6 +12,8 @@ on:
       - ".github/workflows/native-sdk-release.yml"
   push:
     branches: [main]
+    tags:
+      - "v*"
     paths:
       - "CMakeLists.txt"
       - "cmake/**"
@@ -53,7 +55,16 @@ jobs:
           source_version="$(awk '/^[[:space:]]*VERSION[[:space:]]+[0-9]/{print $2; exit}' CMakeLists.txt)"
           [[ "$source_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           source_commit="$(git rev-parse HEAD)"
-          version="$source_version-ci.$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT"
+          if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+            expected_tag="v$source_version"
+            if [[ "$GITHUB_REF_NAME" != "$expected_tag" ]]; then
+              echo "release tag mismatch: pushed=$GITHUB_REF_NAME expected=$expected_tag" >&2
+              exit 1
+            fi
+            version="$source_version"
+          else
+            version="$source_version-ci.$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT"
+          fi
           echo "source_version=$source_version" >> "$GITHUB_OUTPUT"
           echo "source_commit=$source_commit" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -680,7 +691,7 @@ jobs:
 
   publish:
     needs: [metadata, pack, qualify]
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    if: github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -703,4 +714,4 @@ jobs:
           dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json \
             --name github --username qigao --password "$GITHUB_TOKEN" --store-password-in-clear-text
           dotnet nuget push "dist/FlowMQ.Native.$PACKAGE_VERSION.nupkg" \
-            --api-key "$GITHUB_TOKEN" --source github
+            --api-key "$GITHUB_TOKEN" --source github --skip-duplicate
