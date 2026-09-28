@@ -6,7 +6,7 @@ endif()
 
 project(
   FlowMQ
-  VERSION 1.1.0
+  VERSION 1.1.1
   DESCRIPTION "Pattern-oriented messaging library for C"
   HOMEPAGE_URL "https://github.com/qigao/flowmq"
   LANGUAGES C)
@@ -93,16 +93,16 @@ function(flowmq_require_sdk_version root package expected_version)
   endif()
 endfunction()
 
-flowmq_require_sdk_version("${FLOWMQ_SALTS_HOST_ROOT_PATH}" Salts 1.8.2)
-flowmq_require_sdk_version("${FLOWMQ_SALTS_UTILS_HOST_ROOT_PATH}" SaltsUtils 4.1.2)
+flowmq_require_sdk_version("${FLOWMQ_SALTS_HOST_ROOT_PATH}" Salts 1.8.3)
+flowmq_require_sdk_version("${FLOWMQ_SALTS_UTILS_HOST_ROOT_PATH}" SaltsUtils 4.1.3)
 
 find_package(
-  Salts 1.8.2 EXACT CONFIG REQUIRED
+  Salts 1.8.3 EXACT CONFIG REQUIRED
   PATHS "${FLOWMQ_SALTS_ROOT_PATH}"
   NO_DEFAULT_PATH
   NO_CMAKE_FIND_ROOT_PATH)
 find_package(
-  SaltsUtils 4.1.2 EXACT CONFIG REQUIRED
+  SaltsUtils 4.1.3 EXACT CONFIG REQUIRED
   PATHS "${FLOWMQ_SALTS_UTILS_ROOT_PATH}"
   NO_DEFAULT_PATH
   NO_CMAKE_FIND_ROOT_PATH)
