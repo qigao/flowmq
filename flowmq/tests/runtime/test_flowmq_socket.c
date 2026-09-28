@@ -4023,9 +4023,7 @@ spec("flowmq_socket lifecycle and pattern surface") {
     static const char request[] = "request";
     static const char reply[] = "reply";
     char endpoint[128] = {0};
-    char received[32] = {0};
     size_t endpoint_size = 0u;
-    size_t received_size = 0u;
     mem_slice_t received_slice = {0};
     flowmq_ctx_t *ctx = flowmq_ctx_new();
     flowmq_socket_t *req = flowmq_socket(ctx, FLOWMQ_REQ);
