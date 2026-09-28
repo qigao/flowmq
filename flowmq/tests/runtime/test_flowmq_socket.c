@@ -33,6 +33,17 @@ static int progress_three(flowmq_socket_t *first, flowmq_socket_t *second,
   return flowmq_poll(items, 3u, 1u, &ready);
 }
 
+typedef struct flowmq_test_external_release_s {
+  size_t calls;
+} flowmq_test_external_release_t;
+
+static void flowmq_test_external_release(void *data, void *user_data) {
+  flowmq_test_external_release_t *release =
+      (flowmq_test_external_release_t *)user_data;
+  (void)data;
+  if (release != NULL) ++release->calls;
+}
+
 spec("flowmq_socket lifecycle and pattern surface") {
   it("creates every classic ZeroMQ socket type and keeps context ownership explicit") {
     static const int types[] = {
@@ -213,6 +224,129 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(status, SALTS_OK);
     check_equal(received_size, sizeof(expected));
     check_equal(memcmp(received, expected, sizeof(expected)), 0);
+
+    check_equal(flowmq_close(sender), SALTS_OK);
+    check_equal(flowmq_close(receiver), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+  }
+
+  it("retains a 1 MiB immediate TCP slice until the CNet terminal") {
+    enum { RETAINED_BYTES = 1024u * 1024u };
+    static unsigned char payload[RETAINED_BYTES];
+    static unsigned char expected[RETAINED_BYTES];
+    static unsigned char received[RETAINED_BYTES];
+    flowmq_test_external_release_t release = {0};
+    char endpoint[128] = {0};
+    size_t endpoint_size = 0u;
+    size_t received_size = 0u;
+    mem_buffer_t *buffer;
+    mem_slice_t slice;
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *sender = flowmq_socket(ctx, FLOWMQ_PAIR);
+    flowmq_socket_t *receiver = flowmq_socket(ctx, FLOWMQ_PAIR);
+    int status = SALTS_EBUSY;
+
+    for (size_t i = 0u; i < sizeof(payload); ++i)
+      payload[i] = (unsigned char)((i * 17u + 3u) & 0xffu);
+    memcpy(expected, payload, sizeof(payload));
+    buffer = mem_wrap_external(payload, sizeof(payload),
+                               flowmq_test_external_release, &release);
+    check_not_null(buffer);
+    slice = mem_slice(buffer, 0u, sizeof(payload));
+    check_not_null(slice.buffer);
+    check_equal(slice.length, sizeof(payload));
+    check_equal(flowmq_send_slice(sender, &slice,
+                                  FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE),
+                SALTS_ENOTSUP);
+
+    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), SALTS_OK);
+    check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(sender, endpoint), SALTS_OK);
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
+      status = flowmq_send_slice(sender, &slice, FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+
+    /* Successful admission owns a CNet retain before caller references drop. */
+    mem_slice_release(&slice);
+    mem_buffer_release(buffer);
+    buffer = NULL;
+    check_equal(release.calls, 0u);
+
+    status = SALTS_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
+      status = flowmq_recv(receiver, received, sizeof(received),
+                           &received_size, FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    check_equal(received_size, sizeof(expected));
+    check_equal(memcmp(received, expected, sizeof(expected)), 0);
+
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        release.calls == 0u; ++i)
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
+    check_equal(release.calls, 1u);
+
+    check_equal(flowmq_close(sender), SALTS_OK);
+    check_equal(flowmq_close(receiver), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+  }
+
+  it("does not retain or copy-fallback an immediate slice while the DATA lane is busy") {
+    static unsigned char first[] = "first-copy";
+    static unsigned char owned[] = "owned-retained";
+    unsigned char received[32] = {0};
+    flowmq_test_external_release_t release = {0};
+    char endpoint[128] = {0};
+    size_t endpoint_size = 0u;
+    size_t received_size = 0u;
+    mem_buffer_t *buffer;
+    mem_slice_t slice;
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *sender = flowmq_socket(ctx, FLOWMQ_PAIR);
+    flowmq_socket_t *receiver = flowmq_socket(ctx, FLOWMQ_PAIR);
+    int status = SALTS_EBUSY;
+
+    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), SALTS_OK);
+    check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(sender, endpoint), SALTS_OK);
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
+      status = flowmq_send(sender, first, sizeof(first) - 1u,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+
+    buffer = mem_wrap_external(owned, sizeof(owned) - 1u,
+                               flowmq_test_external_release, &release);
+    check_not_null(buffer);
+    slice = mem_slice(buffer, 0u, sizeof(owned) - 1u);
+    check_not_null(slice.buffer);
+    check_equal(flowmq_send_slice(sender, &slice, FLOWMQ_DONTWAIT),
+                SALTS_EBUSY);
+
+    /* Rejected immediate admission must leave no retained ownership behind. */
+    mem_slice_release(&slice);
+    mem_buffer_release(buffer);
+    check_equal(release.calls, 1u);
+
+    status = SALTS_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
+      status = flowmq_recv(receiver, received, sizeof(received),
+                           &received_size, FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    check_equal(received_size, sizeof(first) - 1u);
+    check_equal(memcmp(received, first, received_size), 0);
 
     check_equal(flowmq_close(sender), SALTS_OK);
     check_equal(flowmq_close(receiver), SALTS_OK);
