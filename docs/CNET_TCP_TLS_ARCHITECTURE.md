@@ -133,8 +133,9 @@ inbound ring 的唯一 canonical `mem_buffer_t` reference 直接转移到 caller
 
 receive credit、inbound HWM accounting、`RCVMORE` 与 pattern/REQ/REP FSM 都在 dequeue
 成功时推进，与 `flowmq_recv` 保持一致；应用随后持有 slice 的时间不会占用 transport
-credit 或 socket inbound occupancy。错误、DONTWAIT would-block 与非法 FSM 路径都会把
-输出 descriptor 保持为空且不取得 ownership。
+credit 或 socket inbound occupancy。caller 必须提供空的输出 slice；非空 descriptor
+直接返回 `SALTS_EINVAL` 且不修改原 owner，避免覆盖 live reference。对合法的空输出，
+错误、DONTWAIT would-block 与非法 FSM 路径都保持为空且不取得 ownership。
 
 该 surface 的 lifetime 明确受 socket memory pool 约束。Salts 1.7.12 的 `mem_destroy()`
 会直接销毁 pool slab，并不等待 outstanding pooled buffers，所以返回的 slice 可以跨后续
