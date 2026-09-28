@@ -2573,6 +2573,192 @@ static int flowmq_socket_try_send(flowmq_socket_t *socket, const void *data,
   return SALTS_OK;
 }
 
+static int flowmq_socket_try_send_slice(flowmq_socket_t *socket,
+                                          const mem_slice_t *slice,
+                                          int flags) {
+  flowmq_socket_retained_frame_t retained = {0};
+  flowmq_protocol_frame_t frame;
+  flowmq_socket_peer_t *peer = NULL;
+  size_t payload_offset = 0u;
+  size_t size;
+  int starting_message;
+  int peer_busy = 0;
+  int peer_saturated = 0;
+  int status;
+
+  if (socket == NULL || (flags & ~(FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE)) != 0)
+    return SALTS_EINVAL;
+  if ((flags & FLOWMQ_SNDMORE) != 0) return SALTS_ENOTSUP;
+  status = flowmq_socket_slice_validate(slice, &payload_offset);
+  if (status != SALTS_OK) return status;
+  (void)payload_offset;
+  size = slice->length;
+
+  if (socket->send_cancel_error != SALTS_OK) {
+    status = socket->send_cancel_error;
+    socket->send_cancel_error = SALTS_OK;
+    return status;
+  }
+  status = flowmq_pattern_state_send_validate(&socket->pattern);
+  if (status != SALTS_OK) return status;
+  if (size > FLOWMQ_SOCKET_MAX_FRAME_SIZE || size > socket->send_hwm_bytes)
+    return SALTS_EMSGSIZE;
+  if (socket->runtime_initialized &&
+      socket->transport != FLOWMQ_TRANSPORT_TCP)
+    return SALTS_ENOTSUP;
+
+  starting_message = !socket->pattern.sending_multipart;
+  if (!starting_message) {
+    /*
+     * The only multipart state admitted by this first retained API is the
+     * ROUTER routing-id envelope selected through the existing copy API.
+     * No user DATA part may already be staged because that would require an
+     * owned multipart queue rather than an immediate-only retained send.
+     */
+    if (socket->pattern.desc->routing_class != FLOWMQ_PATTERN_ROUTE_IDENTITY ||
+        !socket->send_peer_active || socket->send_staged_count != 0u)
+      return SALTS_ENOTSUP;
+  } else if (socket->pattern.desc->routing_class ==
+             FLOWMQ_PATTERN_ROUTE_IDENTITY) {
+    /* ROUTER still requires an explicit routing-id envelope first. */
+    return SALTS_EINVAL;
+  }
+
+  if (socket->pattern.desc->routing_class == FLOWMQ_PATTERN_ROUTE_FANOUT) {
+    uint32_t peer_mask = 0u;
+    for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
+      flowmq_socket_peer_t *candidate = &socket->peers[i];
+      if (!flowmq_socket_peer_ready(candidate) ||
+          !flowmq_subscription_set_match(
+              &candidate->subscriptions,
+              (vstr){.data = slice->data, .len = size}))
+        continue;
+      /*
+       * PUB/XPUB are mute/drop patterns. Retained-immediate admission does not
+       * enqueue or copy for a busy peer; that peer simply misses this
+       * publication exactly as any other mute peer does.
+       */
+      if (!flowmq_socket_peer_can_admit(candidate, size, 1) ||
+          !flowmq_peer_state_write_idle(&candidate->state) ||
+          candidate->outbound_count != 0u)
+        continue;
+      peer_mask |= UINT32_C(1) << i;
+    }
+
+    if (peer_mask != 0u) {
+      frame = (flowmq_protocol_frame_t){
+          .kind = FLOWMQ_PROTOCOL_FRAME_DATA,
+          .pattern = socket->pattern.pattern,
+          .message_id = socket->next_message_id + 1u,
+          .more = 0,
+          .payload = {.data = slice->data, .len = size}};
+      status = flowmq_socket_prepare_retained_frame(
+          socket, &frame, slice, &retained);
+      if (status != SALTS_OK) return status;
+      for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
+        if ((peer_mask & (UINT32_C(1) << i)) == 0u) continue;
+        status =
+            flowmq_socket_peer_admit_retained(&socket->peers[i], &retained);
+        if (status != SALTS_OK) break;
+      }
+      flowmq_socket_retained_frame_release(&retained);
+      if (status != SALTS_OK) return status;
+    }
+
+    ++socket->next_message_id;
+    socket->publish_peer_mask = 0u;
+    flowmq_pattern_state_send_commit(&socket->pattern, 0);
+    return SALTS_OK;
+  }
+
+  if (!starting_message) {
+    if (socket->send_peer_index >= FLOWMQ_SOCKET_PEER_CAPACITY) {
+      flowmq_socket_cancel_send_route(socket);
+      return SALTS_ENOTCONN;
+    }
+    peer = &socket->peers[socket->send_peer_index];
+    if (!flowmq_socket_peer_generation_ready(
+            peer, socket->send_peer_generation)) {
+      flowmq_socket_cancel_send_route(socket);
+      return SALTS_ENOTCONN;
+    }
+    if (!flowmq_socket_peer_can_admit(peer, size, 1))
+      return SALTS_ENOBUFS;
+    if (!flowmq_peer_state_write_idle(&peer->state) ||
+        peer->outbound_count != 0u)
+      return SALTS_EBUSY;
+  } else if (socket->pattern.desc->fsm_class == FLOWMQ_PATTERN_FSM_REP) {
+    if (!socket->reply_peer_valid ||
+        socket->reply_peer_index >= FLOWMQ_SOCKET_PEER_CAPACITY)
+      return SALTS_EBUSY;
+    peer = &socket->peers[socket->reply_peer_index];
+    if (!flowmq_socket_peer_generation_ready(
+            peer, socket->reply_peer_generation))
+      return SALTS_EBUSY;
+    if (!flowmq_socket_peer_can_admit(peer, size, 1))
+      return SALTS_ENOBUFS;
+    if (!flowmq_peer_state_write_idle(&peer->state) ||
+        peer->outbound_count != 0u)
+      return SALTS_EBUSY;
+    socket->send_peer_index = socket->reply_peer_index;
+  } else {
+    for (size_t offset = 0u; offset < FLOWMQ_SOCKET_PEER_CAPACITY; ++offset) {
+      size_t index =
+          (socket->peer_cursor + offset) % FLOWMQ_SOCKET_PEER_CAPACITY;
+      flowmq_socket_peer_t *candidate = &socket->peers[index];
+      if (!flowmq_socket_peer_ready(candidate)) continue;
+      if (!flowmq_socket_peer_can_admit(candidate, size, 1)) {
+        peer_saturated = 1;
+        continue;
+      }
+      if (!flowmq_peer_state_write_idle(&candidate->state) ||
+          candidate->outbound_count != 0u) {
+        peer_busy = 1;
+        continue;
+      }
+      peer = candidate;
+      socket->peer_cursor =
+          (index + 1u) % FLOWMQ_SOCKET_PEER_CAPACITY;
+      socket->send_peer_index = index;
+      break;
+    }
+    if (peer == NULL)
+      return peer_saturated ? SALTS_ENOBUFS
+                            : (peer_busy ? SALTS_EBUSY : SALTS_EBUSY);
+  }
+
+  frame = (flowmq_protocol_frame_t){
+      .kind = FLOWMQ_PROTOCOL_FRAME_DATA,
+      .pattern = socket->pattern.pattern,
+      .message_id = socket->next_message_id + 1u,
+      .more = 0,
+      .payload = {.data = slice->data, .len = size}};
+  status =
+      flowmq_socket_prepare_retained_frame(socket, &frame, slice, &retained);
+  if (status != SALTS_OK) return status;
+  status = flowmq_socket_peer_admit_retained(peer, &retained);
+  flowmq_socket_retained_frame_release(&retained);
+  if (status != SALTS_OK) return status;
+
+  ++socket->next_message_id;
+  if (socket->pattern.desc->fsm_class == FLOWMQ_PATTERN_FSM_REQ &&
+      starting_message) {
+    socket->request_peer_index = socket->send_peer_index;
+    socket->request_peer_generation =
+        peer->flow_control.local_generation;
+    socket->request_peer_valid = 1u;
+    socket->recv_cancel_error = SALTS_OK;
+  }
+  if (socket->pattern.desc->fsm_class == FLOWMQ_PATTERN_FSM_REP) {
+    socket->reply_peer_valid = 0u;
+    socket->reply_peer_generation = 0u;
+  }
+  socket->send_peer_active = 0u;
+  socket->send_peer_generation = 0u;
+  flowmq_pattern_state_send_commit(&socket->pattern, 0);
+  return SALTS_OK;
+}
+
 static int flowmq_socket_try_recv(flowmq_socket_t *socket, void *data,
                                   size_t capacity, size_t *received,
                                   int flags) {
@@ -2782,6 +2968,21 @@ int flowmq_send(flowmq_socket_t *socket, const void *data, size_t size,
     if ((flags & FLOWMQ_DONTWAIT) != 0 || !socket->runtime_initialized)
       return status;
     status = flowmq_socket_drive(socket, FLOWMQ_SOCKET_BLOCKING_SLICE_MS, NULL);
+    if (status != SALTS_OK) return status;
+  }
+}
+
+int flowmq_send_slice(flowmq_socket_t *socket,
+                      const mem_slice_t *slice, int flags) {
+  int status;
+  for (;;) {
+    status = flowmq_socket_try_send_slice(socket, slice, flags);
+    if (status != SALTS_EBUSY && status != SALTS_ENOBUFS) return status;
+    if ((flags & FLOWMQ_DONTWAIT) != 0 ||
+        socket == NULL || !socket->runtime_initialized)
+      return status;
+    status =
+        flowmq_socket_drive(socket, FLOWMQ_SOCKET_BLOCKING_SLICE_MS, NULL);
     if (status != SALTS_OK) return status;
   }
 }
