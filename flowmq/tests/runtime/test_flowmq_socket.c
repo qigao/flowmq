@@ -1297,6 +1297,21 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_last_endpoint(server, endpoint, sizeof(endpoint), &endpoint_size),
                 SALTS_OK);
     check_equal(flowmq_connect(client, endpoint), SALTS_OK);
+    {
+      static unsigned char retained_payload[] = "tls-retained-rejected";
+      mem_buffer_t *retained_buffer =
+          mem_wrap_external(retained_payload, sizeof(retained_payload) - 1u,
+                            NULL, NULL);
+      mem_slice_t retained_slice;
+      check_not_null(retained_buffer);
+      retained_slice =
+          mem_slice(retained_buffer, 0u, sizeof(retained_payload) - 1u);
+      check_not_null(retained_slice.buffer);
+      check_equal(flowmq_send_slice(client, &retained_slice, FLOWMQ_DONTWAIT),
+                  SALTS_ENOTSUP);
+      mem_slice_release(&retained_slice);
+      mem_buffer_release(retained_buffer);
+    }
 
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
       check_equal(progress_pair(client, server), SALTS_OK);
