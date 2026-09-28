@@ -45,6 +45,16 @@ retains。retained multipart PUB/XPUB 当前 fail-closed，TLS 仍返回 `SALTS_
 已经能通过消除 admission copy 获得可测收益；普通/小 borrowed payload 继续优先使用
 `flowmq_send()`。
 
+接收侧同样保留两个显式 surface：`flowmq_recv()` 把一个 inbound part 复制到 caller storage；
+`flowmq_recv_slice()` 则把 inbound ring 已经持有的 canonical `mem_buffer_t` ownership 直接
+转移成 `mem_slice_t`，因此消除最后一次 message-pool → caller copy。flow credit、HWM occupancy、
+`RCVMORE` 与 REQ/REP FSM 都在 dequeue 时推进，不会因为应用持有 slice 而冻结 transport credit。
+Salts 1.7.12 的 `mem_pool_t` 销毁不会等待 outstanding pooled buffers，所以该 zero-copy slice
+可以跨后续 `poll/send/recv` progress 持有，但必须在 `flowmq_close()` 前
+`mem_slice_release()`；FlowMQ 不会为了延长 close 后 lifetime 偷偷复制到 detached buffer。
+当前 decoder payload → inbound `message_pool` 仍有一次 copy，属于后续独立的 decoder-owned
+receive backing 优化，不与 public recv-slice ABI 混在同一阶段。
+
 `FLOWMQ_RECONNECT_IVL=18` 与 `FLOWMQ_RECONNECT_IVL_MAX=21` 采用 ZeroMQ 的编号和
 连接级退避语义：IVL 默认 100ms，`-1` 禁止重连，`0` 表示下一轮 owner progress 立即
 尝试；IVL_MAX 默认 `0`，表示固定 IVL，设置为不小于 IVL 的正值后按上限做指数退避。
@@ -72,7 +82,8 @@ TCP/TLS 不发送同流 FEC repair symbol。credit 与 heartbeat 都由调用线
 DATA payload 层携带 correlation/idempotency 信息。
 
 multipart 接收后可用 `flowmq_getsockopt(socket, FLOWMQ_RCVMORE, ...)` 判断是否还有下一
-part。该查询返回最近一次成功 `flowmq_recv()` 的 `MORE` 状态，不推进网络或 pattern FSM。
+part。该查询返回最近一次成功 `flowmq_recv()` 或 `flowmq_recv_slice()` 的 `MORE` 状态，
+不推进网络或 pattern FSM。
 
 ROUTER 的 routing identity 与 ZeroMQ 一样表示当前 live peer，不是可持久化的 session
 token；同 identity 重连后的 delayed reply 会指向新 session。单条 outbound multipart
