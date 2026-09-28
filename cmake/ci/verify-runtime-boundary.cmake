@@ -53,7 +53,10 @@ message(STATUS
 
 set(FLOWMQ_SOCKET_SOURCE
     "${FLOWMQ_RUNTIME_ROOT}/flowmq_socket.c")
+set(FLOWMQ_SOCKET_HEADER
+    "${FLOWMQ_SOURCE_ROOT}/flowmq/include/flowmq_socket.h")
 file(READ "${FLOWMQ_SOCKET_SOURCE}" _flowmq_socket_text)
+file(READ "${FLOWMQ_SOCKET_HEADER}" _flowmq_socket_header_text)
 
 foreach(_flowmq_sg_required IN ITEMS
         "use_retained_sg = socket->transport == FLOWMQ_TRANSPORT_TCP;"
@@ -62,7 +65,11 @@ foreach(_flowmq_sg_required IN ITEMS
         "status = cnet_send_slicev(&socket->client, peer->connection, slices,"
         "status = cnet_sendv(&socket->client, peer->connection,"
         "socket_options.nodelay = 1;"
-        "cnet_client_set_stream_socket_options(&socket->client, &socket_options)")
+        "cnet_client_set_stream_socket_options(&socket->client, &socket_options)"
+        "flowmq_socket_prepare_retained_frame("
+        "flowmq_socket_peer_admit_retained("
+        "status = cnet_send_slicev(&socket->client, peer->connection,"
+        "socket->transport != FLOWMQ_TRANSPORT_TCP")
   string(FIND "${_flowmq_socket_text}"
               "${_flowmq_sg_required}"
               _flowmq_sg_required_index)
@@ -87,6 +94,14 @@ string(FIND "${_flowmq_socket_text}"
 if(NOT _flowmq_sg_fallback_index EQUAL -1)
   message(FATAL_ERROR
     "FlowMQ runtime must not retry a retained-SG SALTS_ENOTSUP through a copy fallback")
+endif()
+
+string(FIND "${_flowmq_socket_header_text}"
+            "FLOWMQ_C_API int flowmq_send_slice("
+            _flowmq_retained_api_index)
+if(_flowmq_retained_api_index EQUAL -1)
+  message(FATAL_ERROR
+    "FlowMQ public API must expose explicit retained flowmq_send_slice()")
 endif()
 
 message(STATUS
