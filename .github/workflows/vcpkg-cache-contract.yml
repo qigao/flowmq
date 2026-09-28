@@ -92,6 +92,17 @@ jobs:
           dotnet restore "$project" --configfile "$config" --packages "$packages"
           echo "SALTS_ROOT=$packages/salts.native/1.7.12/sdk/linux-x64" >> "$GITHUB_ENV"
           echo "SALTS_UTILS_ROOT=$packages/saltsutils.native/4.0.3/sdk/linux-x64" >> "$GITHUB_ENV"
+
+      - name: Qualify CFlow send ordering on control plane
+        shell: bash
+        run: |
+          set -euo pipefail
+          export FLOWMQ_CFLOW_SALTS_ROOT="$SALTS_ROOT"
+          export LD_LIBRARY_PATH="$SALTS_ROOT/lib:$FLOWMQ_VCPKG_INSTALLED/x64-linux/lib:${LD_LIBRARY_PATH:-}"
+          cmake -S flowmq/tests/qualification -B build/cflow-qualification -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"             -DVCPKG_TARGET_TRIPLET=x64-linux             -DVCPKG_MANIFEST_MODE=OFF             -DVCPKG_INSTALLED_DIR="$FLOWMQ_VCPKG_INSTALLED"
+          cmake --build build/cflow-qualification --parallel 2
+          ctest --test-dir build/cflow-qualification             --no-tests=error --output-on-failure
+
       - name: Configure, build and test against released SDKs
         shell: bash
         run: |
@@ -250,6 +261,25 @@ jobs:
           }
           "SALTS_ROOT=$saltsRoot" >> $env:GITHUB_ENV
           "SALTS_UTILS_ROOT=$saltsUtilsRoot" >> $env:GITHUB_ENV
+
+      - name: Qualify CFlow send ordering on control plane
+        shell: cmd
+        run: |
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          set "FLOWMQ_CFLOW_SALTS_ROOT=%SALTS_ROOT%"
+          set "PATH=%SALTS_ROOT%\bin;%FLOWMQ_VCPKG_INSTALLED%\x64-windows\bin;%PATH%"
+          cmake -S flowmq\tests\qualification -B build\cflow-qualification-windows -G Ninja ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DCMAKE_TOOLCHAIN_FILE="%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake" ^
+            -DVCPKG_TARGET_TRIPLET=x64-windows ^
+            -DVCPKG_MANIFEST_MODE=OFF ^
+            -DVCPKG_INSTALLED_DIR="%FLOWMQ_VCPKG_INSTALLED%"
+          if errorlevel 1 exit /b 1
+          cmake --build build\cflow-qualification-windows --parallel 2
+          if errorlevel 1 exit /b 1
+          ctest --test-dir build\cflow-qualification-windows --no-tests=error --output-on-failure
+          if errorlevel 1 exit /b 1
 
       - name: Configure, build and test against released SDKs
         shell: cmd
