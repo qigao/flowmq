@@ -1653,14 +1653,16 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
-  it("uses a routing-id envelope for ROUTER and DEALER") {
+  it("uses a routing-id envelope for ROUTER and retained final DATA") {
     static const char identity[] = "dealer-a";
     static const char request[] = "routed-request";
-    static const char reply[] = "routed-reply";
+    static char reply[] = "routed-reply";
     char endpoint[128] = {0};
     char received[64] = {0};
     size_t endpoint_size = 0u;
     size_t received_size = 0u;
+    mem_buffer_t *reply_buffer = NULL;
+    mem_slice_t reply_slice = {0};
     flowmq_ctx_t *ctx = flowmq_ctx_new();
     flowmq_socket_t *router = flowmq_socket(ctx, FLOWMQ_ROUTER);
     flowmq_socket_t *dealer = flowmq_socket(ctx, FLOWMQ_DEALER);
@@ -1692,14 +1694,33 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(received_size, sizeof(request) - 1u);
     check_equal(memcmp(received, request, received_size), 0);
 
+    reply_buffer =
+        mem_wrap_external(reply, sizeof(reply) - 1u, NULL, NULL);
+    check_not_null(reply_buffer);
+    reply_slice = mem_slice(reply_buffer, 0u, sizeof(reply) - 1u);
+    check_not_null(reply_slice.buffer);
+    check_equal(reply_slice.length, sizeof(reply) - 1u);
+
+    /*
+     * ROUTER routing-id selection remains the ordinary copied envelope. The
+     * final DATA part is the sole multipart-state entry accepted by the
+     * immediate retained surface.
+     */
     check_equal(flowmq_send(router, identity, sizeof(identity) - 1u,
                             FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), SALTS_OK);
     status = SALTS_EBUSY;
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
-      check_equal(progress_pair(dealer, router), SALTS_OK);
-      status = flowmq_send(router, reply, sizeof(reply) - 1u, FLOWMQ_DONTWAIT);
+    for (size_t i = 0u;
+         i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+         (status == SALTS_EBUSY || status == SALTS_ENOBUFS); ++i) {
+      status = flowmq_send_slice(router, &reply_slice, FLOWMQ_DONTWAIT);
+      if (status == SALTS_EBUSY || status == SALTS_ENOBUFS)
+        check_equal(progress_pair(dealer, router), SALTS_OK);
     }
     check_equal(status, SALTS_OK);
+    mem_slice_release(&reply_slice);
+    mem_buffer_release(reply_buffer);
+    reply_buffer = NULL;
+
     status = SALTS_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
       check_equal(progress_pair(dealer, router), SALTS_OK);
