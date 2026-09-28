@@ -2,6 +2,7 @@
 #define FLOWMQ_SOCKET_H
 
 #include "flowmq_export.h"
+#include "salts_buffer.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -193,6 +194,31 @@ FLOWMQ_C_API int flowmq_router_peer_status(
  */
 FLOWMQ_C_API int flowmq_send(flowmq_socket_t *socket, const void *data,
                              size_t size, int flags);
+
+/**
+ * Admit one canonical non-empty Salts Core slice through the plaintext TCP
+ * immediate DATA lane without copying payload bytes.
+ *
+ * This is an explicit ownership-bearing alternative to flowmq_send(); it does
+ * not change the borrowed-input/copy contract of that API. On SALTS_OK, CNet
+ * has retained the slice backing and the caller may immediately
+ * mem_slice_release() its own slice/reference. The admitted backing bytes and
+ * buffer data/used/capacity must remain immutable until the ordinary FlowMQ
+ * send completion settles.
+ *
+ * This first retained surface is intentionally immediate-only: FLOWMQ_SNDMORE
+ * and user multipart staging are not supported, and a busy DATA lane is
+ * reported instead of silently copying into the outbound queue. ROUTER may
+ * select its routing identity with flowmq_send(..., FLOWMQ_SNDMORE) and then
+ * submit the final DATA part with this function. TLS returns SALTS_ENOTSUP;
+ * there is no retained-to-copy fallback.
+ *
+ * FLOWMQ_DONTWAIT has the same would-block meaning as flowmq_send(). Without
+ * it, the owner thread advances this socket until immediate retained admission
+ * succeeds or progress fails.
+ */
+FLOWMQ_C_API int flowmq_send_slice(flowmq_socket_t *socket,
+                                   const mem_slice_t *slice, int flags);
 
 /**
  * Copy one available message part into caller storage. Without
