@@ -47,7 +47,9 @@ retains。retained multipart PUB/XPUB 当前 fail-closed，TLS 仍返回 `SALTS_
 
 接收侧同样保留两个显式 surface：`flowmq_recv()` 把一个 inbound part 复制到 caller storage；
 `flowmq_recv_slice()` 则把 inbound ring 已经持有的 canonical `mem_buffer_t` ownership 直接
-转移成 `mem_slice_t`，因此消除最后一次 message-pool → caller copy。flow credit、HWM occupancy、
+转移成 `mem_slice_t`，因此消除最后一次 message-pool → caller copy。caller 必须传入空的
+`mem_slice_t`；仍持有 backing 的 descriptor 会得到 `SALTS_EINVAL` 且保持原 owner 不变，
+避免覆盖 live reference。flow credit、HWM occupancy、
 `RCVMORE` 与 REQ/REP FSM 都在 dequeue 时推进，不会因为应用持有 slice 而冻结 transport credit。
 Salts 1.7.12 的 `mem_pool_t` 销毁不会等待 outstanding pooled buffers，所以该 zero-copy slice
 可以跨后续 `poll/send/recv` progress 持有，但必须在 `flowmq_close()` 前
