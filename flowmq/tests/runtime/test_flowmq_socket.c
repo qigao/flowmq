@@ -2076,8 +2076,10 @@ spec("flowmq_socket lifecycle and pattern surface") {
        * account for all 31 queued messages at once, even though CNet may span
        * that logical write across two NativeIO vector windows.
        *
-       * A stale FlowMQ cap at NATIVE_IO_VECTOR_MAX would expose an intermediate
-       * completed_messages value of baseline + 17 and fail this contract.
+       * The zero-time owner probes below execute exactly one drive turn each.
+       * A stale FlowMQ cap at NATIVE_IO_VECTOR_MAX would therefore expose an
+       * intermediate completed_messages value of baseline + 17 and fail this
+       * contract.
        */
       {
         const uint64_t baseline =
@@ -2089,7 +2091,7 @@ spec("flowmq_socket lifecycle and pattern surface") {
                           router, identity, sizeof(identity) - 1u,
                           &peer_status), SALTS_OK);
           if (peer_status.completed_messages > baseline) break;
-          check_equal(flowmq_poll(&router_item, 1u, 100u, &ready), SALTS_OK);
+          check_equal(flowmq_poll(&router_item, 1u, 0u, &ready), SALTS_OK);
         }
         check_equal(peer_status.completed_messages, baseline + 1u);
 
@@ -2100,7 +2102,7 @@ spec("flowmq_socket lifecycle and pattern surface") {
                           router, identity, sizeof(identity) - 1u,
                           &peer_status), SALTS_OK);
           if (peer_status.completed_messages > baseline + 1u) break;
-          check_equal(flowmq_poll(&router_item, 1u, 100u, &ready), SALTS_OK);
+          check_equal(flowmq_poll(&router_item, 1u, 0u, &ready), SALTS_OK);
         }
         check_equal(peer_status.completed_messages,
                     baseline + MESSAGES_PER_CYCLE);
