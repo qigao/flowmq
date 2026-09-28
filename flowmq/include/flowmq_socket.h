@@ -216,6 +216,11 @@ FLOWMQ_C_API int flowmq_send(flowmq_socket_t *socket, const void *data,
  * FLOWMQ_DONTWAIT has the same would-block meaning as flowmq_send(). Without
  * it, the owner thread advances this socket until immediate retained admission
  * succeeds or progress fails.
+ *
+ * This API is intended for payloads that are already in canonical owned
+ * buffers, especially larger DATA where avoiding the admission copy offsets
+ * slice/refcount/framing overhead. Small borrowed payloads should normally use
+ * flowmq_send().
  */
 FLOWMQ_C_API int flowmq_send_slice(flowmq_socket_t *socket,
                                    const mem_slice_t *slice, int flags);
