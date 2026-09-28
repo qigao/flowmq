@@ -291,6 +291,18 @@ spec("FlowMQ direct socket benchmark") {
     }
     check_equal(status, SALTS_OK);
 
+    /*
+     * Keep the queued-batch workload independent from the high-volume
+     * immediate benchmarks above. Those runs intentionally exercise flow
+     * credit and terminal timing for hundreds of thousands of messages; the
+     * batch benchmark measures fresh-session queue admission instead of
+     * inheriting transient credit/update state from a different workload.
+     */
+    bench_pair_close(&pair);
+    status = bench_pair_open(&pair);
+    check_equal(status, SALTS_OK);
+    check_equal(bench_exchange(&pair, payload, sizeof(payload)), SALTS_OK);
+
     benchmark_io("PAIR 64-message queued batch",
                  bench_socket_samples(BENCH_BATCH_SAMPLES, 2u),
                  BENCH_BATCH_MESSAGES,
