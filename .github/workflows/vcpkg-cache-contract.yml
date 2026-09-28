@@ -9,16 +9,6 @@ on:
       - "tests/package/**"
       - "vcpkg.json"
       - ".github/workflows/vcpkg-cache-contract.yml"
-  push:
-    tags-ignore:
-      - "**"
-    paths:
-      - "CMakeLists.txt"
-      - "cmake/**"
-      - "flowmq/**"
-      - "tests/package/**"
-      - "vcpkg.json"
-      - ".github/workflows/vcpkg-cache-contract.yml"
 
 permissions:
   contents: read
@@ -113,6 +103,7 @@ jobs:
             -DVCPKG_TARGET_TRIPLET=x64-linux \
             -DVCPKG_MANIFEST_MODE=OFF \
             -DVCPKG_INSTALLED_DIR="$FLOWMQ_VCPKG_INSTALLED" \
+            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching \
             -DBUILD_TESTS=ON -DBUILD_EXAMPLES=OFF
           export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$FLOWMQ_VCPKG_INSTALLED/x64-linux/lib"
           cmake --build build/cache-contract --parallel 2
@@ -128,6 +119,7 @@ jobs:
             -DVCPKG_TARGET_TRIPLET=x64-linux \
             -DVCPKG_MANIFEST_MODE=OFF \
             -DVCPKG_INSTALLED_DIR="$FLOWMQ_VCPKG_INSTALLED" \
+            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching \
             -DBUILD_TESTS=ON -DBUILD_EXAMPLES=OFF -DENABLE_ASAN=ON
           export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$FLOWMQ_VCPKG_INSTALLED/x64-linux/lib"
           export ASAN_OPTIONS="detect_leaks=1:halt_on_error=1"
@@ -253,7 +245,7 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE="%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake" ^
             -DVCPKG_TARGET_TRIPLET=x64-windows ^
             -DVCPKG_MANIFEST_MODE=OFF ^
-            -DVCPKG_INSTALLED_DIR="%FLOWMQ_VCPKG_INSTALLED%"
+            -DVCPKG_INSTALLED_DIR="%FLOWMQ_VCPKG_INSTALLED%" -DVCPKG_INSTALL_OPTIONS=--only-binarycaching
           if errorlevel 1 exit /b 1
           cmake --build build\cflow-qualification-windows --parallel 2
           if errorlevel 1 exit /b 1
@@ -271,7 +263,7 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE="%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake" ^
             -DVCPKG_TARGET_TRIPLET=x64-windows ^
             -DVCPKG_MANIFEST_MODE=OFF ^
-            -DVCPKG_INSTALLED_DIR="%FLOWMQ_VCPKG_INSTALLED%" ^
+            -DVCPKG_INSTALLED_DIR="%FLOWMQ_VCPKG_INSTALLED%" -DVCPKG_INSTALL_OPTIONS=--only-binarycaching ^
             -DBUILD_TESTS=ON -DBUILD_EXAMPLES=OFF
           if errorlevel 1 exit /b 1
           cmake --build build\cache-contract-windows --parallel 2
@@ -296,7 +288,7 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE="%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake" ^
             -DVCPKG_TARGET_TRIPLET=x64-windows ^
             -DVCPKG_MANIFEST_MODE=OFF ^
-            -DVCPKG_INSTALLED_DIR="%FLOWMQ_VCPKG_INSTALLED%"
+            -DVCPKG_INSTALLED_DIR="%FLOWMQ_VCPKG_INSTALLED%" -DVCPKG_INSTALL_OPTIONS=--only-binarycaching
           if errorlevel 1 exit /b 1
           cmake --build build\package-consumer-windows --parallel 2
           if errorlevel 1 exit /b 1
