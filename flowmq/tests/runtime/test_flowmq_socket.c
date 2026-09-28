@@ -541,6 +541,168 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
+  it("keeps retained multipart staging across a busy final retry") {
+    static const char occupying[] = "occupying-write";
+    static unsigned char first_payload[] = "retry-first";
+    static unsigned char final_payload[] = "retry-final";
+    unsigned char received[32] = {0};
+    flowmq_test_external_release_t first_release = {0};
+    flowmq_test_external_release_t final_release = {0};
+    char endpoint[128] = {0};
+    size_t endpoint_size = 0u;
+    size_t received_size = 0u;
+    mem_buffer_t *first_buffer;
+    mem_buffer_t *final_buffer;
+    mem_slice_t first_slice;
+    mem_slice_t final_slice;
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *sender = flowmq_socket(ctx, FLOWMQ_PAIR);
+    flowmq_socket_t *receiver = flowmq_socket(ctx, FLOWMQ_PAIR);
+    int status = SALTS_EBUSY;
+
+    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), SALTS_OK);
+    check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(sender, endpoint), SALTS_OK);
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
+      status = flowmq_send(sender, occupying, sizeof(occupying) - 1u,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+
+    first_buffer =
+        mem_wrap_external(first_payload, sizeof(first_payload) - 1u,
+                          flowmq_test_external_release, &first_release);
+    final_buffer =
+        mem_wrap_external(final_payload, sizeof(final_payload) - 1u,
+                          flowmq_test_external_release, &final_release);
+    check_not_null(first_buffer);
+    check_not_null(final_buffer);
+    first_slice = mem_slice(first_buffer, 0u, sizeof(first_payload) - 1u);
+    final_slice = mem_slice(final_buffer, 0u, sizeof(final_payload) - 1u);
+    check_not_null(first_slice.buffer);
+    check_not_null(final_slice.buffer);
+
+    /* Staging is ownership-only and may proceed while an older write settles. */
+    check_equal(flowmq_send_slice(sender, &first_slice,
+                                  FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE),
+                SALTS_OK);
+    mem_slice_release(&first_slice);
+    mem_buffer_release(first_buffer);
+    first_buffer = NULL;
+    check_equal(first_release.calls, 0u);
+
+    /* Final aggregate admission is immediate-only and must report the busy lane. */
+    check_equal(flowmq_send_slice(sender, &final_slice, FLOWMQ_DONTWAIT),
+                SALTS_EBUSY);
+    check_equal(first_release.calls, 0u);
+
+    status = SALTS_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
+      status = flowmq_recv(receiver, received, sizeof(received),
+                           &received_size, FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    check_equal(received_size, sizeof(occupying) - 1u);
+
+    status = flowmq_send_slice(sender, &final_slice, FLOWMQ_DONTWAIT);
+    for (size_t i = 0u;
+         (status == SALTS_EBUSY || status == SALTS_ENOBUFS) &&
+         i < FLOWMQ_TEST_PROGRESS_LIMIT; ++i) {
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
+      status = flowmq_send_slice(sender, &final_slice, FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    mem_slice_release(&final_slice);
+    mem_buffer_release(final_buffer);
+    final_buffer = NULL;
+
+    for (size_t part = 0u; part < 2u; ++part) {
+      status = SALTS_EBUSY;
+      for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                          status == SALTS_EBUSY; ++i) {
+        check_equal(progress_pair(sender, receiver), SALTS_OK);
+        status = flowmq_recv(receiver, received, sizeof(received),
+                             &received_size, FLOWMQ_DONTWAIT);
+      }
+      check_equal(status, SALTS_OK);
+      if (part == 0u) {
+        check_equal(received_size, sizeof(first_payload) - 1u);
+        check_equal(memcmp(received, first_payload, received_size), 0);
+      } else {
+        check_equal(received_size, sizeof(final_payload) - 1u);
+        check_equal(memcmp(received, final_payload, received_size), 0);
+      }
+    }
+
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        (first_release.calls == 0u ||
+                         final_release.calls == 0u); ++i)
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
+    check_equal(first_release.calls, 1u);
+    check_equal(final_release.calls, 1u);
+
+    check_equal(flowmq_close(sender), SALTS_OK);
+    check_equal(flowmq_close(receiver), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+  }
+
+  it("releases retained multipart staging when the pinned peer disconnects") {
+    static unsigned char payload[] = "disconnect-retained";
+    flowmq_test_external_release_t release = {0};
+    char endpoint[128] = {0};
+    size_t endpoint_size = 0u;
+    mem_buffer_t *buffer;
+    mem_slice_t slice;
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *sender = flowmq_socket(ctx, FLOWMQ_PAIR);
+    flowmq_socket_t *receiver = flowmq_socket(ctx, FLOWMQ_PAIR);
+    int status = SALTS_EBUSY;
+
+    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), SALTS_OK);
+    check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(sender, endpoint), SALTS_OK);
+
+    buffer = mem_wrap_external(payload, sizeof(payload) - 1u,
+                               flowmq_test_external_release, &release);
+    check_not_null(buffer);
+    slice = mem_slice(buffer, 0u, sizeof(payload) - 1u);
+    check_not_null(slice.buffer);
+
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
+      status = flowmq_send_slice(sender, &slice,
+                                 FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE);
+    }
+    check_equal(status, SALTS_OK);
+    mem_slice_release(&slice);
+    mem_buffer_release(buffer);
+    buffer = NULL;
+    check_equal(release.calls, 0u);
+
+    check_equal(flowmq_close(receiver), SALTS_OK);
+    receiver = NULL;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        release.calls == 0u; ++i) {
+      flowmq_pollitem_t item = {.socket = sender};
+      size_t ready = 0u;
+      check_equal(flowmq_poll(&item, 1u, 1u, &ready), SALTS_OK);
+    }
+    check_equal(release.calls, 1u);
+
+    /* Cancellation is visible once and staged ownership is already gone. */
+    check_equal(flowmq_send_slice(sender, NULL, FLOWMQ_DONTWAIT),
+                SALTS_EINVAL);
+    check_equal(flowmq_close(sender), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+  }
+
   it("preserves REQ/REP FSM semantics for retained multipart DATA") {
     static unsigned char first_payload[] = "request-first";
     static unsigned char final_payload[] = "request-final";
