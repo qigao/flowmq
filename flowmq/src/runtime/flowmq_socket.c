@@ -3009,8 +3009,9 @@ static int flowmq_socket_try_recv_slice(flowmq_socket_t *socket,
   flowmq_socket_peer_t *peer;
   int message_more;
   int status;
-  if (out != NULL) memset(out, 0, sizeof(*out));
   if (socket == NULL || out == NULL || (flags & ~FLOWMQ_DONTWAIT) != 0)
+    return SALTS_EINVAL;
+  if (out->buffer != NULL || out->data != NULL || out->length != 0u)
     return SALTS_EINVAL;
   if (socket->recv_cancel_error != SALTS_OK) {
     status = socket->recv_cancel_error;
