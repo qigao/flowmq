@@ -80,8 +80,8 @@ jobs:
           <Project Sdk="Microsoft.NET.Sdk">
             <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
             <ItemGroup>
-              <PackageReference Include="Salts.Native" Version="[1.8.0]" />
-              <PackageReference Include="SaltsUtils.Native" Version="[4.1.0]" />
+              <PackageReference Include="Salts.Native" Version="[1.8.2]" />
+              <PackageReference Include="SaltsUtils.Native" Version="[4.1.2]" />
             </ItemGroup>
           </Project>
           EOF
@@ -90,8 +90,8 @@ jobs:
             --name github --username qigao --password "$GITHUB_TOKEN" \
             --store-password-in-clear-text --configfile "$config"
           dotnet restore "$project" --configfile "$config" --packages "$packages"
-          echo "SALTS_ROOT=$packages/salts.native/1.8.0/sdk/linux-x64" >> "$GITHUB_ENV"
-          echo "SALTS_UTILS_ROOT=$packages/saltsutils.native/4.1.0/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "SALTS_ROOT=$packages/salts.native/1.8.2/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_ROOT=$packages/saltsutils.native/4.1.2/sdk/linux-x64" >> "$GITHUB_ENV"
 
       - name: Qualify CFlow send ordering on control plane
         shell: bash
@@ -238,8 +238,8 @@ jobs:
           <Project Sdk="Microsoft.NET.Sdk">
             <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
             <ItemGroup>
-              <PackageReference Include="Salts.Native" Version="[1.8.0]" />
-              <PackageReference Include="SaltsUtils.Native" Version="[4.1.0]" />
+              <PackageReference Include="Salts.Native" Version="[1.8.2]" />
+              <PackageReference Include="SaltsUtils.Native" Version="[4.1.2]" />
             </ItemGroup>
           </Project>
           '@ | Set-Content -LiteralPath $project
@@ -251,13 +251,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "NuGet source configuration failed" }
           dotnet restore "$project" --configfile "$config" --packages "$packages"
           if ($LASTEXITCODE -ne 0) { throw "SDK restore failed" }
-          $saltsRoot = Join-Path $packages "salts.native\1.8.0\sdk\windows-x64"
-          $saltsUtilsRoot = Join-Path $packages "saltsutils.native\4.1.0\sdk\windows-x64"
+          $saltsRoot = Join-Path $packages "salts.native\1.8.2\sdk\windows-x64"
+          $saltsUtilsRoot = Join-Path $packages "saltsutils.native\4.1.2\sdk\windows-x64"
           if (-not (Test-Path -LiteralPath $saltsRoot -PathType Container)) {
-            throw "missing Salts 1.8.0 windows-x64 SDK"
+            throw "missing Salts 1.8.2 windows-x64 SDK"
           }
           if (-not (Test-Path -LiteralPath $saltsUtilsRoot -PathType Container)) {
-            throw "missing SaltsUtils 4.1.0 windows-x64 SDK"
+            throw "missing SaltsUtils 4.1.2 windows-x64 SDK"
           }
           "SALTS_ROOT=$saltsRoot" >> $env:GITHUB_ENV
           "SALTS_UTILS_ROOT=$saltsUtilsRoot" >> $env:GITHUB_ENV
