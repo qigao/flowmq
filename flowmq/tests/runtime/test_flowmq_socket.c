@@ -696,9 +696,24 @@ spec("flowmq_socket lifecycle and pattern surface") {
     }
     check_equal(release.calls, 1u);
 
-    /* Cancellation is visible once and staged ownership is already gone. */
-    check_equal(flowmq_send_slice(sender, NULL, FLOWMQ_DONTWAIT),
-                SALTS_EINVAL);
+    /* Cancellation is visible exactly once after retained ownership is gone. */
+    {
+      static unsigned char probe_payload[] = "probe";
+      mem_buffer_t *probe_buffer =
+          mem_wrap_external(probe_payload, sizeof(probe_payload) - 1u,
+                            NULL, NULL);
+      mem_slice_t probe_slice;
+      check_not_null(probe_buffer);
+      probe_slice =
+          mem_slice(probe_buffer, 0u, sizeof(probe_payload) - 1u);
+      check_not_null(probe_slice.buffer);
+      check_equal(flowmq_send_slice(sender, &probe_slice, FLOWMQ_DONTWAIT),
+                  SALTS_ENOTCONN);
+      status = flowmq_send_slice(sender, &probe_slice, FLOWMQ_DONTWAIT);
+      check_true(status == SALTS_EBUSY || status == SALTS_ENOBUFS);
+      mem_slice_release(&probe_slice);
+      mem_buffer_release(probe_buffer);
+    }
     check_equal(flowmq_close(sender), SALTS_OK);
     check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
