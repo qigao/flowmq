@@ -162,6 +162,7 @@ struct flowmq_socket_s {
   flowmq_socket_endpoint_t endpoints[FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY];
   flowmq_socket_message_t *inbound;
   flowmq_socket_outbound_t send_staged[FLOWMQ_SOCKET_MULTIPART_CAPACITY];
+  mem_slice_t send_retained_staged[CNET_RETAINED_VECTOR_MAX];
   flowmq_protocol_segment_t frame_segments[FLOWMQ_SOCKET_FRAME_SEGMENT_CAPACITY];
   cnet_const_buffer send_segments[FLOWMQ_SOCKET_OUTBOUND_CAPACITY];
   unsigned char framing_scratch[FLOWMQ_SOCKET_FRAMING_CAPACITY];
@@ -173,6 +174,10 @@ struct flowmq_socket_s {
   size_t inbound_bytes;
   size_t send_staged_count;
   size_t send_staged_bytes;
+  size_t send_retained_count;
+  size_t send_retained_payload_bytes;
+  size_t send_retained_encoded_bytes;
+  size_t send_retained_parts;
   size_t send_hwm;
   size_t receive_hwm;
   size_t send_hwm_bytes;
@@ -846,8 +851,56 @@ static void flowmq_socket_release_send_staged(flowmq_socket_t *socket) {
   socket->send_staged_bytes = 0u;
 }
 
+static void flowmq_socket_release_retained_staged(flowmq_socket_t *socket) {
+  if (socket == NULL) return;
+  for (size_t i = 0u; i < socket->send_retained_count; ++i)
+    mem_slice_release(&socket->send_retained_staged[i]);
+  socket->send_retained_count = 0u;
+  socket->send_retained_payload_bytes = 0u;
+  socket->send_retained_encoded_bytes = 0u;
+  socket->send_retained_parts = 0u;
+}
+
+static int flowmq_socket_stage_retained_frame(
+    flowmq_socket_t *socket, flowmq_socket_retained_frame_t *frame) {
+  if (socket == NULL || frame == NULL || frame->slice_count == 0u ||
+      frame->payload_size == 0u)
+    return SALTS_EINVAL;
+  if (frame->slice_count >
+          CNET_RETAINED_VECTOR_MAX - socket->send_retained_count ||
+      frame->encoded_size >
+          socket->max_encoded_size - socket->send_retained_encoded_bytes ||
+      frame->payload_size >
+          socket->send_hwm_bytes - socket->send_retained_payload_bytes ||
+      socket->send_retained_parts >= FLOWMQ_SOCKET_MULTIPART_CAPACITY)
+    return SALTS_EMSGSIZE;
+
+  for (size_t i = 0u; i < frame->slice_count; ++i) {
+    socket->send_retained_staged[socket->send_retained_count++] =
+        frame->slices[i];
+    frame->slices[i] = (mem_slice_t){0};
+  }
+  socket->send_retained_payload_bytes += frame->payload_size;
+  socket->send_retained_encoded_bytes += frame->encoded_size;
+  ++socket->send_retained_parts;
+
+  /*
+   * Each moved framing slice owns a reference to this backing. Drop the
+   * temporary frame's construction reference after ownership moves.
+   */
+  if (frame->framing != NULL) {
+    mem_buffer_release(frame->framing);
+    frame->framing = NULL;
+  }
+  frame->slice_count = 0u;
+  frame->encoded_size = 0u;
+  frame->payload_size = 0u;
+  return SALTS_OK;
+}
+
 static void flowmq_socket_cancel_send_route(flowmq_socket_t *socket) {
   flowmq_socket_release_send_staged(socket);
+  flowmq_socket_release_retained_staged(socket);
   socket->send_peer_active = 0u;
   socket->send_peer_generation = 0u;
   socket->publish_peer_mask = 0u;
@@ -1906,6 +1959,7 @@ int flowmq_close(flowmq_socket_t *socket) {
     mem_buffer_release(socket->inbound[index].buffer);
   }
   flowmq_socket_release_send_staged(socket);
+  flowmq_socket_release_retained_staged(socket);
   for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i)
     flowmq_socket_peer_release(&socket->peers[i]);
   flowmq_subscription_set_destroy(&socket->subscriptions);
