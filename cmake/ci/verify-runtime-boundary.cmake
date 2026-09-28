@@ -68,6 +68,13 @@ foreach(_flowmq_sg_required IN ITEMS
         "cnet_client_set_stream_socket_options(&socket->client, &socket_options)"
         "flowmq_socket_prepare_retained_frame("
         "flowmq_socket_peer_admit_retained("
+        "flowmq_socket_peer_admit_retained_message("
+        "flowmq_socket_stage_retained_frame("
+        "flowmq_socket_release_retained_staged("
+        "mem_slice_t send_retained_staged[CNET_RETAINED_VECTOR_MAX];"
+        "CNET_RETAINED_VECTOR_MAX - socket->send_retained_count"
+        "if (socket->send_retained_count != 0u) return SALTS_ENOTSUP;"
+        "if (socket->send_staged_count != 0u) return SALTS_ENOTSUP;"
         "status = cnet_send_slicev(&socket->client, peer->connection,"
         "socket->transport != FLOWMQ_TRANSPORT_TCP")
   string(FIND "${_flowmq_socket_text}"
@@ -79,6 +86,14 @@ foreach(_flowmq_sg_required IN ITEMS
       "${_flowmq_sg_required}")
   endif()
 endforeach()
+
+string(FIND "${_flowmq_socket_text}"
+            "FLOWMQ_PATTERN_ROUTE_FANOUT &&"
+            _flowmq_retained_fanout_guard_index)
+if(_flowmq_retained_fanout_guard_index EQUAL -1)
+  message(FATAL_ERROR
+    "FlowMQ retained multipart must keep fanout fail-closed until it has an atomic multi-peer ownership design")
+endif()
 
 string(FIND "${_flowmq_socket_text}"
             "NATIVE_IO_VECTOR_MAX"
@@ -105,4 +120,4 @@ if(_flowmq_retained_api_index EQUAL -1)
 endif()
 
 message(STATUS
-        "FlowMQ CNet SG contract verified: CNet logical retained bound, TCP_NODELAY policy, explicit TLS copy path, no fallback")
+        "FlowMQ CNet SG contract verified: bounded retained multipart, no copy mixing, TCP_NODELAY policy, explicit TLS copy path, no fallback")
