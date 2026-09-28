@@ -33,12 +33,14 @@ CNet 仍由 socket owner 线程直接推进，不创建 worker/progress thread�
 和 message queue 路径；TLS 只在连接适配层增加证书与主机名验证。
 
 发送 API 有两个明确的 ownership surface：`flowmq_send()` 在返回成功前复制 borrowed
-caller bytes；`flowmq_send_slice()` 则只用于 plaintext TCP 的 immediate retained DATA，
-接收 canonical non-empty Salts `mem_slice_t`。后者成功后 caller 可立即释放自己的 slice
-引用，但 backing bytes/data/used/capacity 必须保持不可变直到 send terminal。它不接受
-`FLOWMQ_SNDMORE` 用户 multipart staging，busy lane 不会偷偷 copy/queue，TLS 返回
-`SALTS_ENOTSUP`。ROUTER 可先用普通 `flowmq_send(..., FLOWMQ_SNDMORE)` 选择 routing id，
-再用 retained slice 发送最终 DATA。基准显示该 API 不是小消息的默认替代：
+caller bytes；`flowmq_send_slice()` 用于 plaintext TCP 的 canonical retained DATA。
+retained `FLOWMQ_SNDMORE` part 成功后 caller 可立即释放自己的 slice 引用，socket 在有界
+retained staging 中保持 ownership；final part 把完整 multipart 作为一个不超过 32 ranges 的
+CNet logical retained write 提交。copied DATA 与 retained DATA 不在同一 multipart transaction
+中混用；ROUTER routing-id envelope 仍可先通过普通 copy API 选择 peer。超出 aggregate SG/send
+bound 显式失败，不 split、不 flatten、不 copy fallback；disconnect/cancel/close 释放所有 staged
+retains。retained multipart PUB/XPUB 当前 fail-closed，TLS 仍返回 `SALTS_ENOTSUP`。基准显示
+该 API 不是小消息的默认替代：
 64-byte retained 会承担额外 slice/refcount/framing 固定成本，而 1 MiB owned payload
 已经能通过消除 admission copy 获得可测收益；普通/小 borrowed payload 继续优先使用
 `flowmq_send()`。
