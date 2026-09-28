@@ -302,10 +302,32 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_null(slice.data);
     check_equal(slice.length, 0u);
 
-    /* Would-block/error paths always leave the output descriptor empty. */
-    slice.data = (char *)second;
-    slice.length = sizeof(second) - 1u;
-    slice.buffer = (mem_buffer_t *)(uintptr_t)1u;
+    /*
+     * A live output owner must never be overwritten: reject it unchanged so
+     * the caller cannot lose a reference by accidentally reusing the slice.
+     */
+    {
+      static unsigned char occupied_bytes[] = "occupied-output";
+      mem_buffer_t *occupied_buffer =
+          mem_wrap_external(occupied_bytes, sizeof(occupied_bytes) - 1u,
+                            NULL, NULL);
+      mem_slice_t occupied_slice;
+      check_not_null(occupied_buffer);
+      occupied_slice =
+          mem_slice(occupied_buffer, 0u, sizeof(occupied_bytes) - 1u);
+      check_not_null(occupied_slice.buffer);
+      check_equal(flowmq_recv_slice(receiver, &occupied_slice,
+                                    FLOWMQ_DONTWAIT),
+                  SALTS_EINVAL);
+      check_true(occupied_slice.buffer == occupied_buffer);
+      check_equal(occupied_slice.length, sizeof(occupied_bytes) - 1u);
+      check_equal(memcmp(occupied_slice.data, occupied_bytes,
+                         occupied_slice.length), 0);
+      mem_slice_release(&occupied_slice);
+      mem_buffer_release(occupied_buffer);
+    }
+
+    /* A valid empty output stays empty when no message is ready. */
     check_equal(flowmq_recv_slice(receiver, &slice, FLOWMQ_DONTWAIT),
                 SALTS_EBUSY);
     check_null(slice.buffer);
