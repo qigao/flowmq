@@ -16,6 +16,12 @@ enum {
   BENCH_SAMPLES = 100000u,
   BENCH_LARGE_SAMPLES = 5000u,
   BENCH_RETAINED_LARGE_SAMPLES = 512u,
+  BENCH_MULTIPART_SMALL_PARTS = 4u,
+  BENCH_MULTIPART_SMALL_PART_BYTES = 64u,
+  BENCH_MULTIPART_LARGE_PARTS = 2u,
+  BENCH_MULTIPART_LARGE_PART_BYTES = 256u * 1024u,
+  BENCH_MULTIPART_SMALL_SAMPLES = 25000u,
+  BENCH_MULTIPART_LARGE_SAMPLES = 512u,
   BENCH_BATCH_SAMPLES = 10000u,
   BENCH_BATCH_MESSAGES = 64u,
   BENCH_PROGRESS_LIMIT = 10000u
@@ -136,6 +142,93 @@ static int bench_exchange_retained(bench_pair_t *pair,
   return SALTS_OK;
 }
 
+static int bench_receive_part(bench_pair_t *pair, const void *expected,
+                              size_t expected_size, int expected_more) {
+  static unsigned char received[BENCH_RETAINED_LARGE_PAYLOAD_BYTES];
+  size_t received_size = 0u;
+  size_t option_size = sizeof(int);
+  int more = -1;
+  int status = SALTS_EBUSY;
+
+  if (expected == NULL || expected_size == 0u ||
+      expected_size > sizeof(received))
+    return SALTS_EINVAL;
+  for (size_t i = 0u; status == SALTS_EBUSY && i < BENCH_PROGRESS_LIMIT; ++i) {
+    status = bench_progress(pair);
+    if (status == SALTS_OK)
+      status = flowmq_recv(pair->receiver, received, sizeof(received),
+                           &received_size, FLOWMQ_DONTWAIT);
+  }
+  if (status != SALTS_OK) return status;
+  if (received_size != expected_size ||
+      memcmp(received, expected, expected_size) != 0)
+    return SALTS_EPROTO;
+  status = flowmq_getsockopt(pair->receiver, FLOWMQ_RCVMORE, &more,
+                             &option_size);
+  if (status != SALTS_OK) return status;
+  return more == expected_more ? SALTS_OK : SALTS_EPROTO;
+}
+
+static int bench_exchange_multipart_copy(bench_pair_t *pair,
+                                         const unsigned char *payload,
+                                         size_t part_size,
+                                         size_t part_count) {
+  int status;
+  if (pair == NULL || payload == NULL || part_size == 0u || part_count < 2u)
+    return SALTS_EINVAL;
+
+  for (size_t part = 0u; part < part_count; ++part) {
+    const int flags =
+        FLOWMQ_DONTWAIT | (part + 1u < part_count ? FLOWMQ_SNDMORE : 0);
+    status = flowmq_send(pair->sender, payload + part * part_size,
+                         part_size, flags);
+    for (size_t i = 0u;
+         (status == SALTS_EBUSY || status == SALTS_ENOBUFS) &&
+         i < BENCH_PROGRESS_LIMIT; ++i) {
+      status = bench_progress(pair);
+      if (status == SALTS_OK)
+        status = flowmq_send(pair->sender, payload + part * part_size,
+                             part_size, flags);
+    }
+    if (status != SALTS_OK) return status;
+  }
+
+  for (size_t part = 0u; part < part_count; ++part) {
+    status = bench_receive_part(pair, payload + part * part_size, part_size,
+                                part + 1u < part_count);
+    if (status != SALTS_OK) return status;
+  }
+  return SALTS_OK;
+}
+
+static int bench_exchange_multipart_retained(bench_pair_t *pair,
+                                             const mem_slice_t *parts,
+                                             size_t part_count) {
+  int status;
+  if (pair == NULL || parts == NULL || part_count < 2u) return SALTS_EINVAL;
+
+  for (size_t part = 0u; part < part_count; ++part) {
+    const int flags =
+        FLOWMQ_DONTWAIT | (part + 1u < part_count ? FLOWMQ_SNDMORE : 0);
+    status = flowmq_send_slice(pair->sender, &parts[part], flags);
+    for (size_t i = 0u;
+         (status == SALTS_EBUSY || status == SALTS_ENOBUFS) &&
+         i < BENCH_PROGRESS_LIMIT; ++i) {
+      status = bench_progress(pair);
+      if (status == SALTS_OK)
+        status = flowmq_send_slice(pair->sender, &parts[part], flags);
+    }
+    if (status != SALTS_OK) return status;
+  }
+
+  for (size_t part = 0u; part < part_count; ++part) {
+    status = bench_receive_part(pair, parts[part].data, parts[part].length,
+                                part + 1u < part_count);
+    if (status != SALTS_OK) return status;
+  }
+  return SALTS_OK;
+}
+
 static int bench_exchange_batch(bench_pair_t *pair, const void *payload,
                                 size_t payload_size) {
   static unsigned char received[BENCH_LARGE_PAYLOAD_BYTES];
@@ -242,33 +335,70 @@ spec("FlowMQ direct socket benchmark") {
     static unsigned char large_payload[BENCH_LARGE_PAYLOAD_BYTES];
     static unsigned char retained_large_payload[
         BENCH_RETAINED_LARGE_PAYLOAD_BYTES];
+    static unsigned char multipart_small[
+        BENCH_MULTIPART_SMALL_PARTS * BENCH_MULTIPART_SMALL_PART_BYTES];
+    static unsigned char multipart_large[
+        BENCH_MULTIPART_LARGE_PARTS * BENCH_MULTIPART_LARGE_PART_BYTES];
     const size_t samples = bench_socket_samples(BENCH_SAMPLES, 8u);
     const size_t large_samples =
         bench_socket_samples(BENCH_LARGE_SAMPLES, 4u);
     const size_t retained_large_samples =
         bench_socket_samples(BENCH_RETAINED_LARGE_SAMPLES, 2u);
+    const size_t multipart_small_samples =
+        bench_socket_samples(BENCH_MULTIPART_SMALL_SAMPLES, 2u);
+    const size_t multipart_large_samples =
+        bench_socket_samples(BENCH_MULTIPART_LARGE_SAMPLES, 1u);
     mem_buffer_t *payload_buffer;
     mem_buffer_t *retained_large_buffer;
+    mem_buffer_t *multipart_small_buffer;
+    mem_buffer_t *multipart_large_buffer;
     mem_slice_t payload_slice;
     mem_slice_t retained_large_slice;
+    mem_slice_t multipart_small_slices[BENCH_MULTIPART_SMALL_PARTS] = {0};
+    mem_slice_t multipart_large_slices[BENCH_MULTIPART_LARGE_PARTS] = {0};
     bench_pair_t pair;
     int status;
 
     memset(payload, 0x5a, sizeof(payload));
     memset(large_payload, 0xa5, sizeof(large_payload));
     memset(retained_large_payload, 0x3c, sizeof(retained_large_payload));
+    for (size_t i = 0u; i < sizeof(multipart_small); ++i)
+      multipart_small[i] = (unsigned char)((i * 11u + 5u) & 0xffu);
+    for (size_t i = 0u; i < sizeof(multipart_large); ++i)
+      multipart_large[i] = (unsigned char)((i * 29u + 9u) & 0xffu);
+
     payload_buffer =
         mem_wrap_external(payload, sizeof(payload), NULL, NULL);
     retained_large_buffer =
         mem_wrap_external(retained_large_payload,
                           sizeof(retained_large_payload), NULL, NULL);
+    multipart_small_buffer =
+        mem_wrap_external(multipart_small, sizeof(multipart_small), NULL, NULL);
+    multipart_large_buffer =
+        mem_wrap_external(multipart_large, sizeof(multipart_large), NULL, NULL);
     check_not_null(payload_buffer);
     check_not_null(retained_large_buffer);
+    check_not_null(multipart_small_buffer);
+    check_not_null(multipart_large_buffer);
     payload_slice = mem_slice(payload_buffer, 0u, sizeof(payload));
     retained_large_slice =
         mem_slice(retained_large_buffer, 0u, sizeof(retained_large_payload));
     check_not_null(payload_slice.buffer);
     check_not_null(retained_large_slice.buffer);
+    for (size_t part = 0u; part < BENCH_MULTIPART_SMALL_PARTS; ++part) {
+      multipart_small_slices[part] =
+          mem_slice(multipart_small_buffer,
+                    part * BENCH_MULTIPART_SMALL_PART_BYTES,
+                    BENCH_MULTIPART_SMALL_PART_BYTES);
+      check_not_null(multipart_small_slices[part].buffer);
+    }
+    for (size_t part = 0u; part < BENCH_MULTIPART_LARGE_PARTS; ++part) {
+      multipart_large_slices[part] =
+          mem_slice(multipart_large_buffer,
+                    part * BENCH_MULTIPART_LARGE_PART_BYTES,
+                    BENCH_MULTIPART_LARGE_PART_BYTES);
+      check_not_null(multipart_large_slices[part].buffer);
+    }
 
     status = bench_pair_open(&pair);
     check_equal(status, SALTS_OK);
@@ -313,6 +443,66 @@ spec("FlowMQ direct socket benchmark") {
     }
     check_equal(status, SALTS_OK);
 
+    check_equal(bench_pair_close(&pair), SALTS_OK);
+    status = bench_pair_open(&pair);
+    check_equal(status, SALTS_OK);
+    check_equal(bench_exchange_multipart_copy(
+                    &pair, multipart_small, BENCH_MULTIPART_SMALL_PART_BYTES,
+                    BENCH_MULTIPART_SMALL_PARTS), SALTS_OK);
+    benchmark_bytes("PAIR 4x64-byte copy multipart", multipart_small_samples,
+                    BENCH_MULTIPART_SMALL_PARTS *
+                        BENCH_MULTIPART_SMALL_PART_BYTES) {
+      status = bench_exchange_multipart_copy(
+          &pair, multipart_small, BENCH_MULTIPART_SMALL_PART_BYTES,
+          BENCH_MULTIPART_SMALL_PARTS);
+    }
+    check_equal(status, SALTS_OK);
+
+    check_equal(bench_pair_close(&pair), SALTS_OK);
+    status = bench_pair_open(&pair);
+    check_equal(status, SALTS_OK);
+    check_equal(bench_exchange_multipart_retained(
+                    &pair, multipart_small_slices,
+                    BENCH_MULTIPART_SMALL_PARTS), SALTS_OK);
+    benchmark_bytes("PAIR 4x64-byte retained multipart",
+                    multipart_small_samples,
+                    BENCH_MULTIPART_SMALL_PARTS *
+                        BENCH_MULTIPART_SMALL_PART_BYTES) {
+      status = bench_exchange_multipart_retained(
+          &pair, multipart_small_slices, BENCH_MULTIPART_SMALL_PARTS);
+    }
+    check_equal(status, SALTS_OK);
+
+    check_equal(bench_pair_close(&pair), SALTS_OK);
+    status = bench_pair_open(&pair);
+    check_equal(status, SALTS_OK);
+    check_equal(bench_exchange_multipart_copy(
+                    &pair, multipart_large, BENCH_MULTIPART_LARGE_PART_BYTES,
+                    BENCH_MULTIPART_LARGE_PARTS), SALTS_OK);
+    benchmark_bytes("PAIR 2x256-KiB copy multipart", multipart_large_samples,
+                    BENCH_MULTIPART_LARGE_PARTS *
+                        BENCH_MULTIPART_LARGE_PART_BYTES) {
+      status = bench_exchange_multipart_copy(
+          &pair, multipart_large, BENCH_MULTIPART_LARGE_PART_BYTES,
+          BENCH_MULTIPART_LARGE_PARTS);
+    }
+    check_equal(status, SALTS_OK);
+
+    check_equal(bench_pair_close(&pair), SALTS_OK);
+    status = bench_pair_open(&pair);
+    check_equal(status, SALTS_OK);
+    check_equal(bench_exchange_multipart_retained(
+                    &pair, multipart_large_slices,
+                    BENCH_MULTIPART_LARGE_PARTS), SALTS_OK);
+    benchmark_bytes("PAIR 2x256-KiB retained multipart",
+                    multipart_large_samples,
+                    BENCH_MULTIPART_LARGE_PARTS *
+                        BENCH_MULTIPART_LARGE_PART_BYTES) {
+      status = bench_exchange_multipart_retained(
+          &pair, multipart_large_slices, BENCH_MULTIPART_LARGE_PARTS);
+    }
+    check_equal(status, SALTS_OK);
+
     /*
      * Keep the queued-batch workload independent from the high-volume
      * immediate benchmarks above. Those runs intentionally exercise flow
@@ -333,8 +523,14 @@ spec("FlowMQ direct socket benchmark") {
     }
     check_equal(status, SALTS_OK);
 
+    for (size_t part = 0u; part < BENCH_MULTIPART_LARGE_PARTS; ++part)
+      mem_slice_release(&multipart_large_slices[part]);
+    for (size_t part = 0u; part < BENCH_MULTIPART_SMALL_PARTS; ++part)
+      mem_slice_release(&multipart_small_slices[part]);
     mem_slice_release(&retained_large_slice);
     mem_slice_release(&payload_slice);
+    mem_buffer_release(multipart_large_buffer);
+    mem_buffer_release(multipart_small_buffer);
     mem_buffer_release(retained_large_buffer);
     mem_buffer_release(payload_buffer);
     check_equal(bench_pair_close(&pair), SALTS_OK);
