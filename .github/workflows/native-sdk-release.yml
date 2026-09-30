@@ -94,12 +94,14 @@ jobs:
             --name github --username qigao --password "$GITHUB_TOKEN" \
             --store-password-in-clear-text --configfile "$config"
           dotnet restore packaging/nuget/FlowMQ.Native.csproj --configfile "$config" --packages "$packages"
-          mapfile -t salts_versions < <(find "$packages/salts.native" -mindepth 1 -maxdepth 1 -type d -print)
-          mapfile -t salts_utils_versions < <(find "$packages/saltsutils.native" -mindepth 1 -maxdepth 1 -type d -print)
+          salts_versions=("$packages/salts.native"/*)
+          salts_utils_versions=("$packages/saltsutils.native"/*)
           test "${#salts_versions[@]}" -eq 1
           test "${#salts_utils_versions[@]}" -eq 1
           salts_pkg="${salts_versions[0]}"
           salts_utils_pkg="${salts_utils_versions[0]}"
+          test -d "$salts_pkg"
+          test -d "$salts_utils_pkg"
           echo "SALTS_ROOT=$salts_pkg/sdk/linux-x64" >> "$GITHUB_ENV"
           echo "SALTS_UTILS_ROOT=$salts_utils_pkg/sdk/linux-x64" >> "$GITHUB_ENV"
           echo "FLOWMQ_SALTS_RESOLVED_VERSION=$(basename "$salts_pkg")" >> "$GITHUB_ENV"
@@ -286,12 +288,14 @@ jobs:
             --name github --username qigao --password "$GITHUB_TOKEN" \
             --store-password-in-clear-text --configfile "$config"
           dotnet restore packaging/nuget/FlowMQ.Native.csproj --configfile "$config" --packages "$packages"
-          mapfile -t salts_versions < <(find "$packages/salts.native" -mindepth 1 -maxdepth 1 -type d -print)
-          mapfile -t salts_utils_versions < <(find "$packages/saltsutils.native" -mindepth 1 -maxdepth 1 -type d -print)
+          salts_versions=("$packages/salts.native"/*)
+          salts_utils_versions=("$packages/saltsutils.native"/*)
           test "${#salts_versions[@]}" -eq 1
           test "${#salts_utils_versions[@]}" -eq 1
           salts_pkg="${salts_versions[0]}"
           salts_utils_pkg="${salts_utils_versions[0]}"
+          test -d "$salts_pkg"
+          test -d "$salts_utils_pkg"
           echo "SALTS_ROOT=$salts_pkg/sdk/$FLOWMQ_RID" >> "$GITHUB_ENV"
           echo "SALTS_UTILS_ROOT=$salts_utils_pkg/sdk/$FLOWMQ_RID" >> "$GITHUB_ENV"
           echo "FLOWMQ_SALTS_RESOLVED_VERSION=$(basename "$salts_pkg")" >> "$GITHUB_ENV"
@@ -378,12 +382,14 @@ jobs:
             --name github --username qigao --password "$GITHUB_TOKEN" \
             --store-password-in-clear-text --configfile "$config"
           dotnet restore packaging/nuget/FlowMQ.Native.csproj --configfile "$config" --packages "$packages"
-          mapfile -t salts_versions < <(find "$packages/salts.native" -mindepth 1 -maxdepth 1 -type d -print)
-          mapfile -t salts_utils_versions < <(find "$packages/saltsutils.native" -mindepth 1 -maxdepth 1 -type d -print)
+          salts_versions=("$packages/salts.native"/*)
+          salts_utils_versions=("$packages/saltsutils.native"/*)
           test "${#salts_versions[@]}" -eq 1
           test "${#salts_utils_versions[@]}" -eq 1
           salts_pkg="${salts_versions[0]}"
           salts_utils_pkg="${salts_utils_versions[0]}"
+          test -d "$salts_pkg"
+          test -d "$salts_utils_pkg"
           echo "SALTS_ROOT=$salts_pkg/sdk/android-arm64-v8a" >> "$GITHUB_ENV"
           echo "SALTS_UTILS_ROOT=$salts_utils_pkg/sdk/android-arm64-v8a" >> "$GITHUB_ENV"
           echo "SALTS_HOST_ROOT=$salts_pkg/sdk/linux-x64" >> "$GITHUB_ENV"
@@ -599,12 +605,14 @@ jobs:
           </Project>
           EOF
           dotnet restore "$project" --configfile "$config" --packages "$packages"
-          mapfile -t salts_versions < <(find "$packages/salts.native" -mindepth 1 -maxdepth 1 -type d -print)
-          mapfile -t salts_utils_versions < <(find "$packages/saltsutils.native" -mindepth 1 -maxdepth 1 -type d -print)
+          salts_versions=("$packages/salts.native"/*)
+          salts_utils_versions=("$packages/saltsutils.native"/*)
           test "${#salts_versions[@]}" -eq 1
           test "${#salts_utils_versions[@]}" -eq 1
           salts_pkg="${salts_versions[0]}"
           salts_utils_pkg="${salts_utils_versions[0]}"
+          test -d "$salts_pkg"
+          test -d "$salts_utils_pkg"
           echo "SALTS_ROOT=$salts_pkg/sdk/$FLOWMQ_RID" >> "$GITHUB_ENV"
           echo "SALTS_UTILS_ROOT=$salts_utils_pkg/sdk/$FLOWMQ_RID" >> "$GITHUB_ENV"
           echo "FLOWMQ_SALTS_RESOLVED_VERSION=$(basename "$salts_pkg")" >> "$GITHUB_ENV"
