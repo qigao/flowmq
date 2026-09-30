@@ -4,10 +4,10 @@
 
 The package contains Release SDK profiles for Linux x64, Windows x64, the macOS publisher architecture, and Android arm64-v8a (API 26). Linux, Windows, and macOS run package-consumer qualification; Android is compile/link qualified.
 
-Exact product dependencies:
+First-party product dependencies float to the latest published stable producer SDKs:
 
-- `Salts.Native 1.8.3`
-- `SaltsUtils.Native 4.1.3`
+- `Salts.Native`
+- `SaltsUtils.Native`
 
 Third-party dependencies come from this repository's root `vcpkg.json`; `qigao/vcpkg-cache` supplies only the shared vcpkg setup/cache infrastructure.
 
