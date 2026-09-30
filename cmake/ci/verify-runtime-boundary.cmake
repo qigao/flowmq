@@ -59,11 +59,13 @@ file(READ "${FLOWMQ_SOCKET_SOURCE}" _flowmq_socket_text)
 file(READ "${FLOWMQ_SOCKET_HEADER}" _flowmq_socket_header_text)
 
 foreach(_flowmq_sg_required IN ITEMS
-        "use_retained_sg = socket->transport == FLOWMQ_TRANSPORT_TCP;"
         "mem_slice_t slices[CNET_RETAINED_VECTOR_MAX] = {0};"
-        "batch_count == CNET_RETAINED_VECTOR_MAX"
+        "batch_count < CNET_RETAINED_VECTOR_MAX"
+        "socket->transport != FLOWMQ_TRANSPORT_TCP &&"
+        "socket->transport != FLOWMQ_TRANSPORT_TLS"
         "status = cnet_send_slicev(&socket->client, peer->connection, slices,"
-        "status = cnet_sendv(&socket->client, peer->connection,"
+        "flowmq_socket_send_segments_buffered("
+        "status = cnet_send_buffer(&socket->client, connection, buffer);"
         "socket_options.nodelay = 1;"
         "cnet_client_set_stream_socket_options(&socket->client, &socket_options)"
         "flowmq_socket_prepare_retained_frame("
@@ -75,8 +77,7 @@ foreach(_flowmq_sg_required IN ITEMS
         "CNET_RETAINED_VECTOR_MAX - socket->send_retained_count"
         "if (socket->send_retained_count != 0u) return SALTS_ENOTSUP;"
         "if (socket->send_staged_count != 0u) return SALTS_ENOTSUP;"
-        "status = cnet_send_slicev(&socket->client, peer->connection,"
-        "socket->transport != FLOWMQ_TRANSPORT_TCP")
+        "if (socket->transport != FLOWMQ_TRANSPORT_TCP) return SALTS_ENOTSUP;")
   string(FIND "${_flowmq_socket_text}"
               "${_flowmq_sg_required}"
               _flowmq_sg_required_index)
@@ -109,6 +110,14 @@ string(FIND "${_flowmq_socket_text}"
 if(NOT _flowmq_sg_fallback_index EQUAL -1)
   message(FATAL_ERROR
     "FlowMQ runtime must not retry a retained-SG SALTS_ENOTSUP through a copy fallback")
+endif()
+
+string(FIND "${_flowmq_socket_text}"
+            "cnet_sendv("
+            _flowmq_legacy_copy_send_index)
+if(NOT _flowmq_legacy_copy_send_index EQUAL -1)
+  message(FATAL_ERROR
+    "FlowMQ queued CNet send path must not reintroduce cnet_sendv copy fallback")
 endif()
 
 string(FIND "${_flowmq_socket_header_text}"
@@ -144,4 +153,4 @@ foreach(_flowmq_owned_recv_required IN ITEMS
 endforeach()
 
 message(STATUS
-        "FlowMQ CNet SG / owned receive contract verified: bounded retained multipart, no copy mixing, TCP_NODELAY policy, explicit TLS copy path, direct inbound owner transfer, no fallback")
+        "FlowMQ CNet SG / owned receive contract verified: bounded retained multipart, TCP/TLS retained queued-send path, TCP_NODELAY policy, direct inbound owner transfer, no copy fallback")

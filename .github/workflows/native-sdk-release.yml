@@ -30,10 +30,6 @@ concurrency:
   group: flowmq-sdk-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: false
 
-env:
-  SALTS_SDK_VERSION: "1.8.3"
-  SALTS_UTILS_SDK_VERSION: "4.1.3"
-
 jobs:
   metadata:
     runs-on: ubuntu-24.04
@@ -98,8 +94,18 @@ jobs:
             --name github --username qigao --password "$GITHUB_TOKEN" \
             --store-password-in-clear-text --configfile "$config"
           dotnet restore packaging/nuget/FlowMQ.Native.csproj --configfile "$config" --packages "$packages"
-          echo "SALTS_ROOT=$packages/salts.native/$SALTS_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
-          echo "SALTS_UTILS_ROOT=$packages/saltsutils.native/$SALTS_UTILS_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
+          salts_versions=("$packages/salts.native"/*)
+          salts_utils_versions=("$packages/saltsutils.native"/*)
+          test "${#salts_versions[@]}" -eq 1
+          test "${#salts_utils_versions[@]}" -eq 1
+          salts_pkg="${salts_versions[0]}"
+          salts_utils_pkg="${salts_utils_versions[0]}"
+          test -d "$salts_pkg"
+          test -d "$salts_utils_pkg"
+          echo "SALTS_ROOT=$salts_pkg/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_ROOT=$salts_utils_pkg/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "FLOWMQ_SALTS_RESOLVED_VERSION=$(basename "$salts_pkg")" >> "$GITHUB_ENV"
+          echo "FLOWMQ_SALTS_UTILS_RESOLVED_VERSION=$(basename "$salts_utils_pkg")" >> "$GITHUB_ENV"
       - name: Verify FlowMQ vcpkg cache hits
         shell: bash
         run: |
@@ -134,8 +140,8 @@ jobs:
           repository=https://github.com/qigao/flowmq
           source_ref=${{ github.ref_name }}
           commit=${{ needs.metadata.outputs.source_commit }}
-          salts=$SALTS_SDK_VERSION
-          salts_utils=$SALTS_UTILS_SDK_VERSION
+          salts=$FLOWMQ_SALTS_RESOLVED_VERSION
+          salts_utils=$FLOWMQ_SALTS_UTILS_RESOLVED_VERSION
           rid=linux-x64
           build_type=Release
           qualification=runtime
@@ -183,8 +189,16 @@ jobs:
           '<configuration><packageSources><clear /></packageSources></configuration>' | Set-Content -LiteralPath $config
           dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password $env:GITHUB_TOKEN --store-password-in-clear-text --configfile $config
           dotnet restore packaging/nuget/FlowMQ.Native.csproj --configfile $config --packages $packages
-          "SALTS_ROOT=$packages\salts.native\$env:SALTS_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
-          "SALTS_UTILS_ROOT=$packages\saltsutils.native\$env:SALTS_UTILS_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
+          $saltsVersions = @(Get-ChildItem -LiteralPath (Join-Path $packages "salts.native") -Directory)
+          $saltsUtilsVersions = @(Get-ChildItem -LiteralPath (Join-Path $packages "saltsutils.native") -Directory)
+          if ($saltsVersions.Count -ne 1) { throw "expected one Salts.Native version, found $($saltsVersions.Count)" }
+          if ($saltsUtilsVersions.Count -ne 1) { throw "expected one SaltsUtils.Native version, found $($saltsUtilsVersions.Count)" }
+          $saltsPkg = $saltsVersions[0]
+          $saltsUtilsPkg = $saltsUtilsVersions[0]
+          "SALTS_ROOT=$($saltsPkg.FullName)\sdk\windows-x64" >> $env:GITHUB_ENV
+          "SALTS_UTILS_ROOT=$($saltsUtilsPkg.FullName)\sdk\windows-x64" >> $env:GITHUB_ENV
+          "FLOWMQ_SALTS_RESOLVED_VERSION=$($saltsPkg.Name)" >> $env:GITHUB_ENV
+          "FLOWMQ_SALTS_UTILS_RESOLVED_VERSION=$($saltsUtilsPkg.Name)" >> $env:GITHUB_ENV
       - name: Verify FlowMQ vcpkg cache hits
         shell: pwsh
         run: |
@@ -224,8 +238,8 @@ jobs:
             "repository=https://github.com/qigao/flowmq"
             "source_ref=${{ github.ref_name }}"
             "commit=${{ needs.metadata.outputs.source_commit }}"
-            "salts=$env:SALTS_SDK_VERSION"
-            "salts_utils=$env:SALTS_UTILS_SDK_VERSION"
+            "salts=$env:FLOWMQ_SALTS_RESOLVED_VERSION"
+            "salts_utils=$env:FLOWMQ_SALTS_UTILS_RESOLVED_VERSION"
             "rid=windows-x64"
             "build_type=Release"
             "qualification=runtime"
@@ -274,8 +288,18 @@ jobs:
             --name github --username qigao --password "$GITHUB_TOKEN" \
             --store-password-in-clear-text --configfile "$config"
           dotnet restore packaging/nuget/FlowMQ.Native.csproj --configfile "$config" --packages "$packages"
-          echo "SALTS_ROOT=$packages/salts.native/$SALTS_SDK_VERSION/sdk/$FLOWMQ_RID" >> "$GITHUB_ENV"
-          echo "SALTS_UTILS_ROOT=$packages/saltsutils.native/$SALTS_UTILS_SDK_VERSION/sdk/$FLOWMQ_RID" >> "$GITHUB_ENV"
+          salts_versions=("$packages/salts.native"/*)
+          salts_utils_versions=("$packages/saltsutils.native"/*)
+          test "${#salts_versions[@]}" -eq 1
+          test "${#salts_utils_versions[@]}" -eq 1
+          salts_pkg="${salts_versions[0]}"
+          salts_utils_pkg="${salts_utils_versions[0]}"
+          test -d "$salts_pkg"
+          test -d "$salts_utils_pkg"
+          echo "SALTS_ROOT=$salts_pkg/sdk/$FLOWMQ_RID" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_ROOT=$salts_utils_pkg/sdk/$FLOWMQ_RID" >> "$GITHUB_ENV"
+          echo "FLOWMQ_SALTS_RESOLVED_VERSION=$(basename "$salts_pkg")" >> "$GITHUB_ENV"
+          echo "FLOWMQ_SALTS_UTILS_RESOLVED_VERSION=$(basename "$salts_utils_pkg")" >> "$GITHUB_ENV"
       - name: Verify FlowMQ vcpkg cache hits
         shell: bash
         run: |
@@ -310,8 +334,8 @@ jobs:
           repository=https://github.com/qigao/flowmq
           source_ref=${{ github.ref_name }}
           commit=${{ needs.metadata.outputs.source_commit }}
-          salts=$SALTS_SDK_VERSION
-          salts_utils=$SALTS_UTILS_SDK_VERSION
+          salts=$FLOWMQ_SALTS_RESOLVED_VERSION
+          salts_utils=$FLOWMQ_SALTS_UTILS_RESOLVED_VERSION
           rid=$FLOWMQ_RID
           build_type=Release
           qualification=runtime
@@ -358,10 +382,20 @@ jobs:
             --name github --username qigao --password "$GITHUB_TOKEN" \
             --store-password-in-clear-text --configfile "$config"
           dotnet restore packaging/nuget/FlowMQ.Native.csproj --configfile "$config" --packages "$packages"
-          echo "SALTS_ROOT=$packages/salts.native/$SALTS_SDK_VERSION/sdk/android-arm64-v8a" >> "$GITHUB_ENV"
-          echo "SALTS_UTILS_ROOT=$packages/saltsutils.native/$SALTS_UTILS_SDK_VERSION/sdk/android-arm64-v8a" >> "$GITHUB_ENV"
-          echo "SALTS_HOST_ROOT=$packages/salts.native/$SALTS_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
-          echo "SALTS_UTILS_HOST_ROOT=$packages/saltsutils.native/$SALTS_UTILS_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
+          salts_versions=("$packages/salts.native"/*)
+          salts_utils_versions=("$packages/saltsutils.native"/*)
+          test "${#salts_versions[@]}" -eq 1
+          test "${#salts_utils_versions[@]}" -eq 1
+          salts_pkg="${salts_versions[0]}"
+          salts_utils_pkg="${salts_utils_versions[0]}"
+          test -d "$salts_pkg"
+          test -d "$salts_utils_pkg"
+          echo "SALTS_ROOT=$salts_pkg/sdk/android-arm64-v8a" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_ROOT=$salts_utils_pkg/sdk/android-arm64-v8a" >> "$GITHUB_ENV"
+          echo "SALTS_HOST_ROOT=$salts_pkg/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_HOST_ROOT=$salts_utils_pkg/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "FLOWMQ_SALTS_RESOLVED_VERSION=$(basename "$salts_pkg")" >> "$GITHUB_ENV"
+          echo "FLOWMQ_SALTS_UTILS_RESOLVED_VERSION=$(basename "$salts_utils_pkg")" >> "$GITHUB_ENV"
       - name: Verify FlowMQ vcpkg cache hits
         shell: bash
         run: |
@@ -399,8 +433,8 @@ jobs:
           repository=https://github.com/qigao/flowmq
           source_ref=${{ github.ref_name }}
           commit=${{ needs.metadata.outputs.source_commit }}
-          salts=$SALTS_SDK_VERSION
-          salts_utils=$SALTS_UTILS_SDK_VERSION
+          salts=$FLOWMQ_SALTS_RESOLVED_VERSION
+          salts_utils=$FLOWMQ_SALTS_UTILS_RESOLVED_VERSION
           rid=android-arm64-v8a
           android_api=26
           build_type=Release
@@ -571,8 +605,18 @@ jobs:
           </Project>
           EOF
           dotnet restore "$project" --configfile "$config" --packages "$packages"
-          echo "SALTS_ROOT=$packages/salts.native/$SALTS_SDK_VERSION/sdk/$FLOWMQ_RID" >> "$GITHUB_ENV"
-          echo "SALTS_UTILS_ROOT=$packages/saltsutils.native/$SALTS_UTILS_SDK_VERSION/sdk/$FLOWMQ_RID" >> "$GITHUB_ENV"
+          salts_versions=("$packages/salts.native"/*)
+          salts_utils_versions=("$packages/saltsutils.native"/*)
+          test "${#salts_versions[@]}" -eq 1
+          test "${#salts_utils_versions[@]}" -eq 1
+          salts_pkg="${salts_versions[0]}"
+          salts_utils_pkg="${salts_utils_versions[0]}"
+          test -d "$salts_pkg"
+          test -d "$salts_utils_pkg"
+          echo "SALTS_ROOT=$salts_pkg/sdk/$FLOWMQ_RID" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_ROOT=$salts_utils_pkg/sdk/$FLOWMQ_RID" >> "$GITHUB_ENV"
+          echo "FLOWMQ_SALTS_RESOLVED_VERSION=$(basename "$salts_pkg")" >> "$GITHUB_ENV"
+          echo "FLOWMQ_SALTS_UTILS_RESOLVED_VERSION=$(basename "$salts_utils_pkg")" >> "$GITHUB_ENV"
           echo "FLOWMQ_PREFIX=$packages/flowmq.native/${{ needs.metadata.outputs.version }}/sdk/$FLOWMQ_RID" >> "$GITHUB_ENV"
       - name: Restore packed SDK on Windows
         if: matrix.os == 'windows'
@@ -594,8 +638,16 @@ jobs:
           </Project>
           "@ | Set-Content -LiteralPath $project
           dotnet restore $project --configfile $config --packages $packages
-          "SALTS_ROOT=$packages\salts.native\$env:SALTS_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
-          "SALTS_UTILS_ROOT=$packages\saltsutils.native\$env:SALTS_UTILS_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
+          $saltsVersions = @(Get-ChildItem -LiteralPath (Join-Path $packages "salts.native") -Directory)
+          $saltsUtilsVersions = @(Get-ChildItem -LiteralPath (Join-Path $packages "saltsutils.native") -Directory)
+          if ($saltsVersions.Count -ne 1) { throw "expected one Salts.Native version, found $($saltsVersions.Count)" }
+          if ($saltsUtilsVersions.Count -ne 1) { throw "expected one SaltsUtils.Native version, found $($saltsUtilsVersions.Count)" }
+          $saltsPkg = $saltsVersions[0]
+          $saltsUtilsPkg = $saltsUtilsVersions[0]
+          "SALTS_ROOT=$($saltsPkg.FullName)\sdk\windows-x64" >> $env:GITHUB_ENV
+          "SALTS_UTILS_ROOT=$($saltsUtilsPkg.FullName)\sdk\windows-x64" >> $env:GITHUB_ENV
+          "FLOWMQ_SALTS_RESOLVED_VERSION=$($saltsPkg.Name)" >> $env:GITHUB_ENV
+          "FLOWMQ_SALTS_UTILS_RESOLVED_VERSION=$($saltsUtilsPkg.Name)" >> $env:GITHUB_ENV
           "FLOWMQ_PREFIX=$packages\flowmq.native\${{ needs.metadata.outputs.version }}\sdk\windows-x64" >> $env:GITHUB_ENV
       - name: Verify qualification vcpkg cache on Unix
         if: matrix.os != 'windows'
