@@ -236,6 +236,22 @@ libzmq 都链接 Release 产物。GitHub Actions 通过
 `qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master` 以只读模式消费共享的
 GitHub Packages 二进制缓存，并使用 cache-only gate 防止 CI 静默回退到本地重编依赖。
 
+### First-party dependency policy
+
+FlowMQ consumers **do not pin first-party package versions**.
+
+- CMake uses `find_package(Salts CONFIG REQUIRED)` and
+  `find_package(SaltsUtils CONFIG REQUIRED)` without version arguments or
+  `EXACT`.
+- `FlowMQConfig.cmake` keeps the same unversioned dependency contract.
+- `FlowMQ.Native` restores `Salts.Native` and `SaltsUtils.Native` with
+  `Version="*"`.
+- CI may record the resolved package versions in SDK manifests for provenance,
+  but those values are evidence only and must not become consumer constraints.
+- FlowMQ's own package/release version identifies FlowMQ itself; it does not
+  constrain Salts or SaltsUtils.
+
+
 交叉编译时 target SDK 与 host code-generation 工具必须分开。设置
 `SALTS_ROOT` / `SALTS_UTILS_ROOT` 指向目标平台 SDK，同时设置
 `SALTS_HOST_ROOT` / `SALTS_UTILS_HOST_ROOT` 指向构建主机 SDK；FlowMQ 使用 host
