@@ -3,6 +3,7 @@
     <TargetFramework>net8.0</TargetFramework>
     <IsPackable>true</IsPackable>
     <IncludeBuildOutput>false</IncludeBuildOutput>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
     <PackageId>FlowMQ.Native</PackageId>
     <Authors>qigao</Authors>
     <Description>FlowMQ native C SDK for Linux x64, Windows x64, macOS host architecture, and Android arm64-v8a Release builds.</Description>
