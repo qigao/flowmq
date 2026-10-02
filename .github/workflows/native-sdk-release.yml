@@ -607,7 +607,11 @@ jobs:
           cat > "$project" <<EOF
           <Project Sdk="Microsoft.NET.Sdk">
             <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
-            <ItemGroup><PackageReference Include="FlowMQ.Native" Version="[${{ needs.metadata.outputs.version }}]" /></ItemGroup>
+            <ItemGroup>
+              <PackageReference Include="FlowMQ.Native" Version="[${{ needs.metadata.outputs.version }}]" />
+              <PackageReference Include="Salts.Native" Version="*" />
+              <PackageReference Include="SaltsUtils.Native" Version="*" />
+            </ItemGroup>
           </Project>
           EOF
           dotnet restore "$project" --configfile "$config" --packages "$packages"
@@ -640,7 +644,11 @@ jobs:
           @"
           <Project Sdk="Microsoft.NET.Sdk">
             <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
-            <ItemGroup><PackageReference Include="FlowMQ.Native" Version="[${{ needs.metadata.outputs.version }}]" /></ItemGroup>
+            <ItemGroup>
+              <PackageReference Include="FlowMQ.Native" Version="[${{ needs.metadata.outputs.version }}]" />
+              <PackageReference Include="Salts.Native" Version="*" />
+              <PackageReference Include="SaltsUtils.Native" Version="*" />
+            </ItemGroup>
           </Project>
           "@ | Set-Content -LiteralPath $project
           dotnet restore $project --configfile $config --packages $packages
