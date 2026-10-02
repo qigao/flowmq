@@ -495,6 +495,12 @@ jobs:
             -p:RestorePackagesPath="$RUNNER_TEMP/flowmq-pack-dependencies"
           nupkg="dist/FlowMQ.Native.${{ needs.metadata.outputs.version }}.nupkg"
           test -f "$nupkg"
+          unzip -p "$nupkg" FlowMQ.Native.nuspec > "$RUNNER_TEMP/flowmq-native.nuspec"
+          if grep -Eq 'Salts\.Native|SaltsUtils\.Native' "$RUNNER_TEMP/flowmq-native.nuspec"; then
+            echo "FlowMQ.Native must not pin first-party producer packages in nuspec metadata" >&2
+            cat "$RUNNER_TEMP/flowmq-native.nuspec" >&2
+            exit 1
+          fi
           unzip -Z1 "$nupkg" > "$RUNNER_TEMP/flowmq-files.txt"
           for rid in linux-x64 windows-x64 android-arm64-v8a; do
             grep -Fx "sdk/$rid/lib/cmake/FlowMQ/FlowMQConfig.cmake" "$RUNNER_TEMP/flowmq-files.txt"
