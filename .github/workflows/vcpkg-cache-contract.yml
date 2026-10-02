@@ -33,6 +33,9 @@ jobs:
       - name: Verify direct-C runtime boundary
         shell: bash
         run: cmake -P cmake/ci/verify-runtime-boundary.cmake
+      - name: Verify unversioned first-party dependency contract
+        shell: bash
+        run: cmake -P cmake/ci/verify-first-party-dependency-contract.cmake
       - name: Prepare host dependencies
         shell: bash
         run: |
@@ -70,8 +73,8 @@ jobs:
           <Project Sdk="Microsoft.NET.Sdk">
             <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
             <ItemGroup>
-              <PackageReference Include="Salts.Native" Version="[1.8.3]" />
-              <PackageReference Include="SaltsUtils.Native" Version="[4.1.3]" />
+              <PackageReference Include="Salts.Native" Version="*" />
+              <PackageReference Include="SaltsUtils.Native" Version="*" />
             </ItemGroup>
           </Project>
           EOF
@@ -79,9 +82,19 @@ jobs:
           dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json \
             --name github --username qigao --password "$GITHUB_TOKEN" \
             --store-password-in-clear-text --configfile "$config"
-          dotnet restore "$project" --configfile "$config" --packages "$packages"
-          echo "SALTS_ROOT=$packages/salts.native/1.8.3/sdk/linux-x64" >> "$GITHUB_ENV"
-          echo "SALTS_UTILS_ROOT=$packages/saltsutils.native/4.1.3/sdk/linux-x64" >> "$GITHUB_ENV"
+          dotnet restore "$project" --configfile "$config" --packages "$packages" --no-cache
+          salts_versions=("$packages/salts.native"/*)
+          salts_utils_versions=("$packages/saltsutils.native"/*)
+          test "${#salts_versions[@]}" -eq 1
+          test "${#salts_utils_versions[@]}" -eq 1
+          salts_pkg="${salts_versions[0]}"
+          salts_utils_pkg="${salts_utils_versions[0]}"
+          test -d "$salts_pkg/sdk/linux-x64"
+          test -d "$salts_utils_pkg/sdk/linux-x64"
+          echo "SALTS_ROOT=$salts_pkg/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_ROOT=$salts_utils_pkg/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "FLOWMQ_SALTS_RESOLVED_VERSION=$(basename "$salts_pkg")" >> "$GITHUB_ENV"
+          echo "FLOWMQ_SALTS_UTILS_RESOLVED_VERSION=$(basename "$salts_utils_pkg")" >> "$GITHUB_ENV"
 
       - name: Qualify CFlow send ordering on control plane
         shell: bash
@@ -163,6 +176,9 @@ jobs:
       - name: Verify direct-C runtime boundary
         shell: pwsh
         run: cmake -P cmake/ci/verify-runtime-boundary.cmake
+      - name: Verify unversioned first-party dependency contract
+        shell: pwsh
+        run: cmake -P cmake/ci/verify-first-party-dependency-contract.cmake
 
       - name: Prepare host toolchain
         shell: pwsh
@@ -209,8 +225,8 @@ jobs:
           <Project Sdk="Microsoft.NET.Sdk">
             <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
             <ItemGroup>
-              <PackageReference Include="Salts.Native" Version="[1.8.3]" />
-              <PackageReference Include="SaltsUtils.Native" Version="[4.1.3]" />
+              <PackageReference Include="Salts.Native" Version="*" />
+              <PackageReference Include="SaltsUtils.Native" Version="*" />
             </ItemGroup>
           </Project>
           '@ | Set-Content -LiteralPath $project
@@ -220,18 +236,20 @@ jobs:
             --name github --username qigao --password "$env:GITHUB_TOKEN" `
             --store-password-in-clear-text --configfile "$config"
           if ($LASTEXITCODE -ne 0) { throw "NuGet source configuration failed" }
-          dotnet restore "$project" --configfile "$config" --packages "$packages"
+          dotnet restore "$project" --configfile "$config" --packages "$packages" --no-cache
           if ($LASTEXITCODE -ne 0) { throw "SDK restore failed" }
-          $saltsRoot = Join-Path $packages "salts.native\1.8.3\sdk\windows-x64"
-          $saltsUtilsRoot = Join-Path $packages "saltsutils.native\4.1.3\sdk\windows-x64"
-          if (-not (Test-Path -LiteralPath $saltsRoot -PathType Container)) {
-            throw "missing Salts 1.8.3 windows-x64 SDK"
-          }
-          if (-not (Test-Path -LiteralPath $saltsUtilsRoot -PathType Container)) {
-            throw "missing SaltsUtils 4.1.3 windows-x64 SDK"
-          }
+          $saltsVersions = @(Get-ChildItem -LiteralPath (Join-Path $packages "salts.native") -Directory)
+          $saltsUtilsVersions = @(Get-ChildItem -LiteralPath (Join-Path $packages "saltsutils.native") -Directory)
+          if ($saltsVersions.Count -ne 1) { throw "expected one Salts.Native version, found $($saltsVersions.Count)" }
+          if ($saltsUtilsVersions.Count -ne 1) { throw "expected one SaltsUtils.Native version, found $($saltsUtilsVersions.Count)" }
+          $saltsRoot = Join-Path $saltsVersions[0].FullName "sdk\windows-x64"
+          $saltsUtilsRoot = Join-Path $saltsUtilsVersions[0].FullName "sdk\windows-x64"
+          if (-not (Test-Path -LiteralPath $saltsRoot -PathType Container)) { throw "missing latest Salts windows-x64 SDK" }
+          if (-not (Test-Path -LiteralPath $saltsUtilsRoot -PathType Container)) { throw "missing latest SaltsUtils windows-x64 SDK" }
           "SALTS_ROOT=$saltsRoot" >> $env:GITHUB_ENV
           "SALTS_UTILS_ROOT=$saltsUtilsRoot" >> $env:GITHUB_ENV
+          "FLOWMQ_SALTS_RESOLVED_VERSION=$($saltsVersions[0].Name)" >> $env:GITHUB_ENV
+          "FLOWMQ_SALTS_UTILS_RESOLVED_VERSION=$($saltsUtilsVersions[0].Name)" >> $env:GITHUB_ENV
 
       - name: Qualify CFlow send ordering on control plane
         shell: cmd
