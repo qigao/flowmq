@@ -9,6 +9,12 @@ First-party product dependencies float to the latest published stable producer S
 - `Salts.Native`
 - `SaltsUtils.Native`
 
+FlowMQ does not encode those resolved producer versions into the packed
+`FlowMQ.Native` dependency metadata. Consumers restore the latest producer
+packages explicitly and provide `SALTS_ROOT` / `SALTS_UTILS_ROOT` to CMake.
+The FlowMQ package version identifies the FlowMQ release itself; it is not a
+constraint on first-party producer package versions.
+
 Third-party dependencies come from this repository's root `vcpkg.json`; `qigao/vcpkg-cache` supplies only the shared vcpkg setup/cache infrastructure.
 
 PR and `main` qualification runs pack CI artifacts using:
