@@ -1672,7 +1672,7 @@ static int flowmq_socket_rearm_receive(flowmq_socket_peer_t *peer) {
           &peer->state, FLOWMQ_PEER_HANDSHAKE_HELLO_RX) &&
       flowmq_peer_state_handshake_has(
           &peer->state, FLOWMQ_PEER_HANDSHAKE_SETTINGS_RX) &&
-      flowmq_stream_decoder_available(&peer->decoder) == 0u) {
+      flowmq_stream_decoder_size(&peer->decoder) == 0u) {
     status = cnet_set_receive_slice_handler(
         &socket->client, peer->connection, flowmq_socket_on_receive_slice, peer);
     if (status != SALTS_OK) return status;
@@ -1691,7 +1691,7 @@ static void flowmq_socket_on_receive_slice(
   int pause_receive = 0;
   int consumed_owned = 0;
   const size_t decoder_available =
-      flowmq_stream_decoder_available(&peer->decoder);
+      flowmq_stream_decoder_size(&peer->decoder);
   (void)kind;
   ++socket->owned_receive_callbacks;
 
