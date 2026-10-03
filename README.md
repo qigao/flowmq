@@ -41,7 +41,7 @@ retained staging 中保持 ownership；final part 把完整 multipart 作为一�
 CNet logical retained write 提交。copied DATA 与 retained DATA 不在同一 multipart transaction
 中混用；ROUTER routing-id envelope 仍可先通过普通 copy API 选择 peer。超出 aggregate SG/send
 bound 显式失败，不 split、不 flatten、不 copy fallback；disconnect/cancel/close 释放所有 staged
-retains。retained multipart PUB/XPUB 当前 fail-closed，TLS 仍返回 `SALTS_ENOTSUP`。基准显示
+retains。retained multipart PUB/XPUB 仍保持 fail-closed。TCP 与 verified TLS 都可把非 fanout retained DATA 作为 bounded logical retained write 提交给 CNet；TLS 不增加 plaintext flatten/copy fallback，genuinely discontiguous framing/payload ranges 仍由 CNet 按 retained plaintext cursor 消费。TLS retained 的性能分类继续由 #60 benchmark 单独验证。基准显示
 该 API 不是小消息的默认替代：
 64-byte retained 会承担额外 slice/refcount/framing 固定成本，而 1 MiB owned payload
 已经能通过消除 admission copy 获得可测收益；普通/小 borrowed payload 继续优先使用
