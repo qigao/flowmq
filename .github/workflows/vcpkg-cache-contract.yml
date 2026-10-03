@@ -6,6 +6,7 @@ on:
       - "CMakeLists.txt"
       - "cmake/**"
       - "flowmq/**"
+      - "!flowmq/benchmarks/**"
       - "tests/package/**"
       - "vcpkg.json"
       - ".github/workflows/vcpkg-cache-contract.yml"
