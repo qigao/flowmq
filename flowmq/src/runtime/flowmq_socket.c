@@ -3314,12 +3314,16 @@ int flowmq_socket_internal_advance_external(
     return SALTS_EINVAL;
   status = cnet_client_advance_external(&socket->client, &client_events);
   if (status != SALTS_OK) return status;
-  if (!socket->external_stopping) {
-    status = flowmq_socket_progress_local(socket);
-    if (status != SALTS_OK) return status;
-  }
   if (events != NULL) *events = client_events;
   return SALTS_OK;
+}
+
+int flowmq_socket_internal_progress_local(flowmq_socket_t *socket) {
+  if (socket == NULL || socket->external_backend == NULL ||
+      !socket->runtime_initialized)
+    return SALTS_EINVAL;
+  if (socket->external_stopping) return SALTS_OK;
+  return flowmq_socket_progress_local(socket);
 }
 
 int flowmq_socket_internal_external_timeout(
