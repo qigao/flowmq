@@ -6,7 +6,7 @@ if(NOT DEFINED ENV{FLOWMQ_ROOT} OR "$ENV{FLOWMQ_ROOT}" STREQUAL "")
 endif()
 
 file(TO_CMAKE_PATH "$ENV{FLOWMQ_ROOT}" FLOWMQ_ROOT_PATH)
-find_package(FlowMQ 1.1 CONFIG REQUIRED
+find_package(FlowMQ 1.2 CONFIG REQUIRED
              PATHS "${FLOWMQ_ROOT_PATH}" NO_DEFAULT_PATH)
 
 get_target_property(_flowmq_public_links
