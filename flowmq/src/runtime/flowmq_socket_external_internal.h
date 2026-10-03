@@ -57,20 +57,6 @@ int flowmq_socket_internal_route_external_completion(
     bool *consumed, size_t *events);
 
 
-typedef struct flowmq_owned_receive_diagnostics_s {
-  uint64_t switches;
-  uint64_t callbacks;
-  uint64_t fastpath;
-  uint64_t fallback_decoder;
-  uint64_t fallback_incomplete;
-  uint64_t fallback_coalesced;
-  uint64_t fallback_shape;
-} flowmq_owned_receive_diagnostics_t;
-
-int flowmq_socket_internal_owned_receive_diagnostics(
-    const flowmq_socket_t *socket,
-    flowmq_owned_receive_diagnostics_t *out);
-
 /* Computes ordinary POLLIN/POLLOUT/POLLERR state without driving progress. */
 int flowmq_socket_internal_poll_revents(
     const flowmq_socket_t *socket, short events, short *revents);
