@@ -29,6 +29,8 @@ int main(void)
         FLOWMQ_TLS_IDENTITY_MAP_CONFIG_INIT;
     flowmq_ctx_t *ctx = NULL;
     flowmq_socket_t *router = NULL;
+    flowmq_owner_t *owner = NULL;
+    flowmq_socket_t *owner_socket = NULL;
     int reconnect_ms = 25;
     int reconnect_read = 0;
     size_t reconnect_read_size = sizeof(reconnect_read);
@@ -91,9 +93,42 @@ int main(void)
         recv_slice.length != 0u)
         goto cleanup;
 
+    /*
+     * Pin the installed owner-lane header and shared-library symbols without
+     * requiring a live network peer. The owner keeps the context leased,
+     * creates one bounded socket, performs one nonblocking owner poll, and
+     * releases the socket/backend through the public lifecycle.
+     */
+    {
+        flowmq_owner_config_t owner_config = FLOWMQ_OWNER_CONFIG_INIT;
+        flowmq_pollitem_t item;
+        size_t ready = 0u;
+        owner_config.socket_capacity = 1u;
+        owner = flowmq_owner_new(ctx, &owner_config);
+        if (owner == NULL) goto cleanup;
+        if (flowmq_ctx_term(ctx) != SALTS_EBUSY) goto cleanup;
+        owner_socket = flowmq_owner_socket(owner, FLOWMQ_PAIR);
+        if (owner_socket == NULL) goto cleanup;
+        item = (flowmq_pollitem_t){
+            .socket = owner_socket,
+            .events = FLOWMQ_POLLIN | FLOWMQ_POLLOUT | FLOWMQ_POLLERR};
+        if (flowmq_owner_poll(owner, &item, 1u, 0u, &ready) != SALTS_OK)
+            goto cleanup;
+        if (flowmq_close(owner_socket) != SALTS_EBUSY) goto cleanup;
+        if (flowmq_owner_close_socket(owner, owner_socket) != SALTS_OK)
+            goto cleanup;
+        owner_socket = NULL;
+        if (flowmq_owner_term(owner) != SALTS_OK) goto cleanup;
+        owner = NULL;
+    }
+
     result = 0;
 
 cleanup:
+    if (owner_socket != NULL && owner != NULL &&
+        flowmq_owner_close_socket(owner, owner_socket) != SALTS_OK)
+        result = 1;
+    if (owner != NULL && flowmq_owner_term(owner) != SALTS_OK) result = 1;
     if (router != NULL && flowmq_close(router) != 0) result = 1;
     if (ctx != NULL && flowmq_ctx_term(ctx) != 0) result = 1;
     return result;
