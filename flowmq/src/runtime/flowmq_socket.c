@@ -1687,7 +1687,7 @@ static void flowmq_socket_on_receive_slice(
     allow_fallback = 1;
     if (socket->transport == FLOWMQ_TRANSPORT_TCP &&
              !peer->commit_pending &&
-             flowmq_stream_decoder_available(&peer->decoder) == 0u &&
+             flowmq_stream_decoder_buffered(&peer->decoder) == 0u &&
              flowmq_peer_state_handshake_has(
                  &peer->state, FLOWMQ_PEER_HANDSHAKE_HELLO_RX) &&
                flowmq_peer_state_handshake_has(
