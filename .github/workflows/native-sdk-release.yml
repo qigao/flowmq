@@ -28,7 +28,9 @@ permissions:
 
 concurrency:
   group: flowmq-sdk-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: false
+  # Superseded PR qualification should release scarce platform runners, while
+  # tag publication remains exact and is never cancelled by a later run.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   metadata:
