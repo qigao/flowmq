@@ -99,20 +99,57 @@ flowmq_owner_term(owner);
 flowmq_ctx_term(ctx);
 ```
 
-当前第一阶段有意保持边界窄：
+owner-lane API 的边界仍然保持窄：
 
 - owner-created socket 不能传给普通 `flowmq_poll()`；会 fail closed；
 - owner-created socket 不能直接 `flowmq_close()`；使用 `flowmq_owner_close_socket()`；
 - owner 存在时 `flowmq_ctx_term()` 返回 `SALTS_EBUSY`；
-- owner-created socket 当前不支持 `flowmq_bind()`；same-endpoint/listener multicore admission
-  由独立设计跟踪，不通过跨 owner native-handle handoff 偷偷实现；
+- owner-created socket 当前不支持 `flowmq_bind()`；它仍是 client-side shared-wait API；
 - 阻塞 `send/recv` 如果需要 transport progress 会 fail closed；owner lane 的 canonical 路径是
   `FLOWMQ_DONTWAIT + flowmq_owner_poll()`。
 
+### 同端口多核 listener：独立 owner + reuse-port
+
+server/listener 多核采用另一条显式路径：多个 **ordinary、彼此独立的 owner-affine socket**
+在不同 owner thread/core 上设置 `FLOWMQ_REUSE_PORT=1`，然后 bind 同一个 numeric TCP endpoint。
+
+```text
+owner/core 0
+  ordinary FlowMQ socket 0
+  CNet listener 0 --+
+                    +-- same tcp://host:port
+owner/core 1        |   SO_REUSEPORT
+  ordinary FlowMQ socket 1
+  CNet listener 1 --+
+```
+
+`FLOWMQ_REUSE_PORT` 是 startup-only `int` 选项，只接受 0/1；默认 0。
+值为 1 时，`flowmq_bind()` 通过 released CNet `cnet_listener_init_ex()` 请求
+`SO_REUSEPORT`。平台/backend 不支持时原样返回 `SALTS_ENOTSUP`，不会退化成
+`SO_REUSEADDR` 或普通 bind。accepted connection 从 admission 到 terminal callback
+始终属于实际 accept 它的 socket/owner；FlowMQ 不做 native-handle handoff、connection
+migration 或 central message dispatcher。
+
+```c
+flowmq_ctx_t *ctx = flowmq_ctx_new();
+flowmq_socket_t *service = flowmq_socket(ctx, FLOWMQ_REP);
+int reuse_port = 1;
+
+flowmq_setsockopt(service, FLOWMQ_REUSE_PORT,
+                  &reuse_port, sizeof(reuse_port));
+flowmq_bind(service, "tcp://127.0.0.1:7000");
+```
+
+多个 listener 的 pattern FSM、peer registry、HWM/credit、subscriptions、queues 与 diagnostics
+仍完全独立；需要跨 lane 的全局业务操作时必须由应用显式编排。
+
 #61 已证明独立 FlowMQ owner 在不同 physical core 上可获得约 1.79x–1.95x 的双 owner
 throughput；#67/#69 的 one-owner/two-socket shared-wait qualification 证明 owner lane 相比旧
-multi-socket `flowmq_poll()` sleep loop 属于明显更高效的执行类别。该收益来自共享 wait，
-不是隐藏 worker 或 connection migration。
+multi-socket `flowmq_poll()` sleep loop 属于明显更高效的执行类别。#72/#73 进一步证明
+same-endpoint reuse-port listener 能在饱和的大消息 service workload 下获得真实多核收益：
+64 KiB pipelined DEALER→REP workload 的 two-owner throughput paired median 为约 **1.451x**，
+p99 为约 **0.615x**。小消息结果更依赖 workload/load-generator progress 形状，因此不宣称
+reuse-port 可以线性扩展。上述收益都不依赖隐藏 worker 或 connection migration。
 
 发送 API 有两个明确的 ownership surface：`flowmq_send()` 在返回成功前复制 borrowed
 caller bytes；`flowmq_send_slice()` 用于 plaintext TCP 的 canonical retained DATA。
