@@ -42,6 +42,18 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
       C_STANDARD 11
       C_STANDARD_REQUIRED ON
       C_EXTENSIONS OFF)
+
+  cmake_add_benchmark(
+    bench_flowmq_reuse_port_multicore
+    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_reuse_port_multicore.c
+    LIBS FlowMQ::Transport Threads::Threads
+    FOLDER "flowmq/benchmarks/runtime")
+  set_target_properties(
+    bench_flowmq_reuse_port_multicore
+    PROPERTIES
+      C_STANDARD 11
+      C_STANDARD_REQUIRED ON
+      C_EXTENSIONS OFF)
 endif()
 
 cmake_add_benchmark(
