@@ -60,13 +60,13 @@ static inline int flowmq_protocol_decode_packet_header_internal(
          FLOWMQ_PROTOCOL_MESSAGE_MORE)) != 0u)
     return SALTS_EPROTO;
   if (!(((flowmq_protocol_frame_kind_t)header[5] >=
-             FLOWMQ_PROTOCOL_FRAME_HELLO &&
-         (flowmq_protocol_frame_kind_t)header[5] <=
-             FLOWMQ_PROTOCOL_FRAME_UNSUBSCRIBE) ||
-        (flowmq_protocol_frame_kind_t)header[5] ==
-            FLOWMQ_PROTOCOL_FRAME_SETTINGS ||
-        (flowmq_protocol_frame_kind_t)header[5] ==
-            FLOWMQ_PROTOCOL_FRAME_FLOW_UPDATE) ||
+              FLOWMQ_PROTOCOL_FRAME_HELLO &&
+          (flowmq_protocol_frame_kind_t)header[5] <=
+              FLOWMQ_PROTOCOL_FRAME_UNSUBSCRIBE) ||
+         (flowmq_protocol_frame_kind_t)header[5] ==
+             FLOWMQ_PROTOCOL_FRAME_SETTINGS ||
+         (flowmq_protocol_frame_kind_t)header[5] ==
+             FLOWMQ_PROTOCOL_FRAME_FLOW_UPDATE) ||
       header[6] < FLOWMQ_PROTOCOL_PUB || header[6] > FLOWMQ_PROTOCOL_XSUB)
     return SALTS_EPROTO;
 
