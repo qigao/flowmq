@@ -149,6 +149,107 @@ jobs:
           cp -aL stage stage-dereferenced
           rm -rf stage
           mv stage-dereferenced stage
+      - name: Run FlowMQ owner-affine multicore benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$GITHUB_WORKSPACE/vcpkg_installed/x64-linux/lib"
+          result_dir="$GITHUB_WORKSPACE/flowmq-benchmark-results"
+          benchmark="$GITHUB_WORKSPACE/build/flowmq/bin/bench_flowmq_owner_parallel"
+          mkdir -p "$result_dir"
+          if [[ ! -x "$benchmark" ]]; then
+            echo "FlowMQ owner-parallel benchmark executable not found: $benchmark" >&2
+            exit 1
+          fi
+
+          allowed="$(taskset -pc "$BASHPID" | sed 's/.*: //')"
+          topology="$result_dir/cpu-topology.csv"
+          lscpu -p=CPU,CORE,SOCKET > "$topology"
+
+          expand_cpuset() {
+            local spec="$1"
+            local part start end cpu
+            IFS=',' read -ra parts <<< "$spec"
+            for part in "${parts[@]}"; do
+              if [[ "$part" == *-* ]]; then
+                start="${part%-*}"
+                end="${part#*-}"
+                for ((cpu = start; cpu <= end; ++cpu)); do echo "$cpu"; done
+              else
+                echo "$part"
+              fi
+            done
+          }
+
+          mapfile -t cpus < <(expand_cpuset "$allowed")
+          if (( ${#cpus[@]} == 0 )); then
+            echo "No CPUs found in allowed set: $allowed" >&2
+            exit 1
+          fi
+          first="${cpus[0]}"
+          first_key="$(awk -F, -v cpu="$first" '$1 == cpu {print $2 ":" $3; exit}' "$topology")"
+          if [[ -z "$first_key" ]]; then
+            echo "CPU topology is unavailable for CPU $first" >&2
+            exit 1
+          fi
+          same_core=""
+          distinct_core=""
+          for cpu in "${cpus[@]:1}"; do
+            key="$(awk -F, -v wanted="$cpu" '$1 == wanted {print $2 ":" $3; exit}' "$topology")"
+            [[ -z "$key" ]] && continue
+            if [[ "$key" == "$first_key" && -z "$same_core" ]]; then
+              same_core="$cpu"
+            elif [[ "$key" != "$first_key" && -z "$distinct_core" ]]; then
+              distinct_core="$cpu"
+            fi
+          done
+
+          run_case() {
+            local label="$1"
+            local cpuset="$2"
+            [[ -z "$cpuset" || "$cpuset" == "unavailable" ]] && return 0
+            local cpu_a="${cpuset%%,*}"
+            local cpu_b="$cpu_a"
+            if [[ "$cpuset" == *,* ]]; then
+              cpu_b="${cpuset##*,}"
+            fi
+            local prefix="$result_dir/flowmq-owner-parallel-$label"
+            export FLOWMQ_OWNER_PARALLEL_TOPOLOGY="$label"
+            export FLOWMQ_OWNER_PARALLEL_CPU_A="$cpu_a"
+            export FLOWMQ_OWNER_PARALLEL_CPU_B="$cpu_b"
+            export FLOWMQ_OWNER_PARALLEL_OUTPUT="$prefix"
+
+            "$benchmark" 2>&1 | tee "$prefix.md"
+            {
+              echo ""
+              echo "## FlowMQ owner-affine multicore: $label (owners $cpu_a,$cpu_b)"
+              echo ""
+              cat "$prefix.md"
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          echo "runner_allowed_cpu_set=$allowed" > "$result_dir/cpu-set.txt"
+          echo "one_cpu_set=$first" >> "$result_dir/cpu-set.txt"
+          echo "two_cpu_same_core_set=$([[ -n "$same_core" ]] && echo "$first,$same_core" || echo unavailable)" >> "$result_dir/cpu-set.txt"
+          echo "two_cpu_distinct_core_set=$([[ -n "$distinct_core" ]] && echo "$first,$distinct_core" || echo unavailable)" >> "$result_dir/cpu-set.txt"
+
+          run_case one_cpu "$first"
+          if [[ -n "$same_core" ]]; then
+            run_case two_cpu_same_core "$first,$same_core"
+          else
+            echo "No SMT sibling is available on the first physical core; same-core case skipped." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          if [[ -n "$distinct_core" ]]; then
+            run_case two_cpu_distinct_core "$first,$distinct_core"
+          else
+            echo "No distinct physical core is available; distinct-core case skipped." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flowmq-owner-parallel-linux-x64
+          path: flowmq-benchmark-results
+          if-no-files-found: error
+          compression-level: 6
       - uses: actions/upload-artifact@v4
         with:
           name: flowmq-sdk-linux-x64
