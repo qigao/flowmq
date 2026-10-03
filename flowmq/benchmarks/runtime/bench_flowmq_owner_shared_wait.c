@@ -2,8 +2,8 @@
 #define _GNU_SOURCE
 #endif
 
+#include "flowmq_owner.h"
 #include "flowmq_socket.h"
-#include "flowmq_socket_external_internal.h"
 #include "salts_error.h"
 
 #include <errno.h>
@@ -25,15 +25,8 @@ enum {
   SHARED_WAIT_PAYLOAD_COUNT = 2,
   SHARED_WAIT_PATH_COUNT = 2,
   SHARED_WAIT_TIMEOUT_MS = 10000,
-  SHARED_WAIT_MAX_WAIT_MS = 10,
-  SHARED_WAIT_COMPLETION_CAPACITY = 32,
-  SHARED_WAIT_BACKEND_ENDPOINT_CAPACITY = 32,
-  SHARED_WAIT_BACKEND_REQUEST_CAPACITY = 32
+  SHARED_WAIT_MAX_WAIT_MS = 10
 };
-
-_Static_assert(
-    SHARED_WAIT_COMPLETION_CAPACITY <= SHARED_WAIT_BACKEND_REQUEST_CAPACITY,
-    "shared backend completion capacity must fit request capacity");
 
 static const size_t SHARED_WAIT_PAYLOADS[] = {1024u, 65536u};
 
@@ -68,8 +61,8 @@ typedef struct shared_wait_peer_s {
 
 typedef struct shared_wait_fixture_s {
   flowmq_ctx_t *ctx;
+  flowmq_owner_t *owner;
   flowmq_socket_t *sockets[SHARED_WAIT_LANES];
-  native_io_backend backend;
   unsigned char *payload[SHARED_WAIT_LANES];
   unsigned char *received[SHARED_WAIT_LANES];
   mem_buffer_t *payload_buffer[SHARED_WAIT_LANES];
@@ -78,14 +71,9 @@ typedef struct shared_wait_fixture_s {
   shared_wait_mode_t mode;
   shared_wait_path_t path;
   size_t control_poll_calls;
-  size_t advance_calls;
-  size_t observe_calls;
-  size_t route_attempts;
-  size_t routed_completions;
-  size_t unrelated_route_attempts;
+  size_t owner_poll_calls;
   size_t send_admissions;
   size_t receive_deliveries;
-  bool backend_initialized;
   bool measuring;
 } shared_wait_fixture_t;
 
@@ -105,11 +93,7 @@ typedef struct shared_wait_sample_s {
   double mib_per_second;
   double owner_cpu_us_per_op;
   size_t control_poll_calls;
-  size_t advance_calls;
-  size_t observe_calls;
-  size_t route_attempts;
-  size_t routed_completions;
-  size_t unrelated_route_attempts;
+  size_t owner_poll_calls;
   size_t send_admissions;
   size_t receive_deliveries;
 } shared_wait_sample_t;
@@ -400,76 +384,28 @@ static int shared_wait_control_progress(shared_wait_fixture_t *fixture,
   return SALTS_OK;
 }
 
-static int shared_wait_candidate_progress_mask(
+static int shared_wait_candidate_progress(
     shared_wait_fixture_t *fixture,
-    const bool active[SHARED_WAIT_LANES],
-    uint32_t max_wait_ms) {
-  native_io_completion completions[SHARED_WAIT_COMPLETION_CAPACITY];
-  uint32_t wait_ms = max_wait_ms;
-  size_t completion_count = 0u;
+    uint32_t timeout_ms,
+    bool want_write) {
+  flowmq_pollitem_t items[SHARED_WAIT_LANES];
+  size_t ready = 0u;
   int status;
 
   for (size_t lane = 0u; lane < SHARED_WAIT_LANES; ++lane) {
-    size_t events = 0u;
-    uint32_t lane_wait = max_wait_ms;
-    if (active != NULL && !active[lane]) continue;
-    status = flowmq_socket_internal_advance_external(
-        fixture->sockets[lane], &events);
-    if (fixture->measuring) ++fixture->advance_calls;
-    if (status != SALTS_OK) return status;
-    status = flowmq_socket_internal_external_timeout(
-        fixture->sockets[lane], max_wait_ms, &lane_wait);
-    if (status != SALTS_OK) return status;
-    if (lane_wait < wait_ms) wait_ms = lane_wait;
+    items[lane] = (flowmq_pollitem_t){
+        .socket = fixture->sockets[lane],
+        .events = (short)(FLOWMQ_POLLIN | FLOWMQ_POLLERR |
+                          (want_write ? FLOWMQ_POLLOUT : 0))};
   }
-
-  status = native_io_backend_observe(
-      &fixture->backend, completions, SHARED_WAIT_COMPLETION_CAPACITY,
-      wait_ms, &completion_count);
-  if (fixture->measuring) ++fixture->observe_calls;
-  if (status != SALTS_OK && status != SALTS_ETIMEDOUT) return status;
-
-  if (status != SALTS_ETIMEDOUT) {
-    for (size_t index = 0u; index < completion_count; ++index) {
-    bool consumed = false;
-    for (size_t lane = 0u; lane < SHARED_WAIT_LANES && !consumed; ++lane) {
-      size_t events = 0u;
-      bool lane_consumed = false;
-      if (active != NULL && !active[lane]) continue;
-      status = flowmq_socket_internal_route_external_completion(
-          fixture->sockets[lane], &completions[index],
-          &lane_consumed, &events);
-      if (fixture->measuring) ++fixture->route_attempts;
-      if (status != SALTS_OK) return status;
-      if (lane_consumed) {
-        consumed = true;
-        if (fixture->measuring) ++fixture->routed_completions;
-      } else if (fixture->measuring) {
-        ++fixture->unrelated_route_attempts;
-      }
-    }
-      if (!consumed) return SALTS_EPROTO;
-    }
-  }
-
-  /*
-   * Match ordinary flowmq_socket_drive() ordering: CNet progress/callbacks
-   * first, then exactly one FlowMQ-local reconnect/control/flush pass. Any
-   * CNet work admitted by that local pass is advanced at the start of the
-   * next host-loop cycle, never immediately after the routed batch.
-   */
+  status = flowmq_owner_poll(
+      fixture->owner, items, SHARED_WAIT_LANES, timeout_ms, &ready);
+  if (fixture->measuring) ++fixture->owner_poll_calls;
+  if (status != SALTS_OK) return status;
   for (size_t lane = 0u; lane < SHARED_WAIT_LANES; ++lane) {
-    if (active != NULL && !active[lane]) continue;
-    status = flowmq_socket_internal_progress_local(fixture->sockets[lane]);
-    if (status != SALTS_OK) return status;
+    if ((items[lane].revents & FLOWMQ_POLLERR) != 0) return SALTS_EIO;
   }
   return SALTS_OK;
-}
-
-static int shared_wait_candidate_progress(shared_wait_fixture_t *fixture,
-                                          uint32_t max_wait_ms) {
-  return shared_wait_candidate_progress_mask(
-      fixture, NULL, max_wait_ms);
 }
 
 static int shared_wait_progress(shared_wait_fixture_t *fixture,
@@ -478,7 +414,8 @@ static int shared_wait_progress(shared_wait_fixture_t *fixture,
   return fixture->mode == SHARED_WAIT_CONTROL
              ? shared_wait_control_progress(
                    fixture, timeout_ms, want_write)
-             : shared_wait_candidate_progress(fixture, timeout_ms);
+             : shared_wait_candidate_progress(
+                   fixture, timeout_ms, want_write);
 }
 
 static int shared_wait_try_send(shared_wait_fixture_t *fixture,
@@ -603,19 +540,14 @@ static int shared_wait_fixture_init(
   fixture->path = path;
   fixture->mode = mode;
 
-  if (mode == SHARED_WAIT_CANDIDATE) {
-    const native_io_backend_config config = {
-        NATIVE_IO_BACKEND_EPOLL,
-        SHARED_WAIT_BACKEND_ENDPOINT_CAPACITY,
-        SHARED_WAIT_BACKEND_REQUEST_CAPACITY,
-        SHARED_WAIT_COMPLETION_CAPACITY};
-    status = native_io_backend_init(&fixture->backend, &config);
-    if (status != SALTS_OK) return status;
-    fixture->backend_initialized = true;
-  }
-
   fixture->ctx = flowmq_ctx_new();
   if (fixture->ctx == NULL) return SALTS_ENOMEM;
+  if (mode == SHARED_WAIT_CANDIDATE) {
+    flowmq_owner_config_t owner_config = FLOWMQ_OWNER_CONFIG_INIT;
+    owner_config.socket_capacity = SHARED_WAIT_LANES;
+    fixture->owner = flowmq_owner_new(fixture->ctx, &owner_config);
+    if (fixture->owner == NULL) return SALTS_ENOMEM;
+  }
 
   for (size_t lane = 0u;
        lane < SHARED_WAIT_LANES && status == SALTS_OK; ++lane) {
@@ -644,15 +576,13 @@ static int shared_wait_fixture_init(
       }
     }
 
-    fixture->sockets[lane] = flowmq_socket(fixture->ctx, FLOWMQ_PAIR);
+    fixture->sockets[lane] =
+        mode == SHARED_WAIT_CANDIDATE
+            ? flowmq_owner_socket(fixture->owner, FLOWMQ_PAIR)
+            : flowmq_socket(fixture->ctx, FLOWMQ_PAIR);
     if (fixture->sockets[lane] == NULL) {
       status = SALTS_ENOMEM;
       break;
-    }
-    if (mode == SHARED_WAIT_CANDIDATE) {
-      status = flowmq_socket_internal_attach_external_backend(
-          fixture->sockets[lane], &fixture->backend);
-      if (status != SALTS_OK) break;
     }
     status = flowmq_connect(fixture->sockets[lane], peers[lane].endpoint);
   }
@@ -660,67 +590,29 @@ static int shared_wait_fixture_init(
   return status;
 }
 
-static int shared_wait_fixture_stop_candidate(shared_wait_fixture_t *fixture) {
-  bool stopped[SHARED_WAIT_LANES] = {false, false};
-  const uint64_t deadline = shared_wait_deadline_ns();
-
-  while (!stopped[0] || !stopped[1]) {
-    for (size_t lane = 0u; lane < SHARED_WAIT_LANES; ++lane) {
-      int status;
-      if (stopped[lane] || fixture->sockets[lane] == NULL) {
-        stopped[lane] = true;
-        continue;
-      }
-      status =
-          flowmq_socket_internal_stop_external(fixture->sockets[lane]);
-      if (status == SALTS_OK) {
-        stopped[lane] = true;
-      } else if (status != SALTS_EBUSY) {
-        return status;
-      }
-    }
-    if (stopped[0] && stopped[1]) break;
-    {
-      const bool active[SHARED_WAIT_LANES] = {!stopped[0], !stopped[1]};
-      const int status = shared_wait_candidate_progress_mask(
-          fixture, active, SHARED_WAIT_MAX_WAIT_MS);
-      if (status != SALTS_OK) return status;
-    }
-    if (shared_wait_deadline_expired(deadline)) return SALTS_ETIMEDOUT;
-  }
-  return SALTS_OK;
-}
-
 static int shared_wait_fixture_destroy(shared_wait_fixture_t *fixture) {
   int result = SALTS_OK;
 
-  if (fixture->mode == SHARED_WAIT_CANDIDATE &&
-      fixture->backend_initialized) {
-    const int stop_status = shared_wait_fixture_stop_candidate(fixture);
-    if (result == SALTS_OK && stop_status != SALTS_OK) result = stop_status;
-  }
-
   for (size_t lane = 0u; lane < SHARED_WAIT_LANES; ++lane) {
     if (fixture->sockets[lane] != NULL) {
-      const int status = flowmq_close(fixture->sockets[lane]);
+      const int status =
+          fixture->mode == SHARED_WAIT_CANDIDATE
+              ? flowmq_owner_close_socket(fixture->owner,
+                                          fixture->sockets[lane])
+              : flowmq_close(fixture->sockets[lane]);
       if (result == SALTS_OK && status != SALTS_OK) result = status;
       fixture->sockets[lane] = NULL;
     }
+  }
+  if (fixture->owner != NULL) {
+    const int status = flowmq_owner_term(fixture->owner);
+    if (result == SALTS_OK && status != SALTS_OK) result = status;
+    fixture->owner = NULL;
   }
   if (fixture->ctx != NULL) {
     const int status = flowmq_ctx_term(fixture->ctx);
     if (result == SALTS_OK && status != SALTS_OK) result = status;
     fixture->ctx = NULL;
-  }
-
-  if (fixture->backend_initialized) {
-    int status = native_io_backend_close(&fixture->backend);
-    if (result == SALTS_OK && status != SALTS_OK &&
-        status != SALTS_EALREADY)
-      result = status;
-    status = native_io_backend_destroy(&fixture->backend);
-    if (result == SALTS_OK && status != SALTS_OK) result = status;
-    fixture->backend_initialized = false;
   }
 
   for (size_t lane = 0u; lane < SHARED_WAIT_LANES; ++lane) {
@@ -823,11 +715,7 @@ static int shared_wait_run_mode(
   }
 
   fixture.control_poll_calls = 0u;
-  fixture.advance_calls = 0u;
-  fixture.observe_calls = 0u;
-  fixture.route_attempts = 0u;
-  fixture.routed_completions = 0u;
-  fixture.unrelated_route_attempts = 0u;
+  fixture.owner_poll_calls = 0u;
   fixture.send_admissions = 0u;
   fixture.receive_deliveries = 0u;
   fixture.measuring = true;
@@ -870,14 +758,12 @@ static int shared_wait_run_mode(
     goto cleanup;
   }
   if (mode == SHARED_WAIT_CANDIDATE &&
-      (fixture.observe_calls == 0u ||
-       fixture.routed_completions == 0u ||
-       fixture.unrelated_route_attempts == 0u)) {
+      fixture.owner_poll_calls == 0u) {
     status = SALTS_EPROTO;
     goto cleanup;
   }
 
-  out->mode = mode == SHARED_WAIT_CONTROL ? "public_poll" : "shared_wait";
+  out->mode = mode == SHARED_WAIT_CONTROL ? "public_poll" : "owner_lane";
   out->path = path == SHARED_WAIT_COPY ? "copy" : "retained";
   out->payload_size = payload_size;
   out->repeat = repeat;
@@ -897,11 +783,7 @@ static int shared_wait_run_mode(
   out->owner_cpu_us_per_op =
       (double)owner_cpu_ns / 1000.0 / (double)latency_count;
   out->control_poll_calls = fixture.control_poll_calls;
-  out->advance_calls = fixture.advance_calls;
-  out->observe_calls = fixture.observe_calls;
-  out->route_attempts = fixture.route_attempts;
-  out->routed_completions = fixture.routed_completions;
-  out->unrelated_route_attempts = fixture.unrelated_route_attempts;
+  out->owner_poll_calls = fixture.owner_poll_calls;
   out->send_admissions = fixture.send_admissions;
   out->receive_deliveries = fixture.receive_deliveries;
 
@@ -953,7 +835,7 @@ static double shared_wait_double_median(double *values, size_t count) {
 }
 
 static const char *shared_wait_mode_name(shared_wait_mode_t mode) {
-  return mode == SHARED_WAIT_CONTROL ? "public_poll" : "shared_wait";
+  return mode == SHARED_WAIT_CONTROL ? "public_poll" : "owner_lane";
 }
 
 static const char *shared_wait_path_name(shared_wait_path_t path) {
@@ -975,16 +857,14 @@ static int shared_wait_write_csv(FILE *csv,
              csv,
              "%s,%s,%zu,%zu,%zu,%d,%" PRIu64 ",%" PRIu64
              ",%" PRIu64 ",%" PRIu64 ",%" PRIu64
-             ",%.6f,%.6f,%.6f,%zu,%zu,%zu,%zu,%zu,%zu,%zu,%zu\n",
+             ",%.6f,%.6f,%.6f,%zu,%zu,%zu,%zu\n",
              sample->path, sample->mode, sample->payload_size,
              sample->repeat, sample->logical_operations, sample->cpu,
              sample->wall_ns, sample->owner_cpu_ns,
              sample->p50_ns, sample->p95_ns, sample->p99_ns,
              sample->operations_per_second, sample->mib_per_second,
              sample->owner_cpu_us_per_op,
-             sample->control_poll_calls, sample->advance_calls,
-             sample->observe_calls, sample->route_attempts,
-             sample->routed_completions, sample->unrelated_route_attempts,
+             sample->control_poll_calls, sample->owner_poll_calls,
              sample->send_admissions, sample->receive_deliveries) < 0
              ? SALTS_EIO
              : SALTS_OK;
@@ -1026,8 +906,7 @@ int main(void) {
         "path,mode,payload_bytes,repeat,logical_operations,cpu,"
         "wall_ns,owner_cpu_ns,p50_ns,p95_ns,p99_ns,"
         "operations_per_second,mib_per_second,owner_cpu_us_per_op,"
-        "control_poll_calls,advance_calls,observe_calls,route_attempts,"
-        "routed_completions,unrelated_route_attempts,"
+        "control_poll_calls,owner_poll_calls,"
         "send_admissions,receive_deliveries\n");
   }
 
@@ -1064,7 +943,7 @@ int main(void) {
     }
   }
 
-  printf("# FlowMQ one-owner shared-wait prototype\n\n");
+  printf("# FlowMQ public owner-lane shared wait\n\n");
   printf("Owner CPU: %d. Two client sockets are concurrently active in every "
          "measured round; echo-peer threads remain scheduler-managed.\n\n", cpu);
   printf("| path | payload | mode | ops/s median | p50 us | p99 us | "
@@ -1097,7 +976,7 @@ int main(void) {
           waits[mode][repeat] =
               mode == SHARED_WAIT_CONTROL
                   ? (double)sample->control_poll_calls
-                  : (double)sample->observe_calls;
+                  : (double)sample->owner_poll_calls;
         }
         printf("| %s | %zu | %s | %.0f | %.3f | %.3f | %.3f | %.0f |\n",
                shared_wait_path_name((shared_wait_path_t)path),
@@ -1130,7 +1009,7 @@ int main(void) {
             candidate->owner_cpu_us_per_op /
             control->owner_cpu_us_per_op;
         wait_ratio[repeat] =
-            (double)candidate->observe_calls /
+            (double)candidate->owner_poll_calls /
             (double)control->control_poll_calls;
       }
 
