@@ -3557,15 +3557,21 @@ int flowmq_socket_internal_stop_external(flowmq_socket_t *socket) {
   return status;
 }
 
-int flowmq_socket_internal_detach_owner(
+int flowmq_socket_internal_owner_close_storage(
     flowmq_socket_t *socket, const void *owner_token) {
+  const void *saved_owner;
+  int status;
   if (socket == NULL || owner_token == NULL ||
       socket->external_owner != owner_token)
     return SALTS_EINVAL;
   if (socket->runtime_initialized && !socket->external_stopped)
     return SALTS_EBUSY;
+  saved_owner = socket->external_owner;
   socket->external_owner = NULL;
-  return SALTS_OK;
+  status = flowmq_close(socket);
+  if (status != SALTS_OK)
+    socket->external_owner = saved_owner;
+  return status;
 }
 
 int flowmq_send(flowmq_socket_t *socket, const void *data, size_t size,
