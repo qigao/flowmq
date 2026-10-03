@@ -26,7 +26,9 @@ enum {
   BENCH_MULTIPART_LARGE_SAMPLES = 512u,
   BENCH_BATCH_SAMPLES = 10000u,
   BENCH_BATCH_MESSAGES = 64u,
-  BENCH_PROGRESS_LIMIT = 10000u
+  BENCH_PROGRESS_LIMIT = 10000u,
+  BENCH_PROGRESS_TIMEOUT_MS = 10000u,
+  BENCH_PROGRESS_WAIT_MS = 1u
 };
 
 static size_t bench_socket_samples(size_t regular, size_t smoke_samples) {
@@ -54,6 +56,30 @@ static int bench_progress(bench_pair_t *pair) {
       {.socket = pair->sender}, {.socket = pair->receiver}};
   size_t ready = 0u;
   return flowmq_poll(items, 2u, 0u, &ready);
+}
+
+static uint64_t bench_progress_deadline_ms(void) {
+  const uint64_t now = salts_monotonic_ms();
+  return now > UINT64_MAX - BENCH_PROGRESS_TIMEOUT_MS
+             ? UINT64_MAX
+             : now + BENCH_PROGRESS_TIMEOUT_MS;
+}
+
+static int bench_progress_wait(bench_pair_t *pair, uint64_t deadline_ms) {
+  flowmq_pollitem_t items[] = {
+      {.socket = pair->sender}, {.socket = pair->receiver}};
+  const uint64_t now = salts_monotonic_ms();
+  uint64_t remaining_ms;
+  uint32_t wait_ms;
+  size_t ready = 0u;
+  if (now >= deadline_ms) return SALTS_ETIMEDOUT;
+  remaining_ms = deadline_ms - now;
+  wait_ms =
+      remaining_ms < BENCH_PROGRESS_WAIT_MS
+          ? (uint32_t)remaining_ms
+          : BENCH_PROGRESS_WAIT_MS;
+  if (wait_ms == 0u) wait_ms = 1u;
+  return flowmq_poll(items, 2u, wait_ms, &ready);
 }
 
 static int bench_pair_open(bench_pair_t *pair) {
@@ -204,31 +230,32 @@ static int bench_pair_open_tls(bench_pair_t *pair) {
 static int bench_exchange(bench_pair_t *pair, const void *payload,
                           size_t payload_size) {
   static unsigned char received[BENCH_RETAINED_LARGE_PAYLOAD_BYTES];
+  const uint64_t deadline_ms = bench_progress_deadline_ms();
   size_t received_size = 0u;
   int status = flowmq_send(pair->sender, payload, payload_size,
                            FLOWMQ_DONTWAIT);
-  for (size_t i = 0u;
-       (status == SALTS_EBUSY || status == SALTS_ENOBUFS) &&
-       i < BENCH_PROGRESS_LIMIT; ++i) {
-    status = bench_progress(pair);
-    if (status == SALTS_OK)
-      status = flowmq_send(pair->sender, payload, payload_size,
-                           FLOWMQ_DONTWAIT);
+  while (status == SALTS_EBUSY || status == SALTS_ENOBUFS) {
+    status = bench_progress_wait(pair, deadline_ms);
+    if (status != SALTS_OK) break;
+    status = flowmq_send(pair->sender, payload, payload_size,
+                         FLOWMQ_DONTWAIT);
   }
   if (status != SALTS_OK) {
     fprintf(stderr, "bench_exchange send/progress failed payload=%zu status=%d\n",
             payload_size, status);
     return status;
   }
+
   status = SALTS_EBUSY;
-  for (size_t i = 0u; status == SALTS_EBUSY && i < BENCH_PROGRESS_LIMIT; ++i) {
-    status = bench_progress(pair);
-    if (status == SALTS_OK)
-      status = flowmq_recv(pair->receiver, received, sizeof(received),
-                           &received_size, FLOWMQ_DONTWAIT);
+  while (status == SALTS_EBUSY) {
+    status = bench_progress_wait(pair, deadline_ms);
+    if (status != SALTS_OK) break;
+    status = flowmq_recv(pair->receiver, received, sizeof(received),
+                         &received_size, FLOWMQ_DONTWAIT);
   }
   if (status != SALTS_OK) {
-    fprintf(stderr, "bench_exchange recv/progress failed payload=%zu status=%d received=%zu\n",
+    fprintf(stderr,
+            "bench_exchange recv/progress failed payload=%zu status=%d received=%zu\n",
             payload_size, status, received_size);
     return status;
   }
@@ -245,22 +272,23 @@ static int bench_exchange_owned_recv(bench_pair_t *pair,
                                      const void *payload,
                                      size_t payload_size) {
   mem_slice_t received = {0};
+  const uint64_t deadline_ms = bench_progress_deadline_ms();
   int result = SALTS_OK;
   int status = flowmq_send(pair->sender, payload, payload_size,
                            FLOWMQ_DONTWAIT);
-  for (size_t i = 0u; status == SALTS_EBUSY && i < BENCH_PROGRESS_LIMIT; ++i) {
-    status = bench_progress(pair);
-    if (status == SALTS_OK)
-      status = flowmq_send(pair->sender, payload, payload_size,
-                           FLOWMQ_DONTWAIT);
+  while (status == SALTS_EBUSY || status == SALTS_ENOBUFS) {
+    status = bench_progress_wait(pair, deadline_ms);
+    if (status != SALTS_OK) break;
+    status = flowmq_send(pair->sender, payload, payload_size,
+                         FLOWMQ_DONTWAIT);
   }
   if (status != SALTS_OK) return status;
 
   status = SALTS_EBUSY;
-  for (size_t i = 0u; status == SALTS_EBUSY && i < BENCH_PROGRESS_LIMIT; ++i) {
-    status = bench_progress(pair);
-    if (status == SALTS_OK)
-      status = flowmq_recv_slice(pair->receiver, &received, FLOWMQ_DONTWAIT);
+  while (status == SALTS_EBUSY) {
+    status = bench_progress_wait(pair, deadline_ms);
+    if (status != SALTS_OK) break;
+    status = flowmq_recv_slice(pair->receiver, &received, FLOWMQ_DONTWAIT);
   }
   if (status != SALTS_OK) return status;
   if (received.length != payload_size ||
@@ -274,6 +302,7 @@ static int bench_exchange_owned_recv(bench_pair_t *pair,
 static int bench_exchange_retained(bench_pair_t *pair,
                                    const mem_slice_t *payload) {
   static unsigned char received[BENCH_RETAINED_LARGE_PAYLOAD_BYTES];
+  const uint64_t deadline_ms = bench_progress_deadline_ms();
   size_t received_size = 0u;
   int status;
   if (payload == NULL || payload->data == NULL || payload->length == 0u)
@@ -281,21 +310,19 @@ static int bench_exchange_retained(bench_pair_t *pair,
   if (payload->length > sizeof(received)) return SALTS_EMSGSIZE;
 
   status = flowmq_send_slice(pair->sender, payload, FLOWMQ_DONTWAIT);
-  for (size_t i = 0u;
-       (status == SALTS_EBUSY || status == SALTS_ENOBUFS) &&
-       i < BENCH_PROGRESS_LIMIT; ++i) {
-    status = bench_progress(pair);
-    if (status == SALTS_OK)
-      status = flowmq_send_slice(pair->sender, payload, FLOWMQ_DONTWAIT);
+  while (status == SALTS_EBUSY || status == SALTS_ENOBUFS) {
+    status = bench_progress_wait(pair, deadline_ms);
+    if (status != SALTS_OK) break;
+    status = flowmq_send_slice(pair->sender, payload, FLOWMQ_DONTWAIT);
   }
   if (status != SALTS_OK) return status;
 
   status = SALTS_EBUSY;
-  for (size_t i = 0u; status == SALTS_EBUSY && i < BENCH_PROGRESS_LIMIT; ++i) {
-    status = bench_progress(pair);
-    if (status == SALTS_OK)
-      status = flowmq_recv(pair->receiver, received, sizeof(received),
-                           &received_size, FLOWMQ_DONTWAIT);
+  while (status == SALTS_EBUSY) {
+    status = bench_progress_wait(pair, deadline_ms);
+    if (status != SALTS_OK) break;
+    status = flowmq_recv(pair->receiver, received, sizeof(received),
+                         &received_size, FLOWMQ_DONTWAIT);
   }
   if (status != SALTS_OK) return status;
   if (received_size != payload->length ||
@@ -307,6 +334,7 @@ static int bench_exchange_retained(bench_pair_t *pair,
 static int bench_receive_part(bench_pair_t *pair, const void *expected,
                               size_t expected_size, int expected_more) {
   static unsigned char received[BENCH_RETAINED_LARGE_PAYLOAD_BYTES];
+  const uint64_t deadline_ms = bench_progress_deadline_ms();
   size_t received_size = 0u;
   size_t option_size = sizeof(int);
   int more = -1;
@@ -315,11 +343,11 @@ static int bench_receive_part(bench_pair_t *pair, const void *expected,
   if (expected == NULL || expected_size == 0u ||
       expected_size > sizeof(received))
     return SALTS_EINVAL;
-  for (size_t i = 0u; status == SALTS_EBUSY && i < BENCH_PROGRESS_LIMIT; ++i) {
-    status = bench_progress(pair);
-    if (status == SALTS_OK)
-      status = flowmq_recv(pair->receiver, received, sizeof(received),
-                           &received_size, FLOWMQ_DONTWAIT);
+  while (status == SALTS_EBUSY) {
+    status = bench_progress_wait(pair, deadline_ms);
+    if (status != SALTS_OK) break;
+    status = flowmq_recv(pair->receiver, received, sizeof(received),
+                         &received_size, FLOWMQ_DONTWAIT);
   }
   if (status != SALTS_OK) return status;
   if (received_size != expected_size ||
@@ -335,6 +363,7 @@ static int bench_exchange_multipart_copy(bench_pair_t *pair,
                                          const unsigned char *payload,
                                          size_t part_size,
                                          size_t part_count) {
+  const uint64_t deadline_ms = bench_progress_deadline_ms();
   int status;
   if (pair == NULL || payload == NULL || part_size == 0u || part_count < 2u)
     return SALTS_EINVAL;
@@ -344,13 +373,11 @@ static int bench_exchange_multipart_copy(bench_pair_t *pair,
         FLOWMQ_DONTWAIT | (part + 1u < part_count ? FLOWMQ_SNDMORE : 0);
     status = flowmq_send(pair->sender, payload + part * part_size,
                          part_size, flags);
-    for (size_t i = 0u;
-         (status == SALTS_EBUSY || status == SALTS_ENOBUFS) &&
-         i < BENCH_PROGRESS_LIMIT; ++i) {
-      status = bench_progress(pair);
-      if (status == SALTS_OK)
-        status = flowmq_send(pair->sender, payload + part * part_size,
-                             part_size, flags);
+    while (status == SALTS_EBUSY || status == SALTS_ENOBUFS) {
+      status = bench_progress_wait(pair, deadline_ms);
+      if (status != SALTS_OK) break;
+      status = flowmq_send(pair->sender, payload + part * part_size,
+                           part_size, flags);
     }
     if (status != SALTS_OK) return status;
   }
@@ -366,6 +393,7 @@ static int bench_exchange_multipart_copy(bench_pair_t *pair,
 static int bench_exchange_multipart_retained(bench_pair_t *pair,
                                              const mem_slice_t *parts,
                                              size_t part_count) {
+  const uint64_t deadline_ms = bench_progress_deadline_ms();
   int status;
   if (pair == NULL || parts == NULL || part_count < 2u) return SALTS_EINVAL;
 
@@ -373,12 +401,10 @@ static int bench_exchange_multipart_retained(bench_pair_t *pair,
     const int flags =
         FLOWMQ_DONTWAIT | (part + 1u < part_count ? FLOWMQ_SNDMORE : 0);
     status = flowmq_send_slice(pair->sender, &parts[part], flags);
-    for (size_t i = 0u;
-         (status == SALTS_EBUSY || status == SALTS_ENOBUFS) &&
-         i < BENCH_PROGRESS_LIMIT; ++i) {
-      status = bench_progress(pair);
-      if (status == SALTS_OK)
-        status = flowmq_send_slice(pair->sender, &parts[part], flags);
+    while (status == SALTS_EBUSY || status == SALTS_ENOBUFS) {
+      status = bench_progress_wait(pair, deadline_ms);
+      if (status != SALTS_OK) break;
+      status = flowmq_send_slice(pair->sender, &parts[part], flags);
     }
     if (status != SALTS_OK) return status;
   }
