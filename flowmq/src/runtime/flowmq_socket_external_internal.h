@@ -66,7 +66,7 @@ int flowmq_socket_internal_async_error_matches(
 /*
  * Starts/continues external CNet shutdown. SALTS_EBUSY means the embedding
  * owner must continue advance/observe/route and retry. After SALTS_OK,
- * flowmq_socket_internal_detach_owner() may authorize ordinary storage close.
+ * flowmq_socket_internal_owner_close_storage() may release storage.
  */
 int flowmq_socket_internal_stop_external(flowmq_socket_t *socket);
 
