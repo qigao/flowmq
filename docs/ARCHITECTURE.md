@@ -99,9 +99,31 @@ prototype 的固定 10ms wait。routed completion batch 后不立即执行第二
 
 `flowmq_owner_t` 的 socket registry 与 NativeIO capacities 在创建时按 `socket_capacity`
 硬上界预留；不会依据 CPU 数自动扩容，也不会 live resize。owner-created socket 不能放入
-ordinary `flowmq_poll()`，不能直接 `flowmq_close()`，也不能迁移到另一个 owner。当前
-第一阶段 owner lane 只产品化 TCP client-side progress；listener/same-endpoint multicore
-admission 是独立边界。
+ordinary `flowmq_poll()`，不能直接 `flowmq_close()`，也不能迁移到另一个 owner。
+该 API 仍只产品化 TCP client-side shared-wait progress。
+
+listener/same-endpoint multicore 使用独立的 ordinary-socket composition，而不是把 listener
+塞进 `flowmq_owner_t`：
+
+```text
+owner/core A                         owner/core B
+ordinary socket A                    ordinary socket B
+FLOWMQ_REUSE_PORT=1                  FLOWMQ_REUSE_PORT=1
+CNet listener A ---- same port ---- CNet listener B
+        \                              /
+         +---- kernel accept hash -----+
+```
+
+`FLOWMQ_REUSE_PORT` 是 startup-only int 0/1。bind 统一调用 released CNet
+`cnet_listener_init_ex()`；不支持 `SO_REUSEPORT` 的平台返回 `SALTS_ENOTSUP`，没有
+`SO_REUSEADDR` 模拟或 silent fallback。每个 accepted connection 永久归属 accepting owner，
+不会跨 owner 转移 native handle，也不会通过 central dispatcher 把每条消息重新汇聚到单线程。
+
+#73 的 same-endpoint qualification 使用四条固定 client connection、一个 owner control 与两个
+distinct-core owner candidate。饱和的 64 KiB pipelined DEALER→REP workload 在 exact
+128/128 measured request distribution 下得到约 1.451x throughput paired median，p99 约
+0.615x control；这证明 same-endpoint composition 可以获得真实多核收益，但不构成所有 payload
+或 workload 都线性扩展的承诺。
 
 每个 live peer 独占 heartbeat deadline、pending-PONG 和双向累计 credit 状态。
 peer 的可变协议状态拆成三个独立维度，而不是一个乘积型大 FSM：
