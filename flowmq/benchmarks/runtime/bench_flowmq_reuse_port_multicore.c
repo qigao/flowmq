@@ -950,9 +950,11 @@ int main(void) {
         for (size_t repeat = 0u;
              repeat < REUSE_PORT_REPEATS; ++repeat) {
           s0[repeat] =
-              (double)results[payload][mode][repeat].server0_requests;
+              (double)results[workload][payload][mode][repeat]
+                  .server0_requests;
           s1[repeat] =
-              (double)results[payload][mode][repeat].server1_requests;
+              (double)results[workload][payload][mode][repeat]
+                  .server1_requests;
         }
       }
       printf("| %s | %zu | %s | %.0f | %.3f | %.3f | %.3f | %.3f | ",
