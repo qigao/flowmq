@@ -1873,7 +1873,7 @@ static int flowmq_socket_runtime_init(flowmq_socket_t *socket,
   flowmq_io_config_init(&io);
   io.command_capacity = FLOWMQ_SOCKET_CNET_COMMAND_CAPACITY;
   if (transport == FLOWMQ_TRANSPORT_TCP)
-    io.receive_buffer_bytes = FLOWMQ_SOCKET_CNET_PACKET_RECEIVE_BUFFER_BYTES;
+    io.receive_buffer_bytes = socket->max_encoded_size;
   /* A messaging connection remains valid while either direction is idle. */
   timeouts.set_flags = FLOWMQ_TIMEOUT_SET_RECV;
   flowmq_timeouts_resolve(&timeouts, FLOWMQ_SOCKET_DEFAULT_TIMEOUT_MS);
