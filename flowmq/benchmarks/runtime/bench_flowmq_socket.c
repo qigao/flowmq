@@ -206,7 +206,9 @@ static int bench_exchange(bench_pair_t *pair, const void *payload,
   size_t received_size = 0u;
   int status = flowmq_send(pair->sender, payload, payload_size,
                            FLOWMQ_DONTWAIT);
-  for (size_t i = 0u; status == SALTS_EBUSY && i < BENCH_PROGRESS_LIMIT; ++i) {
+  for (size_t i = 0u;
+       (status == SALTS_EBUSY || status == SALTS_ENOBUFS) &&
+       i < BENCH_PROGRESS_LIMIT; ++i) {
     status = bench_progress(pair);
     if (status == SALTS_OK)
       status = flowmq_send(pair->sender, payload, payload_size,
