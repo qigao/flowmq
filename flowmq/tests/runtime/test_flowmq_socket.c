@@ -1913,19 +1913,48 @@ spec("flowmq_socket lifecycle and pattern surface") {
                 SALTS_OK);
     check_equal(flowmq_connect(client, endpoint), SALTS_OK);
     {
-      static unsigned char retained_payload[] = "tls-retained-rejected";
+      static unsigned char retained_payload[] = "tls-retained";
+      flowmq_test_external_release_t retained_release = {0};
       mem_buffer_t *retained_buffer =
           mem_wrap_external(retained_payload, sizeof(retained_payload) - 1u,
-                            NULL, NULL);
+                            flowmq_test_external_release, &retained_release);
       mem_slice_t retained_slice;
+      int retained_status = SALTS_EBUSY;
       check_not_null(retained_buffer);
       retained_slice =
           mem_slice(retained_buffer, 0u, sizeof(retained_payload) - 1u);
       check_not_null(retained_slice.buffer);
-      check_equal(flowmq_send_slice(client, &retained_slice, FLOWMQ_DONTWAIT),
-                  SALTS_ENOTSUP);
+
+      for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                          retained_status == SALTS_EBUSY; ++i) {
+        check_equal(progress_pair(client, server), SALTS_OK);
+        retained_status =
+            flowmq_send_slice(client, &retained_slice, FLOWMQ_DONTWAIT);
+      }
+      check_equal(retained_status, SALTS_OK);
+
+      /* CNet TLS owns the retained plaintext before caller references drop. */
       mem_slice_release(&retained_slice);
       mem_buffer_release(retained_buffer);
+      retained_buffer = NULL;
+      check_equal(retained_release.calls, 0u);
+
+      retained_status = SALTS_EBUSY;
+      for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                          retained_status == SALTS_EBUSY; ++i) {
+        check_equal(progress_pair(client, server), SALTS_OK);
+        retained_status =
+            flowmq_recv(server, received, sizeof(received), &received_size,
+                        FLOWMQ_DONTWAIT);
+      }
+      check_equal(retained_status, SALTS_OK);
+      check_equal(received_size, sizeof(retained_payload) - 1u);
+      check_equal(memcmp(received, retained_payload, received_size), 0);
+
+      for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                          retained_release.calls == 0u; ++i)
+        check_equal(progress_pair(client, server), SALTS_OK);
+      check_equal(retained_release.calls, 1u);
     }
 
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
