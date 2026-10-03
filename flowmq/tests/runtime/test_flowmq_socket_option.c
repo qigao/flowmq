@@ -29,7 +29,8 @@ static const int FLOWMQ_PUBLIC_OPTIONS[] = {
     FLOWMQ_SNDHWM_BYTES,
     FLOWMQ_RCVHWM_BYTES,
     FLOWMQ_FLOW_UPDATE_QUANTUM,
-    FLOWMQ_FLOW_UPDATE_IVL};
+    FLOWMQ_FLOW_UPDATE_IVL,
+    FLOWMQ_REUSE_PORT};
 
 spec("flowmq_socket_option metadata") {
   it("covers every public socket option exactly once") {
@@ -65,6 +66,8 @@ spec("flowmq_socket_option metadata") {
         flowmq_socket_option_descriptor(FLOWMQ_RCVMORE);
     const flowmq_socket_option_desc_t *policy =
         flowmq_socket_option_descriptor(FLOWMQ_TLS_IDENTITY_POLICY);
+    const flowmq_socket_option_desc_t *reuse_port =
+        flowmq_socket_option_descriptor(FLOWMQ_REUSE_PORT);
 
     check_equal(reconnect->value_kind, FLOWMQ_SOCKET_OPTION_VALUE_INT);
     check_equal(reconnect->access,
@@ -85,6 +88,13 @@ spec("flowmq_socket_option metadata") {
     check_equal(policy->value_kind, FLOWMQ_SOCKET_OPTION_VALUE_STRUCT);
     check_equal(policy->access, FLOWMQ_SOCKET_OPTION_ACCESS_SET);
     check_true(policy->pattern_mask != 0u);
+
+    check_equal(reuse_port->value_kind, FLOWMQ_SOCKET_OPTION_VALUE_INT);
+    check_equal(reuse_port->access, FLOWMQ_SOCKET_OPTION_ACCESS_SET);
+    check_equal(reuse_port->set_phase, FLOWMQ_SOCKET_OPTION_SET_STARTUP);
+    check_equal(reuse_port->abi_size, sizeof(int));
+    check_equal(reuse_port->min_value, 0);
+    check_equal(reuse_port->max_value, (uint64_t)1u);
   }
 
   it("preserves startup and runtime mutation contracts") {
@@ -135,6 +145,7 @@ spec("flowmq_socket_option metadata") {
     const flowmq_pattern_desc_t *router =
         flowmq_pattern_descriptor(FLOWMQ_PROTOCOL_ROUTER);
     int reconnect = -2;
+    int reuse_port = 2;
     int hwm = FLOWMQ_SOCKET_OPTION_MESSAGE_HWM_MAX + 1;
     size_t hwm_bytes = FLOWMQ_SOCKET_OPTION_HWM_BYTES_MAX + (size_t)1u;
     const char identity_with_nul[] = {'a', '\0', 'b'};
@@ -148,6 +159,19 @@ spec("flowmq_socket_option metadata") {
     check_equal(flowmq_socket_option_validate_set(
                     FLOWMQ_SNDHWM, 0, pair, &hwm, sizeof(hwm), NULL),
                 SALTS_EINVAL);
+    check_equal(flowmq_socket_option_validate_set(
+                    FLOWMQ_REUSE_PORT, 0, pair, &reuse_port,
+                    sizeof(reuse_port), NULL),
+                SALTS_EINVAL);
+    reuse_port = 1;
+    check_equal(flowmq_socket_option_validate_set(
+                    FLOWMQ_REUSE_PORT, 0, pair, &reuse_port,
+                    sizeof(reuse_port), NULL),
+                SALTS_OK);
+    check_equal(flowmq_socket_option_validate_set(
+                    FLOWMQ_REUSE_PORT, 1, pair, &reuse_port,
+                    sizeof(reuse_port), NULL),
+                SALTS_EBUSY);
     check_equal(flowmq_socket_option_validate_set(
                     FLOWMQ_SNDHWM_BYTES, 0, pair, &hwm_bytes,
                     sizeof(hwm_bytes), NULL),
