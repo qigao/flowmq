@@ -101,6 +101,8 @@ jobs:
           cmake --build build/benchmark --parallel 2 --target bench_flowmq_socket
 
       - name: Run socket benchmark
+        env:
+          FLOWMQ_BENCH_CI: "1"
         run: |
           set -euo pipefail
           export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$FLOWMQ_VCPKG_INSTALLED/x64-linux/lib"
