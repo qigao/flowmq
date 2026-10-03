@@ -3,6 +3,7 @@ set(FLOWMQ_TRANSPORT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/cnet/flowmq_cnet_transport.c
     ${CMAKE_CURRENT_SOURCE_DIR}/cnet/flowmq_cnet_transport.h
     ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_socket.c
+    ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_owner.c
     ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_peer_state.c
     ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_peer_state.h
     ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_peer_state_schema.h
@@ -12,6 +13,7 @@ set(FLOWMQ_TRANSPORT_SOURCES
 
 set(FLOWMQ_TRANSPORT_HEADERS
     ${PROJECT_SOURCE_DIR}/flowmq/include/flowmq_socket.h
+    ${PROJECT_SOURCE_DIR}/flowmq/include/flowmq_owner.h
     ${PROJECT_SOURCE_DIR}/flowmq/include/flowmq_transport.h)
 
 add_library(flowmq_transport STATIC
@@ -35,39 +37,7 @@ target_include_directories(
           ${PROJECT_SOURCE_DIR}/flowmq/src/protocol/stream)
 target_link_libraries(flowmq_transport
                       PUBLIC FlowMQ::Core Salts::Core
-                      PRIVATE Salts::CNet Salts::CMeta)
-
-# Diagnostic-only build of the same transport runtime with the private
-# external-progress seam enabled. This target is Linux-only, not installed,
-# and exists solely for #64 owner-lane qualification.
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-  add_library(
-    flowmq_transport_external_profile STATIC
-    ${FLOWMQ_TRANSPORT_SOURCES}
-    ${FLOWMQ_TRANSPORT_HEADERS}
-    ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_socket_external_internal.h)
-  set_target_properties(
-    flowmq_transport_external_profile
-    PROPERTIES
-      EXCLUDE_FROM_ALL TRUE
-      FOLDER "flowmq/benchmarks/runtime")
-  target_compile_definitions(
-    flowmq_transport_external_profile
-    PRIVATE FLOWMQ_INTERNAL_EXTERNAL_PROGRESS=1)
-  target_include_directories(
-    flowmq_transport_external_profile
-    PUBLIC ${PROJECT_SOURCE_DIR}/flowmq/include
-    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cnet
-            ${PROJECT_SOURCE_DIR}/flowmq/src/runtime
-            ${PROJECT_SOURCE_DIR}/flowmq/src/core/pattern
-            ${PROJECT_SOURCE_DIR}/flowmq/src/core/session
-            ${PROJECT_SOURCE_DIR}/flowmq/src/protocol
-            ${PROJECT_SOURCE_DIR}/flowmq/src/protocol/stream)
-  target_link_libraries(
-    flowmq_transport_external_profile
-    PUBLIC FlowMQ::Core Salts::Core
-    PRIVATE Salts::CNet Salts::CMeta Salts::NativeIO)
-endif()
+                      PRIVATE Salts::CNet Salts::CMeta Salts::NativeIO)
 
 set(FLOWMQ_TRANSPORT_SOURCES ${FLOWMQ_TRANSPORT_SOURCES} PARENT_SCOPE)
 set(FLOWMQ_TRANSPORT_HEADERS ${FLOWMQ_TRANSPORT_HEADERS} PARENT_SCOPE)

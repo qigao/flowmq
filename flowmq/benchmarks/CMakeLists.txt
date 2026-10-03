@@ -34,8 +34,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   cmake_add_benchmark(
     bench_flowmq_owner_shared_wait
     SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_owner_shared_wait.c
-    LIBS flowmq_transport_external_profile Salts::NativeIO Threads::Threads
-    INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/runtime
+    LIBS FlowMQ::Transport Threads::Threads
     FOLDER "flowmq/benchmarks/runtime")
   set_target_properties(
     bench_flowmq_owner_shared_wait

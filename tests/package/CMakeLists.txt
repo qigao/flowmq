@@ -6,7 +6,7 @@ if(NOT DEFINED ENV{FLOWMQ_ROOT} OR "$ENV{FLOWMQ_ROOT}" STREQUAL "")
 endif()
 
 file(TO_CMAKE_PATH "$ENV{FLOWMQ_ROOT}" FLOWMQ_ROOT_PATH)
-find_package(FlowMQ 1.1 CONFIG REQUIRED
+find_package(FlowMQ 1.2 CONFIG REQUIRED
              PATHS "${FLOWMQ_ROOT_PATH}" NO_DEFAULT_PATH)
 
 get_target_property(_flowmq_public_links
@@ -28,7 +28,8 @@ foreach(_flowmq_forbidden_dependency IN ITEMS
         Salts::CMeta
         Salts::CFlow
         Salts::CSTL
-        Salts::CNet)
+        Salts::CNet
+        Salts::NativeIO)
   if(_flowmq_forbidden_dependency IN_LIST _flowmq_public_links)
     message(FATAL_ERROR
             "installed FlowMQ::FlowMQ leaks obsolete/private dependency "

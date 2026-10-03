@@ -144,7 +144,7 @@ jobs:
             -R '^(test_flowmq_peer_state|test_flowmq_socket)$' \
             --no-tests=error --output-on-failure
 
-      - name: Verify installed FlowMQ 1.1 package contract
+      - name: Verify installed FlowMQ 1.2 package contract
         shell: bash
         run: |
           set -euo pipefail

@@ -6,7 +6,7 @@ endif()
 
 project(
   FlowMQ
-  VERSION 1.1.2
+  VERSION 1.2.0
   DESCRIPTION "Pattern-oriented messaging library for C"
   HOMEPAGE_URL "https://github.com/qigao/flowmq"
   LANGUAGES C)
@@ -153,7 +153,7 @@ target_include_directories(
           ${CMAKE_CURRENT_SOURCE_DIR}/flowmq/src/transport/cnet)
 target_link_libraries(flowmq
                       PUBLIC Salts::Core Salts::DataBind
-                      PRIVATE Salts::CSTL Salts::CMeta Salts::CNet)
+                      PRIVATE Salts::CSTL Salts::CMeta Salts::CNet Salts::NativeIO)
 if(TARGET flowmq_media_provider_codegen)
   add_dependencies(flowmq flowmq_media_provider_codegen)
 endif()
