@@ -687,9 +687,9 @@ static int reuse_port_owner_client_phase(
       (void)ready;
     }
 
-    if (!made_progress &&
-        reuse_port_clock_ns(CLOCK_MONOTONIC) >= deadline)
+    if (reuse_port_clock_ns(CLOCK_MONOTONIC) >= deadline)
       return SALTS_ETIMEDOUT;
+    (void)made_progress;
   }
 }
 
