@@ -15,6 +15,9 @@ typedef struct flowmq_stream_decoder_s {
 int flowmq_stream_decoder_prepare(flowmq_stream_decoder_t *stream, size_t max_frame_size);
 void flowmq_stream_decoder_destroy(flowmq_stream_decoder_t *stream);
 void flowmq_stream_decoder_destroy_sensitive(flowmq_stream_decoder_t *stream);
+/** Current unread stream bytes retained by the decoder. */
+size_t flowmq_stream_decoder_size(const flowmq_stream_decoder_t *stream);
+/** Remaining logical append quota before max_frame_size is exceeded. */
 size_t flowmq_stream_decoder_available(const flowmq_stream_decoder_t *stream);
 int flowmq_stream_decoder_append(flowmq_stream_decoder_t *stream, const void *data, size_t size);
 int flowmq_stream_decoder_next(flowmq_stream_decoder_t *stream, flowmq_protocol_frame_t *frame,
