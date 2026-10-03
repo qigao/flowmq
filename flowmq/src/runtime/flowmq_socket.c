@@ -3348,13 +3348,42 @@ int flowmq_socket_internal_route_external_completion(
 }
 
 int flowmq_socket_internal_stop_external(flowmq_socket_t *socket) {
+  int pending = 0;
   int status;
   if (socket == NULL || socket->external_backend == NULL ||
       !socket->runtime_initialized)
     return SALTS_EINVAL;
+
+  /*
+   * External CNet stop never observes I/O and does not replace connection
+   * close admission. Initiate/continue close for every live FlowMQ peer, then
+   * let the embedding owner advance/observe/route terminal callbacks.
+   */
   socket->external_stopping = 1u;
+  for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
+    flowmq_socket_peer_t *peer = &socket->peers[i];
+    if (!flowmq_peer_state_is_used(&peer->state) ||
+        flowmq_peer_state_is_retired(&peer->state))
+      continue;
+    status = cnet_close(&socket->client, peer->connection);
+    if (status == SALTS_OK || status == SALTS_EALREADY ||
+        status == SALTS_ENOENT) {
+      pending = 1;
+      continue;
+    }
+    if (status == SALTS_EBUSY || status == SALTS_ENOBUFS) {
+      pending = 1;
+      continue;
+    }
+    return status;
+  }
+
   status = cnet_client_stop_external(&socket->client);
-  if (status == SALTS_OK) socket->external_stopped = 1u;
+  if (status == SALTS_OK) {
+    socket->external_stopped = 1u;
+    return SALTS_OK;
+  }
+  if (status == SALTS_EBUSY || pending) return SALTS_EBUSY;
   return status;
 }
 #endif
