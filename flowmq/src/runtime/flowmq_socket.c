@@ -143,6 +143,7 @@ struct flowmq_socket_peer_s {
   unsigned commit_pending : 1;
   unsigned heartbeat_active : 1;
   unsigned pong_pending : 1;
+  unsigned owned_receive_active : 1;
 };
 
 struct flowmq_ctx_s {
@@ -244,6 +245,7 @@ static int flowmq_socket_drive(flowmq_socket_t *socket, uint32_t timeout_ms,
 static void flowmq_socket_on_receive_slice(
     void *user, cnet_connection connection, mem_slice_t slice,
     cnet_message_kind kind);
+static int flowmq_socket_rearm_receive(flowmq_socket_peer_t *peer);
 static void flowmq_socket_cancel_send_route(flowmq_socket_t *socket);
 static void flowmq_socket_fail(flowmq_socket_t *socket, int status);
 
@@ -1624,12 +1626,7 @@ static void flowmq_socket_on_state(void *user, cnet_connection connection,
       peer->heartbeat_active = 1u;
     }
     {
-      int status = SALTS_OK;
-      if (socket->transport == FLOWMQ_TRANSPORT_TCP)
-        status = cnet_set_receive_slice_handler(
-            &socket->client, connection, flowmq_socket_on_receive_slice, peer);
-      if (status == SALTS_OK)
-        status = cnet_receive(&socket->client, connection, 1u);
+      int status = cnet_receive(&socket->client, connection, 1u);
       if (status == SALTS_OK)
         status = flowmq_socket_send_hello(peer);
       if (status != SALTS_OK)
@@ -1649,6 +1646,33 @@ static void flowmq_socket_on_state(void *user, cnet_connection connection,
   }
 }
 
+
+
+static int flowmq_socket_rearm_receive(flowmq_socket_peer_t *peer) {
+  flowmq_socket_t *socket;
+  int status = SALTS_OK;
+  if (peer == NULL || peer->owner == NULL) return SALTS_EINVAL;
+  socket = peer->owner;
+
+  /*
+   * Keep HELLO/SETTINGS on the legacy borrowed surface. Switch only at a
+   * demand-free boundary after the handshake is complete and the copied
+   * decoder has drained, so the first owned receive is application DATA.
+   */
+  if (socket->transport == FLOWMQ_TRANSPORT_TCP &&
+      !peer->owned_receive_active &&
+      flowmq_peer_state_handshake_has(
+          &peer->state, FLOWMQ_PEER_HANDSHAKE_HELLO_RX) &&
+      flowmq_peer_state_handshake_has(
+          &peer->state, FLOWMQ_PEER_HANDSHAKE_SETTINGS_RX) &&
+      flowmq_stream_decoder_available(&peer->decoder) == 0u) {
+    status = cnet_set_receive_slice_handler(
+        &socket->client, peer->connection, flowmq_socket_on_receive_slice, peer);
+    if (status != SALTS_OK) return status;
+    peer->owned_receive_active = 1u;
+  }
+  return cnet_receive(&socket->client, peer->connection, 1u);
+}
 
 static void flowmq_socket_on_receive_slice(
     void *user, cnet_connection connection, mem_slice_t slice,
@@ -1708,7 +1732,7 @@ static void flowmq_socket_on_receive_slice(
 
   mem_slice_release(&slice);
   if (status == SALTS_OK && !pause_receive)
-    status = cnet_receive(&socket->client, connection, 1u);
+    status = flowmq_socket_rearm_receive(peer);
   if (status != SALTS_OK)
     flowmq_socket_peer_fail(peer);
 }
@@ -1721,7 +1745,7 @@ static void flowmq_socket_on_receive(void *user, cnet_connection connection,
                                             view->size);
   if (status == SALTS_OK) status = flowmq_socket_process_receive(peer);
   if (status == SALTS_ENOBUFS) return;
-  if (status == SALTS_OK) status = cnet_receive(&socket->client, connection, 1u);
+  if (status == SALTS_OK) status = flowmq_socket_rearm_receive(peer);
   if (status != SALTS_OK) flowmq_socket_peer_fail(peer);
 }
 
@@ -3320,7 +3344,7 @@ static int flowmq_socket_resume_receive(flowmq_socket_peer_t *peer) {
   status = flowmq_socket_process_receive(peer);
   if (status == SALTS_ENOBUFS) return SALTS_OK;
   if (status != SALTS_OK) return status;
-  return cnet_receive(&socket->client, peer->connection, 1u);
+  return flowmq_socket_rearm_receive(peer);
 }
 
 static int flowmq_socket_listener_progress(flowmq_socket_t *socket) {
