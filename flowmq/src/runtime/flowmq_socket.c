@@ -199,6 +199,7 @@ struct flowmq_socket_s {
   int reconnect_interval_ms;
   int reconnect_interval_max_ms;
   int flow_update_interval_ms;
+  int reuse_port;
   int async_error;
   int send_cancel_error;
   int recv_cancel_error;
@@ -2039,6 +2040,7 @@ int flowmq_close(flowmq_socket_t *socket) {
 int flowmq_bind(flowmq_socket_t *socket, const char *endpoint) {
   flowmq_endpoint_parts_t parts;
   cnet_listener_config config;
+  cnet_listener_options listener_options = CNET_LISTENER_OPTIONS_INIT;
   uint16_t bound_port = 0u;
   int bracket;
   int written;
@@ -2062,7 +2064,9 @@ int flowmq_bind(flowmq_socket_t *socket, const char *endpoint) {
                                   .host = parts.host,
                                   .port = parts.port,
                                   .backlog = FLOWMQ_SOCKET_PEER_CAPACITY};
-  status = cnet_listener_init(&socket->listener, &config);
+  listener_options.reuse_port = socket->reuse_port;
+  status =
+      cnet_listener_init_ex(&socket->listener, &config, &listener_options);
   if (status != SALTS_OK) return status;
   socket->listener_initialized = 1u;
   status = cnet_listener_port(&socket->listener, &bound_port);
@@ -2208,6 +2212,13 @@ int flowmq_setsockopt(flowmq_socket_t *socket, int option, const void *value,
     int value_int;
     memcpy(&value_int, value, sizeof(value_int));
     socket->flow_update_interval_ms = value_int;
+    return SALTS_OK;
+  }
+
+  case FLOWMQ_REUSE_PORT: {
+    int value_int;
+    memcpy(&value_int, value, sizeof(value_int));
+    socket->reuse_port = value_int;
     return SALTS_OK;
   }
 
