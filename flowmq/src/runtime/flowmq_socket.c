@@ -243,6 +243,9 @@ static int flowmq_socket_drive(flowmq_socket_t *socket, uint32_t timeout_ms,
                                size_t *events);
 static void flowmq_socket_cancel_send_route(flowmq_socket_t *socket);
 static void flowmq_socket_fail(flowmq_socket_t *socket, int status);
+static void flowmq_socket_on_receive_slice(
+    void *user, cnet_connection connection, mem_slice_t slice,
+    cnet_message_kind kind);
 
 static int flowmq_endpoint_parse(const char *endpoint, int allow_zero_port,
                                  flowmq_endpoint_parts_t *parts) {
@@ -1672,6 +1675,7 @@ static void flowmq_socket_on_receive_slice(
   flowmq_protocol_frame_t frame = {0};
   size_t consumed = 0u;
   int pause_receive = 0;
+  int attempted_direct = 0;
   int direct = 0;
   int status = SALTS_OK;
 
@@ -1690,7 +1694,8 @@ static void flowmq_socket_on_receive_slice(
         &frame, &consumed);
     if (status == SALTS_OK && consumed == slice.length &&
         frame.kind == FLOWMQ_PROTOCOL_FRAME_DATA &&
-        frame.owned_payload == NULL) {
+        frame.payload.len != 0u && frame.owned_payload == NULL) {
+      attempted_direct = 1;
       status = frame.pattern == peer->remote_pattern
                    ? flowmq_pattern_data_direction_validate(
                          socket->pattern.pattern, &frame)
@@ -1706,16 +1711,7 @@ static void flowmq_socket_on_receive_slice(
     flowmq_protocol_frame_cleanup(&frame);
   }
 
-  if (!direct && status != SALTS_EPROTO) {
-    status = flowmq_stream_decoder_append(
-        &peer->decoder, slice.data, slice.length);
-    if (status == SALTS_OK) status = flowmq_socket_process_receive(peer);
-  } else if (!direct && status == SALTS_EPROTO) {
-    /*
-     * Preserve the legacy decoder as the authority for malformed, control,
-     * partial, coalesced and multi-packet shapes. The speculative direct
-     * decode above must not create a second protocol interpretation.
-     */
+  if (!direct && !attempted_direct) {
     status = flowmq_stream_decoder_append(
         &peer->decoder, slice.data, slice.length);
     if (status == SALTS_OK) status = flowmq_socket_process_receive(peer);
