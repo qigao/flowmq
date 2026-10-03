@@ -13,6 +13,8 @@ _Static_assert(FLOWMQ_TLS_IDENTITY_POLICY == 1007,
                "TLS identity-policy sockopt id changed");
 _Static_assert(FLOWMQ_TLS_IDENTITY_REJECTIONS == 1008,
                "TLS identity rejection-counter sockopt id changed");
+_Static_assert(FLOWMQ_REUSE_PORT == 1105,
+               "reuse-port sockopt id changed");
 _Static_assert(FLOWMQ_TLS_CERTIFICATE_SHA256_TEXT_SIZE == 71u,
                "canonical SHA-256 text contract changed");
 _Static_assert(FLOWMQ_TLS_CERTIFICATE_SHA256_CAPACITY == 72u,
@@ -32,6 +34,7 @@ int main(void)
     flowmq_owner_t *owner = NULL;
     flowmq_socket_t *owner_socket = NULL;
     int reconnect_ms = 25;
+    int reuse_port = 0;
     int reconnect_read = 0;
     size_t reconnect_read_size = sizeof(reconnect_read);
     size_t send_hwm_bytes = 4096u;
@@ -49,6 +52,9 @@ int main(void)
     if (router == NULL) goto cleanup;
 
     /* int ABI */
+    if (flowmq_setsockopt(router, FLOWMQ_REUSE_PORT, &reuse_port,
+                          sizeof(reuse_port)) != 0)
+        goto cleanup;
     if (flowmq_setsockopt(router, FLOWMQ_RECONNECT_IVL, &reconnect_ms,
                           sizeof(reconnect_ms)) != 0)
         goto cleanup;
