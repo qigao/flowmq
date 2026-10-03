@@ -28,7 +28,8 @@ foreach(_flowmq_forbidden_dependency IN ITEMS
         Salts::CMeta
         Salts::CFlow
         Salts::CSTL
-        Salts::CNet)
+        Salts::CNet
+        Salts::NativeIO)
   if(_flowmq_forbidden_dependency IN_LIST _flowmq_public_links)
     message(FATAL_ERROR
             "installed FlowMQ::FlowMQ leaks obsolete/private dependency "
