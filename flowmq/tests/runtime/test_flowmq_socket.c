@@ -1957,6 +1957,99 @@ spec("flowmq_socket lifecycle and pattern surface") {
       check_equal(retained_release.calls, 1u);
     }
 
+    {
+      static unsigned char first_payload[] = "tls-retained-first";
+      static unsigned char final_payload[] = "tls-retained-final";
+      flowmq_test_external_release_t first_release = {0};
+      flowmq_test_external_release_t final_release = {0};
+      mem_buffer_t *first_buffer =
+          mem_wrap_external(first_payload, sizeof(first_payload) - 1u,
+                            flowmq_test_external_release, &first_release);
+      mem_buffer_t *final_buffer =
+          mem_wrap_external(final_payload, sizeof(final_payload) - 1u,
+                            flowmq_test_external_release, &final_release);
+      mem_slice_t first_slice;
+      mem_slice_t final_slice;
+      size_t option_size;
+      int more = -1;
+      int retained_status = SALTS_EBUSY;
+
+      check_not_null(first_buffer);
+      check_not_null(final_buffer);
+      first_slice = mem_slice(first_buffer, 0u, sizeof(first_payload) - 1u);
+      final_slice = mem_slice(final_buffer, 0u, sizeof(final_payload) - 1u);
+      check_not_null(first_slice.buffer);
+      check_not_null(final_slice.buffer);
+
+      for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                          retained_status == SALTS_EBUSY; ++i) {
+        check_equal(progress_pair(client, server), SALTS_OK);
+        retained_status =
+            flowmq_send_slice(client, &first_slice,
+                              FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE);
+      }
+      check_equal(retained_status, SALTS_OK);
+      mem_slice_release(&first_slice);
+      mem_buffer_release(first_buffer);
+      first_buffer = NULL;
+      check_equal(first_release.calls, 0u);
+
+      retained_status = flowmq_send_slice(client, &final_slice, FLOWMQ_DONTWAIT);
+      for (size_t i = 0u;
+           (retained_status == SALTS_EBUSY ||
+            retained_status == SALTS_ENOBUFS) &&
+           i < FLOWMQ_TEST_PROGRESS_LIMIT; ++i) {
+        check_equal(progress_pair(client, server), SALTS_OK);
+        retained_status =
+            flowmq_send_slice(client, &final_slice, FLOWMQ_DONTWAIT);
+      }
+      check_equal(retained_status, SALTS_OK);
+      mem_slice_release(&final_slice);
+      mem_buffer_release(final_buffer);
+      final_buffer = NULL;
+      check_equal(first_release.calls, 0u);
+      check_equal(final_release.calls, 0u);
+
+      retained_status = SALTS_EBUSY;
+      for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                          retained_status == SALTS_EBUSY; ++i) {
+        check_equal(progress_pair(client, server), SALTS_OK);
+        retained_status =
+            flowmq_recv(server, received, sizeof(received), &received_size,
+                        FLOWMQ_DONTWAIT);
+      }
+      check_equal(retained_status, SALTS_OK);
+      check_equal(received_size, sizeof(first_payload) - 1u);
+      check_equal(memcmp(received, first_payload, received_size), 0);
+      option_size = sizeof(more);
+      check_equal(flowmq_getsockopt(server, FLOWMQ_RCVMORE, &more, &option_size),
+                  SALTS_OK);
+      check_equal(more, 1);
+
+      retained_status = SALTS_EBUSY;
+      for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                          retained_status == SALTS_EBUSY; ++i) {
+        check_equal(progress_pair(client, server), SALTS_OK);
+        retained_status =
+            flowmq_recv(server, received, sizeof(received), &received_size,
+                        FLOWMQ_DONTWAIT);
+      }
+      check_equal(retained_status, SALTS_OK);
+      check_equal(received_size, sizeof(final_payload) - 1u);
+      check_equal(memcmp(received, final_payload, received_size), 0);
+      option_size = sizeof(more);
+      check_equal(flowmq_getsockopt(server, FLOWMQ_RCVMORE, &more, &option_size),
+                  SALTS_OK);
+      check_equal(more, 0);
+
+      for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                          (first_release.calls == 0u ||
+                           final_release.calls == 0u); ++i)
+        check_equal(progress_pair(client, server), SALTS_OK);
+      check_equal(first_release.calls, 1u);
+      check_equal(final_release.calls, 1u);
+    }
+
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
       check_equal(progress_pair(client, server), SALTS_OK);
       status = flowmq_send(client, payload, sizeof(payload) - 1u, FLOWMQ_DONTWAIT);
