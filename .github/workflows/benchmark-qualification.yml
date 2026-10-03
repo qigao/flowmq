@@ -1,0 +1,115 @@
+name: FlowMQ benchmark qualification
+
+on:
+  pull_request:
+    paths:
+      - "flowmq/benchmarks/**"
+      - ".github/workflows/benchmark-qualification.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: flowmq-benchmark-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-x64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Prepare host dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm
+
+      - name: Restore vcpkg dependencies from shared cache
+        run: |
+          set -euo pipefail
+          install_root="$RUNNER_TEMP/flowmq-benchmark-vcpkg"
+          log="$RUNNER_TEMP/flowmq-benchmark-vcpkg.log"
+          rm -rf "$install_root"
+          "$VCPKG_ROOT/vcpkg" install \
+            --x-manifest-root=. \
+            --x-install-root="$install_root" \
+            --triplet x64-linux \
+            --only-binarycaching 2>&1 | tee "$log"
+          if grep -q '^Building ' "$log"; then
+            echo "shared cache miss detected" >&2
+            exit 1
+          fi
+          grep -Eq 'Restored [1-9][0-9]* package\(s\) from NuGet' "$log"
+          echo "FLOWMQ_VCPKG_INSTALLED=$install_root" >> "$GITHUB_ENV"
+
+      - name: Restore latest released Salts SDKs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          config="$RUNNER_TEMP/flowmq-benchmark-nuget.config"
+          project="$RUNNER_TEMP/flowmq-benchmark-restore.csproj"
+          packages="$RUNNER_TEMP/flowmq-benchmark-packages"
+          cat > "$project" <<'EOF'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+            <ItemGroup>
+              <PackageReference Include="Salts.Native" Version="*" />
+              <PackageReference Include="SaltsUtils.Native" Version="*" />
+            </ItemGroup>
+          </Project>
+          EOF
+          printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json \
+            --name github --username qigao --password "$GITHUB_TOKEN" \
+            --store-password-in-clear-text --configfile "$config"
+          dotnet restore "$project" --configfile "$config" --packages "$packages" --no-cache
+          sdk_root() {
+            local package="$1" rid="$2" roots=()
+            while IFS= read -r root; do roots+=("$root"); done < <(
+              find "$packages/$package" -mindepth 3 -maxdepth 3 -type d -path "*/sdk/$rid" -print
+            )
+            [ "${#roots[@]}" -eq 1 ] || return 1
+            printf '%s' "${roots[0]}"
+          }
+          echo "SALTS_ROOT=$(sdk_root salts.native linux-x64)" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_ROOT=$(sdk_root saltsutils.native linux-x64)" >> "$GITHUB_ENV"
+
+      - name: Configure and build benchmark
+        run: |
+          set -euo pipefail
+          cmake -S . -B build/benchmark -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DVCPKG_INSTALLED_DIR="$FLOWMQ_VCPKG_INSTALLED" \
+            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching \
+            -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF
+          cmake --build build/benchmark --parallel 2 --target bench_flowmq_socket
+
+      - name: Run socket benchmark
+        run: |
+          set -euo pipefail
+          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$FLOWMQ_VCPKG_INSTALLED/x64-linux/lib"
+          log="$RUNNER_TEMP/flowmq-socket-benchmark.log"
+          build/benchmark/bin/bench_flowmq_socket 2>&1 | tee "$log"
+
+      - name: Upload benchmark evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: flowmq-socket-benchmark-linux-x64
+          path: ${{ runner.temp }}/flowmq-socket-benchmark.log
+          if-no-files-found: error
