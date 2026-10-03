@@ -476,16 +476,13 @@ spec("FlowMQ direct socket benchmark") {
     multipart_large_buffer =
         mem_wrap_external(multipart_large, sizeof(multipart_large), NULL, NULL);
     check_not_null(payload_buffer);
-    check_not_null(large_buffer);
     check_not_null(retained_large_buffer);
     check_not_null(multipart_small_buffer);
     check_not_null(multipart_large_buffer);
     payload_slice = mem_slice(payload_buffer, 0u, sizeof(payload));
-    large_slice = mem_slice(large_buffer, 0u, sizeof(large_payload));
     retained_large_slice =
         mem_slice(retained_large_buffer, 0u, sizeof(retained_large_payload));
     check_not_null(payload_slice.buffer);
-    check_not_null(large_slice.buffer);
     check_not_null(retained_large_slice.buffer);
     for (size_t part = 0u; part < BENCH_MULTIPART_SMALL_PARTS; ++part) {
       multipart_small_slices[part] =
@@ -705,13 +702,16 @@ spec("FlowMQ direct socket benchmark") {
     multipart_large_buffer =
         mem_wrap_external(multipart_large, sizeof(multipart_large), NULL, NULL);
     check_not_null(payload_buffer);
+    check_not_null(large_buffer);
     check_not_null(retained_large_buffer);
     check_not_null(multipart_large_buffer);
 
     payload_slice = mem_slice(payload_buffer, 0u, sizeof(payload));
+    large_slice = mem_slice(large_buffer, 0u, sizeof(large_payload));
     retained_large_slice =
         mem_slice(retained_large_buffer, 0u, sizeof(retained_large_payload));
     check_not_null(payload_slice.buffer);
+    check_not_null(large_slice.buffer);
     check_not_null(retained_large_slice.buffer);
     for (size_t part = 0u; part < BENCH_MULTIPART_LARGE_PARTS; ++part) {
       multipart_large_slices[part] =
