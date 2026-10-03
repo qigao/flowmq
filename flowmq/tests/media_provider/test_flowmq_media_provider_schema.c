@@ -205,7 +205,7 @@ spec("FlowMQ media-provider wire contract") {
   it("validates a command without allocating or converting decimal fences") {
     uint8_t encoded[FLOWMQ_MEDIA_PROVIDER_TEST_BUFFER_SIZE];
     ProviderCommandV1_view_t command;
-    tbe_var_data_t epoch;
+    DataBindBinaryVarData epoch;
     flowmq_media_provider_limits_t limits = FLOWMQ_MEDIA_PROVIDER_LIMITS_INIT;
     check_true(flowmq_test_build_command(encoded, sizeof(encoded), &command));
     check_equal(flowmq_media_provider_validate_command(&command, &limits), SALTS_OK);
@@ -217,7 +217,7 @@ spec("FlowMQ media-provider wire contract") {
   it("uses an explicit durable receipt instead of transport admission") {
     uint8_t encoded[FLOWMQ_MEDIA_PROVIDER_TEST_BUFFER_SIZE];
     ProviderReceiptV1_view_t receipt;
-    tbe_var_data_t command_id;
+    DataBindBinaryVarData command_id;
     flowmq_media_provider_limits_t limits = FLOWMQ_MEDIA_PROVIDER_LIMITS_INIT;
     check_true(flowmq_test_build_receipt(encoded, sizeof(encoded),
                                          ProviderReceiptDisposition_DurableAccepted, &receipt));
@@ -328,7 +328,7 @@ spec("FlowMQ media-provider wire contract") {
     encoded[ProviderReceiptV1_message_kind_OFFSET] = 0xffu;
     check_equal(flowmq_media_provider_peek_kind(encoded, sizeof(encoded), &kind), SALTS_EPROTO);
     encoded[ProviderReceiptV1_message_kind_OFFSET] = (uint8_t)ProviderMessageKind_Receipt;
-    tbe_wire_write_u32(encoded, FlowMqMediaProviderV1_WIRE_BIG_ENDIAN,
+    data_bind_binary_wire_write_u32(encoded, FlowMqMediaProviderV1_WIRE_BIG_ENDIAN,
                        FLOWMQ_MEDIA_PROVIDER_SCHEMA_VERSION + 1u);
     check_equal(flowmq_media_provider_peek_kind(encoded, sizeof(encoded), &kind), SALTS_ENOTSUP);
   }
