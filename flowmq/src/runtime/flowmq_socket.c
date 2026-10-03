@@ -461,6 +461,7 @@ static int flowmq_socket_endpoint_schedule(flowmq_socket_t *socket,
     return SALTS_EINVAL;
   endpoint->active = 0u;
   endpoint->retry_pending = 0u;
+  if (socket->external_stopping) return SALTS_OK;
   if (socket->reconnect_interval_ms < 0) return SALTS_OK;
   status = flowmq_reconnect_next(&endpoint->reconnect, &delay_ms);
   if (status != SALTS_OK) return status;
@@ -3543,6 +3544,9 @@ int flowmq_socket_internal_stop_external(flowmq_socket_t *socket) {
    * let the embedding owner advance/observe/route terminal callbacks.
    */
   socket->external_stopping = 1u;
+  socket->reconnect_pending = 0u;
+  for (size_t i = 0u; i < FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY; ++i)
+    socket->endpoints[i].retry_pending = 0u;
   for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
     flowmq_socket_peer_t *peer = &socket->peers[i];
     if (!flowmq_peer_state_is_used(&peer->state) ||
