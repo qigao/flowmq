@@ -50,7 +50,6 @@ cmake_add_test(
   test_flowmq_socket
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/test_flowmq_socket.c
   LIBS FlowMQ::Transport Salts::TinyTest
-  INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/runtime
   FOLDER "flowmq/tests/runtime")
 
 cmake_add_test(
