@@ -10,6 +10,9 @@
 #include "flowmq_stream_decoder.h"
 #include "flowmq_subscription_set.h"
 #include "flowmq_socket_option.h"
+#if defined(FLOWMQ_INTERNAL_EXTERNAL_PROGRESS)
+#include "flowmq_socket_external_internal.h"
+#endif
 #include "flowmq_tls_identity_map.h"
 #include "salts_error.h"
 #include "salts_buffer.h"
@@ -204,7 +207,14 @@ struct flowmq_socket_s {
   int recv_cancel_error;
   int transport;
   int last_rcvmore;
+#if defined(FLOWMQ_INTERNAL_EXTERNAL_PROGRESS)
+  native_io_backend *external_backend;
+#endif
   unsigned runtime_initialized : 1;
+#if defined(FLOWMQ_INTERNAL_EXTERNAL_PROGRESS)
+  unsigned external_stopping : 1;
+  unsigned external_stopped : 1;
+#endif
   unsigned listener_initialized : 1;
   unsigned pool_initialized : 1;
   unsigned tls_client_initialized : 1;
@@ -1699,7 +1709,18 @@ static int flowmq_socket_runtime_init(flowmq_socket_t *socket,
   status = flowmq_cnet_client_config(
       &io, &timeouts, transport, FLOWMQ_SOCKET_PEER_CAPACITY,
       socket->max_encoded_size, &config);
-  if (status == SALTS_OK) status = cnet_client_init(&socket->client, &config);
+#if defined(FLOWMQ_INTERNAL_EXTERNAL_PROGRESS)
+  if (status == SALTS_OK && socket->external_backend != NULL) {
+    if (transport != FLOWMQ_TRANSPORT_TCP)
+      status = SALTS_ENOTSUP;
+    else
+      status = cnet_client_init_external(
+          &socket->client, &config, socket->external_backend);
+  } else
+#endif
+  if (status == SALTS_OK) {
+    status = cnet_client_init(&socket->client, &config);
+  }
   if (status == SALTS_OK && transport == FLOWMQ_TRANSPORT_TCP) {
     cnet_stream_socket_options socket_options = CNET_STREAM_SOCKET_OPTIONS_INIT;
     socket_options.nodelay = 1;
@@ -1708,8 +1729,14 @@ static int flowmq_socket_runtime_init(flowmq_socket_t *socket,
   }
   if (status != SALTS_OK) {
     if (socket->client.impl != NULL) {
-      const int stop_status =
-          cnet_client_stop(&socket->client, FLOWMQ_SOCKET_SHUTDOWN_TIMEOUT_MS);
+      int stop_status;
+#if defined(FLOWMQ_INTERNAL_EXTERNAL_PROGRESS)
+      if (socket->external_backend != NULL)
+        stop_status = cnet_client_stop_external(&socket->client);
+      else
+#endif
+        stop_status =
+            cnet_client_stop(&socket->client, FLOWMQ_SOCKET_SHUTDOWN_TIMEOUT_MS);
       if (stop_status == SALTS_OK || stop_status == SALTS_EALREADY) {
         const int destroy_status = cnet_client_destroy(&socket->client);
         if (destroy_status != SALTS_OK) return destroy_status;
@@ -2001,9 +2028,16 @@ int flowmq_close(flowmq_socket_t *socket) {
     socket->listener_initialized = 0u;
   }
   if (socket->runtime_initialized) {
-    status = cnet_client_stop(&socket->client,
-                              FLOWMQ_SOCKET_SHUTDOWN_TIMEOUT_MS);
-    if (status != SALTS_OK) return status;
+#if defined(FLOWMQ_INTERNAL_EXTERNAL_PROGRESS)
+    if (socket->external_backend != NULL) {
+      if (!socket->external_stopped) return SALTS_EBUSY;
+    } else
+#endif
+    {
+      status = cnet_client_stop(&socket->client,
+                                FLOWMQ_SOCKET_SHUTDOWN_TIMEOUT_MS);
+      if (status != SALTS_OK) return status;
+    }
     status = cnet_client_destroy(&socket->client);
     if (status != SALTS_OK) return status;
     socket->runtime_initialized = 0u;
@@ -2048,6 +2082,9 @@ int flowmq_bind(flowmq_socket_t *socket, const char *endpoint) {
   int written;
   int status;
   if (socket == NULL || socket->ctx == NULL) return SALTS_EINVAL;
+#if defined(FLOWMQ_INTERNAL_EXTERNAL_PROGRESS)
+  if (socket->external_backend != NULL) return SALTS_ENOTSUP;
+#endif
   status = flowmq_endpoint_parse(endpoint, 1, &parts);
   if (status != SALTS_OK) return status;
   if (socket->listener_initialized) return SALTS_EALREADY;
@@ -3237,6 +3274,9 @@ static int flowmq_socket_drive(flowmq_socket_t *socket, uint32_t timeout_ms,
   int status;
   if (events != NULL) *events = 0u;
   if (socket == NULL || !socket->runtime_initialized) return SALTS_OK;
+#if defined(FLOWMQ_INTERNAL_EXTERNAL_PROGRESS)
+  if (socket->external_backend != NULL) return SALTS_ENOTSUP;
+#endif
   status = flowmq_socket_listener_progress(socket);
   if (status != SALTS_OK) return status;
   status = cnet_client_poll(&socket->client, timeout_ms, &client_events);
@@ -3246,6 +3286,107 @@ static int flowmq_socket_drive(flowmq_socket_t *socket, uint32_t timeout_ms,
   if (events != NULL) *events = client_events;
   return SALTS_OK;
 }
+
+#if defined(FLOWMQ_INTERNAL_EXTERNAL_PROGRESS)
+int flowmq_socket_internal_attach_external_backend(
+    flowmq_socket_t *socket, native_io_backend *backend) {
+  native_io_backend_config config;
+  if (socket == NULL || backend == NULL || socket->ctx == NULL)
+    return SALTS_EINVAL;
+  if (socket->runtime_initialized || socket->listener_initialized)
+    return SALTS_EBUSY;
+  if (socket->external_backend != NULL) return SALTS_EALREADY;
+  if (!native_io_backend_get_config(backend, &config)) return SALTS_EINVAL;
+  if (config.kind != flowmq_cnet_backend()) return SALTS_ENOTSUP;
+  socket->external_backend = backend;
+  socket->external_stopping = 0u;
+  socket->external_stopped = 0u;
+  return SALTS_OK;
+}
+
+int flowmq_socket_internal_advance_external(
+    flowmq_socket_t *socket, size_t *events) {
+  size_t client_events = 0u;
+  int status;
+  if (events != NULL) *events = 0u;
+  if (socket == NULL || socket->external_backend == NULL ||
+      !socket->runtime_initialized)
+    return SALTS_EINVAL;
+  status = cnet_client_advance_external(&socket->client, &client_events);
+  if (status != SALTS_OK) return status;
+  if (events != NULL) *events = client_events;
+  return SALTS_OK;
+}
+
+int flowmq_socket_internal_progress_local(flowmq_socket_t *socket) {
+  if (socket == NULL || socket->external_backend == NULL ||
+      !socket->runtime_initialized)
+    return SALTS_EINVAL;
+  if (socket->external_stopping) return SALTS_OK;
+  return flowmq_socket_progress_local(socket);
+}
+
+int flowmq_socket_internal_external_timeout(
+    flowmq_socket_t *socket, uint32_t max_wait_ms, uint32_t *wait_ms) {
+  if (socket == NULL || socket->external_backend == NULL ||
+      !socket->runtime_initialized || wait_ms == NULL)
+    return SALTS_EINVAL;
+  return cnet_client_external_timeout(
+      &socket->client, max_wait_ms, wait_ms);
+}
+
+int flowmq_socket_internal_route_external_completion(
+    flowmq_socket_t *socket, const native_io_completion *completion,
+    bool *consumed, size_t *events) {
+  if (consumed != NULL) *consumed = false;
+  if (events != NULL) *events = 0u;
+  if (socket == NULL || socket->external_backend == NULL ||
+      !socket->runtime_initialized || completion == NULL || consumed == NULL)
+    return SALTS_EINVAL;
+  return cnet_client_route_external_completion(
+      &socket->client, completion, consumed, events);
+}
+
+int flowmq_socket_internal_stop_external(flowmq_socket_t *socket) {
+  int pending = 0;
+  int status;
+  if (socket == NULL || socket->external_backend == NULL ||
+      !socket->runtime_initialized)
+    return SALTS_EINVAL;
+
+  /*
+   * External CNet stop never observes I/O and does not replace connection
+   * close admission. Initiate/continue close for every live FlowMQ peer, then
+   * let the embedding owner advance/observe/route terminal callbacks.
+   */
+  socket->external_stopping = 1u;
+  for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
+    flowmq_socket_peer_t *peer = &socket->peers[i];
+    if (!flowmq_peer_state_is_used(&peer->state) ||
+        flowmq_peer_state_is_retired(&peer->state))
+      continue;
+    status = cnet_close(&socket->client, peer->connection);
+    if (status == SALTS_OK || status == SALTS_EALREADY ||
+        status == SALTS_ENOENT) {
+      pending = 1;
+      continue;
+    }
+    if (status == SALTS_EBUSY || status == SALTS_ENOBUFS) {
+      pending = 1;
+      continue;
+    }
+    return status;
+  }
+
+  status = cnet_client_stop_external(&socket->client);
+  if (status == SALTS_OK) {
+    socket->external_stopped = 1u;
+    return SALTS_OK;
+  }
+  if (status == SALTS_EBUSY || pending) return SALTS_EBUSY;
+  return status;
+}
+#endif
 
 int flowmq_send(flowmq_socket_t *socket, const void *data, size_t size,
                 int flags) {
