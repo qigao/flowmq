@@ -317,6 +317,20 @@ jobs:
             echo "TLS retained evidence contains a failed operation" >&2
             exit 1
           fi
+          if grep -q '^OWNED_RX_EVIDENCE_FAIL ' "$log"; then
+            echo "owned receive evidence contains a failed operation" >&2
+            exit 1
+          fi
+          grep -q '^OWNED_RX_EVIDENCE_BEGIN transport=tcp$' "$log"
+          grep -q '^OWNED_RX_EVIDENCE_END transport=tcp$' "$log"
+          for payload in 64 65536 1048576; do
+            grep -q "^OWNED_RX_EVIDENCE mode=copy payload_bytes=$payload " "$log"
+            grep -q "^OWNED_RX_EVIDENCE mode=slice payload_bytes=$payload " "$log"
+          done
+          grep -Eq '^OWNED_RX_EVIDENCE mode=slice payload_bytes=64 .*direct_hits=[1-9][0-9]* ' "$log"
+          grep -Eq '^OWNED_RX_EVIDENCE mode=slice payload_bytes=1048576 .*direct_hits=0 ' "$log"
+          sed -n '/^OWNED_RX_EVIDENCE_BEGIN /,/^OWNED_RX_EVIDENCE_END /p' "$log" \
+            > "$result_dir/flowmq-owned-receive.md"
           grep -q '^TLS_EVIDENCE_BEGIN layout=natural_discontiguous$' "$log"
           grep -q '^TLS_EVIDENCE_END layout=natural_discontiguous$' "$log"
           for row in copy_64b retained_64b copy_64k retained_64k copy_1m retained_1m copy_2x256k retained_2x256k; do
@@ -328,6 +342,12 @@ jobs:
             echo ""
             sed -n '/^TLS_EVIDENCE_BEGIN /,/^TLS_EVIDENCE_END /p' "$log"
           } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flowmq-owned-receive-linux-x64
+          path: flowmq-retained-tls-results/flowmq-owned-receive.md
+          if-no-files-found: error
+          compression-level: 6
       - uses: actions/upload-artifact@v4
         with:
           name: flowmq-retained-tls-linux-x64
