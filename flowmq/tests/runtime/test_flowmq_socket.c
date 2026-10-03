@@ -335,10 +335,24 @@ spec("flowmq_socket lifecycle and pattern surface") {
     }
     check_equal(status, SALTS_OK);
 
+    /*
+     * Keep the receiver idle after DATA admission while the sender completes
+     * its native write. This makes the qualified class explicit: one complete
+     * FMQ packet is available before the receiver arms its owned CNet read.
+     * Arbitrary TCP fragmentation remains on the copied decoder fallback.
+     */
+    for (size_t i = 0u; i < 8u; ++i) {
+      flowmq_pollitem_t item = {.socket = sender};
+      size_t ready = 0u;
+      check_equal(flowmq_poll(&item, 1u, 1u, &ready), SALTS_OK);
+    }
+
     status = SALTS_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
                         status == SALTS_EBUSY; ++i) {
-      check_equal(progress_pair(sender, receiver), SALTS_OK);
+      flowmq_pollitem_t item = {.socket = receiver};
+      size_t ready = 0u;
+      check_equal(flowmq_poll(&item, 1u, 1u, &ready), SALTS_OK);
       status = flowmq_recv_slice(receiver, &slice, FLOWMQ_DONTWAIT);
     }
     check_equal(status, SALTS_OK);
