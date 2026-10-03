@@ -1676,20 +1676,23 @@ static void flowmq_socket_on_receive_slice(
   size_t consumed = 0u;
   int pause_receive = 0;
   int attempted_direct = 0;
+  int allow_fallback = 0;
   int direct = 0;
   int status = SALTS_OK;
 
   if (kind != CNET_MESSAGE_BYTES || slice.buffer == NULL ||
       slice.data == NULL || slice.length == 0u) {
     status = SALTS_EPROTO;
-  } else if (socket->transport == FLOWMQ_TRANSPORT_TCP &&
+  } else {
+    allow_fallback = 1;
+    if (socket->transport == FLOWMQ_TRANSPORT_TCP &&
              !peer->commit_pending &&
              flowmq_stream_decoder_available(&peer->decoder) == 0u &&
              flowmq_peer_state_handshake_has(
                  &peer->state, FLOWMQ_PEER_HANDSHAKE_HELLO_RX) &&
-             flowmq_peer_state_handshake_has(
-                 &peer->state, FLOWMQ_PEER_HANDSHAKE_SETTINGS_RX)) {
-    status = flowmq_protocol_decode_frame(
+               flowmq_peer_state_handshake_has(
+                   &peer->state, FLOWMQ_PEER_HANDSHAKE_SETTINGS_RX)) {
+      status = flowmq_protocol_decode_frame(
         (const char *)slice.data, slice.length, FLOWMQ_SOCKET_MAX_FRAME_SIZE,
         &frame, &consumed);
     if (status == SALTS_OK && consumed == slice.length &&
@@ -1708,10 +1711,11 @@ static void flowmq_socket_on_receive_slice(
             peer, &frame, &slice, &pause_receive);
       if (status == SALTS_OK) direct = 1;
     }
-    flowmq_protocol_frame_cleanup(&frame);
+      flowmq_protocol_frame_cleanup(&frame);
+    }
   }
 
-  if (!direct && !attempted_direct) {
+  if (allow_fallback && !direct && !attempted_direct) {
     status = flowmq_stream_decoder_append(
         &peer->decoder, slice.data, slice.length);
     if (status == SALTS_OK) status = flowmq_socket_process_receive(peer);
@@ -3140,6 +3144,16 @@ static int flowmq_socket_try_send_slice(flowmq_socket_t *socket,
   return SALTS_OK;
 }
 
+static int flowmq_socket_message_range_validate(
+    const flowmq_socket_message_t *message) {
+  size_t used;
+  if (message == NULL || message->buffer == NULL) return SALTS_EPROTO;
+  used = mem_buffer_used(message->buffer);
+  if (message->offset > used || message->size > used - message->offset)
+    return SALTS_EPROTO;
+  return SALTS_OK;
+}
+
 static int flowmq_socket_try_recv(flowmq_socket_t *socket, void *data,
                                   size_t capacity, size_t *received,
                                   int flags) {
@@ -3171,6 +3185,8 @@ static int flowmq_socket_try_recv(flowmq_socket_t *socket, void *data,
       (!message->more && socket->inbound_messages == 0u))
     return SALTS_EPROTO;
   if (message->peer_index >= FLOWMQ_SOCKET_PEER_CAPACITY) return SALTS_EPROTO;
+  status = flowmq_socket_message_range_validate(message);
+  if (status != SALTS_OK) return status;
   peer = &socket->peers[message->peer_index];
   if (!flowmq_peer_state_is_used(&peer->state) ||
       message->peer_generation == 0u ||
@@ -3186,9 +3202,6 @@ static int flowmq_socket_try_recv(flowmq_socket_t *socket, void *data,
         &peer->flow_control, message->credit_size, consumed_at_ns);
     if (status != SALTS_OK) return status;
   }
-  if (message->offset > mem_buffer_used(message->buffer) ||
-      message->size > mem_buffer_used(message->buffer) - message->offset)
-    return SALTS_EPROTO;
   if (message->size != 0u)
     memcpy(data, mem_buffer_const_data(message->buffer) + message->offset,
            message->size);
@@ -3257,6 +3270,8 @@ static int flowmq_socket_try_recv_slice(flowmq_socket_t *socket,
       (!message->more && socket->inbound_messages == 0u))
     return SALTS_EPROTO;
   if (message->peer_index >= FLOWMQ_SOCKET_PEER_CAPACITY) return SALTS_EPROTO;
+  status = flowmq_socket_message_range_validate(message);
+  if (status != SALTS_OK) return status;
 
   peer = &socket->peers[message->peer_index];
   if (!flowmq_peer_state_is_used(&peer->state) ||
@@ -3302,9 +3317,6 @@ static int flowmq_socket_try_recv_slice(flowmq_socket_t *socket,
    * into the application-visible slice. Do not retain+release: this is one
    * ownership transfer and also supports a valid zero-length message part.
    */
-  if (message->offset > mem_buffer_used(message->buffer) ||
-      message->size > mem_buffer_used(message->buffer) - message->offset)
-    return SALTS_EPROTO;
   out->data = mem_buffer_data(message->buffer) + message->offset;
   out->length = message->size;
   out->buffer = message->buffer;
