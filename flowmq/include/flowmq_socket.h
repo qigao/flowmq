@@ -56,7 +56,8 @@ typedef enum flowmq_socket_option_e {
   FLOWMQ_SNDHWM_BYTES = 1101,
   FLOWMQ_RCVHWM_BYTES = 1102,
   FLOWMQ_FLOW_UPDATE_QUANTUM = 1103,
-  FLOWMQ_FLOW_UPDATE_IVL = 1104
+  FLOWMQ_FLOW_UPDATE_IVL = 1104,
+  FLOWMQ_REUSE_PORT = 1105
 } flowmq_socket_option_t;
 
 typedef struct flowmq_ctx_s flowmq_ctx_t;
@@ -144,7 +145,10 @@ FLOWMQ_C_API int flowmq_last_endpoint(const flowmq_socket_t *socket, char *buffe
  * copies the immutable policy synchronously. A socket with this policy may
  * bind only a TLS listener configured to require client certificates.
  * FLOW_UPDATE quantum defaults to one quarter of receive byte HWM with a
- * bounded 64 KiB floor, and its interval defaults to 10 ms. These options are
+ * bounded 64 KiB floor, and its interval defaults to 10 ms.
+ * FLOWMQ_REUSE_PORT is an int boolean fixed before bind/connect; when enabled,
+ * listener bind requests the released CNet reuse-port contract and propagates
+ * SALTS_ENOTSUP on unsupported platforms without fallback. These options are
  * fixed before bind/connect. Reconnect, heartbeat, and flow-credit progress are
  * caller-driven by flowmq_send(), flowmq_recv(), or flowmq_poll().
  */
