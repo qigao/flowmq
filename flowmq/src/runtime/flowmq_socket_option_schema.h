@@ -118,7 +118,10 @@
          (FLOWMQ_FLOW_UPDATE_IVL, FLOWMQ_SOCKET_OPTION_VALUE_INT,                   \
           FLOWMQ_SOCKET_OPTION_ACCESS_SET, FLOWMQ_SOCKET_OPTION_SET_STARTUP,         \
           FLOWMQ_SOCKET_OPTION_VALIDATE_SIGNED_RANGE, sizeof(int), 1, INT_MAX,      \
-          0u))
+          0u),                                                                      \
+         (FLOWMQ_REUSE_PORT, FLOWMQ_SOCKET_OPTION_VALUE_INT,                        \
+          FLOWMQ_SOCKET_OPTION_ACCESS_SET, FLOWMQ_SOCKET_OPTION_SET_STARTUP,         \
+          FLOWMQ_SOCKET_OPTION_VALIDATE_SIGNED_RANGE, sizeof(int), 0, 1, 0u))
 
 #define FLOWMQ_SOCKET_OPTION_SCHEMA(M)       \
   FLOWMQ_SOCKET_OPTION_SCHEMA_CLASSIC(M)     \
