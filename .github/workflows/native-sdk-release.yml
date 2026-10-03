@@ -297,6 +297,43 @@ jobs:
               cat "$result_dir/flowmq-reuse-port-multicore.md"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
+      - name: Run FlowMQ retained TLS natural framing benchmark
+        shell: bash
+        env:
+          FLOWMQ_BENCH_CI: "1"
+        run: |
+          set -euo pipefail
+          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$GITHUB_WORKSPACE/vcpkg_installed/x64-linux/lib"
+          result_dir="$GITHUB_WORKSPACE/flowmq-retained-tls-results"
+          benchmark="$GITHUB_WORKSPACE/build/flowmq/bin/bench_flowmq_socket"
+          mkdir -p "$result_dir"
+          if [[ ! -x "$benchmark" ]]; then
+            echo "FlowMQ socket benchmark executable not found: $benchmark" >&2
+            exit 1
+          fi
+          log="$result_dir/flowmq-retained-tls.md"
+          "$benchmark" 2>&1 | tee "$log"
+          if grep -q '^TLS_EVIDENCE_FAIL ' "$log"; then
+            echo "TLS retained evidence contains a failed operation" >&2
+            exit 1
+          fi
+          grep -q '^TLS_EVIDENCE_BEGIN layout=natural_discontiguous$' "$log"
+          grep -q '^TLS_EVIDENCE_END layout=natural_discontiguous$' "$log"
+          for row in copy_64b retained_64b copy_64k retained_64k copy_1m retained_1m copy_2x256k retained_2x256k; do
+            grep -q "^TLS_EVIDENCE name=$row " "$log"
+          done
+          {
+            echo ""
+            echo "## FlowMQ retained TLS natural framing"
+            echo ""
+            sed -n '/^TLS_EVIDENCE_BEGIN /,/^TLS_EVIDENCE_END /p' "$log"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flowmq-retained-tls-linux-x64
+          path: flowmq-retained-tls-results
+          if-no-files-found: error
+          compression-level: 6
       - uses: actions/upload-artifact@v4
         with:
           name: flowmq-reuse-port-linux-x64

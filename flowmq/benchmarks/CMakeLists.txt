@@ -16,6 +16,9 @@ cmake_add_benchmark(
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_socket.c
   LIBS FlowMQ::Transport Salts::TinyTest
   FOLDER "flowmq/benchmarks/runtime")
+target_include_directories(
+  bench_flowmq_socket
+  PRIVATE ${PROJECT_SOURCE_DIR}/flowmq/tests/runtime)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   find_package(Threads REQUIRED)
