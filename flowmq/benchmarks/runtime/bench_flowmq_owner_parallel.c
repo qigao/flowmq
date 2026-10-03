@@ -79,6 +79,7 @@ typedef struct owner_parallel_gate_s {
   size_t ready;
   size_t done;
   bool start;
+  bool cleanup;
   int failure;
 } owner_parallel_gate_t;
 
@@ -290,9 +291,17 @@ static void *owner_parallel_peer_entry(void *user) {
   peer->status = status;
   peer->completed = status == SALTS_OK && peer->echoed_cycles == peer->cycles;
   (void)pthread_cond_broadcast(&peer->changed);
-  while (!peer->stop)
-    (void)pthread_cond_wait(&peer->changed, &peer->mutex);
   (void)pthread_mutex_unlock(&peer->mutex);
+
+  /*
+   * A successful FlowMQ send is local admission, not remote completion.
+   * Keep the peer owner progressing after its final echo admission until the
+   * controller confirms every measured owner received its final reply.
+   */
+  while (status == SALTS_OK && !owner_parallel_peer_stopping(peer)) {
+    status = owner_parallel_progress_socket(socket, 1u);
+  }
+  if (owner_parallel_peer_stopping(peer)) status = SALTS_OK;
 
   free(buffer);
   if (socket != NULL) {
@@ -673,6 +682,16 @@ finish_measurement:
 
   arg->status = status;
   owner_parallel_gate_done(arg->gate, status);
+
+  /*
+   * Keep the measured owner socket alive while the peer drains its final
+   * admitted reply. The controller stops peers first, then releases owners
+   * into teardown.
+   */
+  (void)pthread_mutex_lock(&arg->gate->mutex);
+  while (!arg->gate->cleanup)
+    (void)pthread_cond_wait(&arg->gate->changed, &arg->gate->mutex);
+  (void)pthread_mutex_unlock(&arg->gate->mutex);
   goto cleanup;
 
 fail:
@@ -721,6 +740,7 @@ static int owner_parallel_run_mode(owner_parallel_mode_t mode,
   owner_parallel_thread_arg_t args[OWNER_PARALLEL_LANES];
   pthread_t threads[OWNER_PARALLEL_LANES];
   bool thread_started[OWNER_PARALLEL_LANES] = {false, false};
+  bool peer_destroyed[OWNER_PARALLEL_LANES] = {false, false};
   uint64_t latencies[OWNER_PARALLEL_LANES * OWNER_PARALLEL_SAMPLES];
   const size_t cycles = OWNER_PARALLEL_WARMUPS + OWNER_PARALLEL_SAMPLES;
   const size_t thread_count =
@@ -798,6 +818,10 @@ static int owner_parallel_run_mode(owner_parallel_mode_t mode,
   if (wall_started == 0u) {
     status = SALTS_EIO;
     gate.failure = status;
+    gate.start = true;
+    (void)pthread_cond_broadcast(&gate.changed);
+    (void)pthread_mutex_unlock(&gate.mutex);
+    goto join_threads;
   }
   gate.start = true;
   (void)pthread_cond_broadcast(&gate.changed);
@@ -812,6 +836,21 @@ static int owner_parallel_run_mode(owner_parallel_mode_t mode,
       status = SALTS_EIO;
   }
   if (gate.failure != SALTS_OK) status = gate.failure;
+  (void)pthread_mutex_unlock(&gate.mutex);
+
+  /*
+   * All measured owners are now parked before teardown. Stop and join the
+   * echo peers while the owner sockets still exist, then permit owner cleanup.
+   */
+  for (size_t lane = 0u; lane < OWNER_PARALLEL_LANES; ++lane) {
+    const int peer_status =
+        owner_parallel_peer_destroy(&peers[lane], status != SALTS_OK);
+    peer_destroyed[lane] = true;
+    if (status == SALTS_OK && peer_status != SALTS_OK) status = peer_status;
+  }
+  (void)pthread_mutex_lock(&gate.mutex);
+  gate.cleanup = true;
+  (void)pthread_cond_broadcast(&gate.changed);
   (void)pthread_mutex_unlock(&gate.mutex);
 
 join_threads:
@@ -879,9 +918,11 @@ join_threads:
 
 cleanup:
   for (size_t lane = 0u; lane < OWNER_PARALLEL_LANES; ++lane) {
-    const int peer_status =
-        owner_parallel_peer_destroy(&peers[lane], status != SALTS_OK);
-    if (status == SALTS_OK && peer_status != SALTS_OK) status = peer_status;
+    if (!peer_destroyed[lane]) {
+      const int peer_status =
+          owner_parallel_peer_destroy(&peers[lane], status != SALTS_OK);
+      if (status == SALTS_OK && peer_status != SALTS_OK) status = peer_status;
+    }
   }
   owner_parallel_gate_destroy(&gate);
   return status;
