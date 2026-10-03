@@ -17,6 +17,21 @@ cmake_add_benchmark(
   LIBS FlowMQ::Transport Salts::TinyTest
   FOLDER "flowmq/benchmarks/runtime")
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  find_package(Threads REQUIRED)
+  cmake_add_benchmark(
+    bench_flowmq_owner_parallel
+    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_owner_parallel.c
+    LIBS FlowMQ::Transport Threads::Threads
+    FOLDER "flowmq/benchmarks/runtime")
+  set_target_properties(
+    bench_flowmq_owner_parallel
+    PROPERTIES
+      C_STANDARD 11
+      C_STANDARD_REQUIRED ON
+      C_EXTENSIONS OFF)
+endif()
+
 cmake_add_benchmark(
   bench_flowmq_pattern_dispatch
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_pattern_dispatch.c
