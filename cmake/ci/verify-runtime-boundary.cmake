@@ -77,7 +77,7 @@ foreach(_flowmq_sg_required IN ITEMS
         "CNET_RETAINED_VECTOR_MAX - socket->send_retained_count"
         "if (socket->send_retained_count != 0u) return SALTS_ENOTSUP;"
         "if (socket->send_staged_count != 0u) return SALTS_ENOTSUP;"
-        "if (socket->transport != FLOWMQ_TRANSPORT_TCP) return SALTS_ENOTSUP;")
+        "socket->transport != FLOWMQ_TRANSPORT_TLS)\n    return SALTS_ENOTSUP;")
   string(FIND "${_flowmq_socket_text}"
               "${_flowmq_sg_required}"
               _flowmq_sg_required_index)
