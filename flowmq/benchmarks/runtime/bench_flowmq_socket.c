@@ -95,6 +95,46 @@ static int bench_pair_close(bench_pair_t *pair) {
   return result;
 }
 
+static int bench_pair_warm_tls(bench_pair_t *pair) {
+  static const unsigned char probe[] = {0x5au};
+  unsigned char received[sizeof(probe)] = {0};
+  size_t received_size = 0u;
+  int status = SALTS_EBUSY;
+
+  if (pair == NULL || pair->sender == NULL || pair->receiver == NULL)
+    return SALTS_EINVAL;
+
+  for (size_t i = 0u;
+       (status == SALTS_EBUSY || status == SALTS_ENOBUFS) &&
+       i < BENCH_PROGRESS_LIMIT; ++i) {
+    flowmq_pollitem_t items[] = {
+        {.socket = pair->sender}, {.socket = pair->receiver}};
+    size_t ready = 0u;
+    status = flowmq_poll(items, 2u, 1u, &ready);
+    if (status == SALTS_OK)
+      status = flowmq_send(pair->sender, probe, sizeof(probe),
+                           FLOWMQ_DONTWAIT);
+  }
+  if (status != SALTS_OK) return status;
+
+  status = SALTS_EBUSY;
+  for (size_t i = 0u; status == SALTS_EBUSY &&
+                      i < BENCH_PROGRESS_LIMIT; ++i) {
+    flowmq_pollitem_t items[] = {
+        {.socket = pair->sender}, {.socket = pair->receiver}};
+    size_t ready = 0u;
+    status = flowmq_poll(items, 2u, 1u, &ready);
+    if (status == SALTS_OK)
+      status = flowmq_recv(pair->receiver, received, sizeof(received),
+                           &received_size, FLOWMQ_DONTWAIT);
+  }
+  if (status != SALTS_OK) return status;
+  return received_size == sizeof(probe) &&
+                 memcmp(received, probe, sizeof(probe)) == 0
+             ? SALTS_OK
+             : SALTS_EPROTO;
+}
+
 static int bench_pair_open_tls(bench_pair_t *pair) {
   char endpoint[128];
   size_t endpoint_size = 0u;
@@ -144,6 +184,8 @@ static int bench_pair_open_tls(bench_pair_t *pair) {
                                   &endpoint_size);
   if (status == SALTS_OK)
     status = flowmq_connect(pair->sender, endpoint);
+  if (status == SALTS_OK)
+    status = bench_pair_warm_tls(pair);
   if (status != SALTS_OK) {
     (void)bench_pair_close(pair);
     return status;
