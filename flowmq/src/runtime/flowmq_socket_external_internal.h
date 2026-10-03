@@ -25,6 +25,9 @@ int flowmq_socket_internal_attach_external_backend(
 int flowmq_socket_internal_advance_external(
     flowmq_socket_t *socket, size_t *events);
 
+/* Runs the ordinary post-CNet FlowMQ-local progress stage exactly once. */
+int flowmq_socket_internal_progress_local(flowmq_socket_t *socket);
+
 int flowmq_socket_internal_external_timeout(
     flowmq_socket_t *socket, uint32_t max_wait_ms, uint32_t *wait_ms);
 
