@@ -108,6 +108,25 @@ jobs:
           export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$FLOWMQ_VCPKG_INSTALLED/x64-linux/lib"
           log="$RUNNER_TEMP/flowmq-socket-benchmark.log"
           build/benchmark/bin/bench_flowmq_socket 2>&1 | tee "$log"
+          if grep -q '^TLS_EVIDENCE_FAIL ' "$log"; then
+            echo "TLS percentile evidence contains a failed operation" >&2
+            exit 1
+          fi
+          grep -q '^TLS_EVIDENCE_BEGIN layout=natural_discontiguous        uses: actions/upload-artifact@v4
+        with:
+          name: flowmq-socket-benchmark-linux-x64
+          path: ${{ runner.temp }}/flowmq-socket-benchmark.log
+          if-no-files-found: error
+ "$log"
+          grep -q '^TLS_EVIDENCE_END layout=natural_discontiguous        uses: actions/upload-artifact@v4
+        with:
+          name: flowmq-socket-benchmark-linux-x64
+          path: ${{ runner.temp }}/flowmq-socket-benchmark.log
+          if-no-files-found: error
+ "$log"
+          for row in copy_64b retained_64b copy_64k retained_64k copy_1m retained_1m copy_2x256k retained_2x256k; do
+            grep -q "^TLS_EVIDENCE name=$row " "$log"
+          done
 
       - name: Upload benchmark evidence
         uses: actions/upload-artifact@v4
