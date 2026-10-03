@@ -27,7 +27,7 @@ enum {
 };
 #undef FLOWMQ_SOCKET_OPTION_COUNT_ROW
 
-_Static_assert(FLOWMQ_SOCKET_OPTION_SCHEMA_COUNT == 22,
+_Static_assert(FLOWMQ_SOCKET_OPTION_SCHEMA_COUNT == 23,
                "socket option schema must cover every public option");
 
 size_t flowmq_socket_option_descriptor_count(void) {
