@@ -21,18 +21,98 @@ FlowMQ 是 C11 的 pattern-oriented messaging library。它提供 FMQ/6 wire cod
 > Release boundary: current Salts contains CNet owned-receive #594/#597 的 producer-owned receive contract。本次依赖对齐只把该 producer API 纳入可用基线，不在依赖升级中静默改变 FlowMQ runtime ownership；`flowmq_recv_slice()` 目前仍只消除 inbound ring → caller 的最后一次 copy。decoder/CNet producer-owned backing 的接入继续由 FlowMQ #46 单独实现和验证。
 
 安装包不固定 Salts/SaltsUtils 版本，始终消费 latest published stable SDK；公开链接依赖是
-`Salts::Core` 与 SaltsUtils 提供的 `Salts::DataBind`；`Salts::CNet`、`Salts::CSTL`
-和 `Salts::CMeta` 是实现私有依赖。FMP/1 保持现有 header-only wire view/builder ABI，
+`Salts::Core` 与 SaltsUtils 提供的 `Salts::DataBind`；`Salts::CNet`、`Salts::NativeIO`、
+`Salts::CSTL` 和 `Salts::CMeta` 都是实现私有依赖。FMP/1 保持现有 header-only wire view/builder ABI，
 但生成入口统一使用 DataBind `salts-idlc`，不再依赖已废止的 TBE producer target/tool。
 
 ## Caller-driven transport
 
-旧的 callback endpoint API 已删除。新的公开边界只保留 ZeroMQ 风格的
+旧的 callback endpoint API 已删除。普通 socket 保留 ZeroMQ 风格的
 `context/socket + bind/connect + send/recv + poll`，入口是 `flowmq_socket.h`。
+FlowMQ 1.2 另外提供显式 owner-lane API（`flowmq_owner.h`），用于一个调用线程同时拥有
+多个 socket 并共享一次 NativeIO wait。
 
-CNet 仍由 socket owner 线程直接推进，不创建 worker/progress thread，也不把同一个 socket
+CNet 仍由 owner 线程直接推进，不创建 worker/progress thread，也不把同一个 socket
 包装成 MPSC、Actor 或 Reactive stream。TCP 与 verified TLS 使用同一 peer、decoder、FSM
 和 message queue 路径；TLS 只在连接适配层增加证书与主机名验证。
+
+### Owner lane：多 socket 共用一次 wait
+
+FlowMQ 有两种互斥、生命周期固定的 progress 模式：
+
+```text
+standalone socket:
+  flowmq_socket()
+      -> one socket-owned CNet/NativeIO wait
+      -> flowmq_poll()
+
+owner-lane socket:
+  flowmq_owner_new()
+      -> one owner-owned NativeIO backend
+      -> flowmq_owner_socket() A
+      -> flowmq_owner_socket() B
+      -> ...
+      -> flowmq_owner_poll()  // one shared wait
+```
+
+owner lane **不是线程池**。它不会创建线程，也不会迁移 connection；所有 owner-created
+socket 都必须由调用 `flowmq_owner_poll()` 的同一线程串行拥有。一个 owner poll cycle 会：
+
+1. 对每个 live lane-local CNet client 执行一次 external advance；
+2. 取 CNet deadline、reconnect、heartbeat、FLOW_UPDATE 与 caller timeout 的最小值；
+3. 对共享 NativeIO backend 执行一次 observe；
+4. 把每个 completion 精确路由回唯一 owning socket；
+5. 对每个 live socket 执行一次 FlowMQ-local reconnect/control/flush progress；
+6. 用与普通 `flowmq_poll()` 相同的 readiness 规则返回 `POLLIN/POLLOUT/POLLERR`。
+
+不会在 routed batch 后额外执行第二次 CNet advance，也不会通过 central callback/mailbox
+把每条消息绕回另一条线程。
+
+```c
+#include <flowmq_owner.h>
+
+flowmq_ctx_t *ctx = flowmq_ctx_new();
+flowmq_owner_config_t cfg = FLOWMQ_OWNER_CONFIG_INIT;
+cfg.socket_capacity = 4;
+
+flowmq_owner_t *owner = flowmq_owner_new(ctx, &cfg);
+flowmq_socket_t *a = flowmq_owner_socket(owner, FLOWMQ_PAIR);
+flowmq_socket_t *b = flowmq_owner_socket(owner, FLOWMQ_DEALER);
+
+/* 当前 owner-lane product slice 是 TCP client-side。 */
+flowmq_connect(a, "tcp://127.0.0.1:7001");
+flowmq_connect(b, "tcp://127.0.0.1:7002");
+
+flowmq_pollitem_t items[] = {
+    {.socket = a, .events = FLOWMQ_POLLIN | FLOWMQ_POLLOUT},
+    {.socket = b, .events = FLOWMQ_POLLIN | FLOWMQ_POLLOUT},
+};
+size_t ready = 0;
+flowmq_owner_poll(owner, items, 2, 100, &ready);
+
+/* canonical owner-lane I/O: nonblocking send/recv + owner poll */
+flowmq_send(a, "hello", 5, FLOWMQ_DONTWAIT);
+
+flowmq_owner_close_socket(owner, a);
+flowmq_owner_close_socket(owner, b);
+flowmq_owner_term(owner);
+flowmq_ctx_term(ctx);
+```
+
+当前第一阶段有意保持边界窄：
+
+- owner-created socket 不能传给普通 `flowmq_poll()`；会 fail closed；
+- owner-created socket 不能直接 `flowmq_close()`；使用 `flowmq_owner_close_socket()`；
+- owner 存在时 `flowmq_ctx_term()` 返回 `SALTS_EBUSY`；
+- owner-created socket 当前不支持 `flowmq_bind()`；same-endpoint/listener multicore admission
+  由独立设计跟踪，不通过跨 owner native-handle handoff 偷偷实现；
+- 阻塞 `send/recv` 如果需要 transport progress 会 fail closed；owner lane 的 canonical 路径是
+  `FLOWMQ_DONTWAIT + flowmq_owner_poll()`。
+
+#61 已证明独立 FlowMQ owner 在不同 physical core 上可获得约 1.79x–1.95x 的双 owner
+throughput；#67/#69 的 one-owner/two-socket shared-wait qualification 证明 owner lane 相比旧
+multi-socket `flowmq_poll()` sleep loop 属于明显更高效的执行类别。该收益来自共享 wait，
+不是隐藏 worker 或 connection migration。
 
 发送 API 有两个明确的 ownership surface：`flowmq_send()` 在返回成功前复制 borrowed
 caller bytes；`flowmq_send_slice()` 用于 plaintext TCP 的 canonical retained DATA。
@@ -63,7 +143,8 @@ receive backing 优化，不与 public recv-slice ABI 混在同一阶段。
 连接级退避语义：IVL 默认 100ms，`-1` 禁止重连，`0` 表示下一轮 owner progress 立即
 尝试；IVL_MAX 默认 `0`，表示固定 IVL，设置为不小于 IVL 的正值后按上限做指数退避。
 实际间隔会随机化以降低重连风暴。断线只调度 endpoint，真正的 TCP/TLS connect、
-HELLO/SETTINGS 与订阅重放仍由应用后续调用 `send/recv/poll` 推进，不创建 timer thread。
+HELLO/SETTINGS 与订阅重放仍由应用后续调用普通 `send/recv/poll` 或 owner-lane
+`flowmq_owner_poll()` 推进，不创建 timer thread。
 
 `FLOWMQ_SNDHWM`/`FLOWMQ_RCVHWM` 使用 `int` 消息数，扩展选项
 `FLOWMQ_SNDHWM_BYTES`/`FLOWMQ_RCVHWM_BYTES` 使用 `size_t` payload 字节数。四项都必须在
@@ -76,7 +157,8 @@ HELLO/SETTINGS 与订阅重放仍由应用后续调用 `send/recv/poll` 推进�
 
 `FLOWMQ_HEARTBEAT_IVL`/`FLOWMQ_HEARTBEAT_TIMEOUT` 使用非负 `int` 毫秒值，也必须在首次
 bind/connect 前设置。IVL 默认为 `0`（禁用）；启用 IVL 且未显式设置 TIMEOUT 时，TIMEOUT
-等于 IVL。心跳与断线检测没有后台线程，只在 owner 调用 `send`、`recv` 或 `poll` 时推进。
+等于 IVL。心跳与断线检测没有后台线程，只在 ordinary socket 的 `send/recv/poll` 或
+owner-lane 的 `flowmq_owner_poll()` 中推进。
 FMQ/6 PING 不携带对端 TTL，因此当前没有伪装提供 `FLOWMQ_HEARTBEAT_TTL`。
 FMQ/6 在 HELLO 后强制 SETTINGS，并以 receiver-driven cumulative credit 协调 DATA；
 TCP/TLS 不发送同流 FEC repair symbol。credit 与 heartbeat 都由调用线程推进。
