@@ -1,4 +1,5 @@
 #include "flowmq_socket.h"
+#include "flowmq_socket_external_internal.h"
 #include "flowmq_tls_identity_map.h"
 #include "flowmq_tls_test_material.h"
 #include "tinytest.h"
@@ -6,6 +7,7 @@
 #include <salts/clock.h>
 
 #include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -359,6 +361,27 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_not_null(slice.buffer);
     check_equal(slice.length, sizeof(payload) - 1u);
     check_equal(memcmp(slice.data, payload, slice.length), 0);
+    {
+      flowmq_owned_receive_diagnostics_t diagnostics = {0};
+      check_equal(flowmq_socket_internal_owned_receive_diagnostics(
+                      receiver, &diagnostics),
+                  SALTS_OK);
+      if (diagnostics.fastpath == 0u) {
+        fprintf(stderr,
+                "owned_receive_diag switches=%llu callbacks=%llu fastpath=%llu "
+                "decoder=%llu incomplete=%llu coalesced=%llu shape=%llu\n",
+                (unsigned long long)diagnostics.switches,
+                (unsigned long long)diagnostics.callbacks,
+                (unsigned long long)diagnostics.fastpath,
+                (unsigned long long)diagnostics.fallback_decoder,
+                (unsigned long long)diagnostics.fallback_incomplete,
+                (unsigned long long)diagnostics.fallback_coalesced,
+                (unsigned long long)diagnostics.fallback_shape);
+      }
+      check_true(diagnostics.switches != 0u);
+      check_true(diagnostics.callbacks != 0u);
+      check_true(diagnostics.fastpath != 0u);
+    }
     check_true(mem_buffer_pool(slice.buffer) == mem_global());
 
     mem_slice_release(&slice);
