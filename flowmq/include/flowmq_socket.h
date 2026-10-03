@@ -56,7 +56,8 @@ typedef enum flowmq_socket_option_e {
   FLOWMQ_SNDHWM_BYTES = 1101,
   FLOWMQ_RCVHWM_BYTES = 1102,
   FLOWMQ_FLOW_UPDATE_QUANTUM = 1103,
-  FLOWMQ_FLOW_UPDATE_IVL = 1104
+  FLOWMQ_FLOW_UPDATE_IVL = 1104,
+  FLOWMQ_REUSE_PORT = 1105
 } flowmq_socket_option_t;
 
 typedef struct flowmq_ctx_s flowmq_ctx_t;
@@ -128,7 +129,8 @@ FLOWMQ_C_API int flowmq_last_endpoint(const flowmq_socket_t *socket, char *buffe
 /**
  * Set a socket option. HWM message, heartbeat, and reconnect options use `int`;
  * HWM byte options and FLOWMQ_FLOW_UPDATE_QUANTUM use `size_t`;
- * FLOWMQ_FLOW_UPDATE_IVL uses positive integer milliseconds. HWM values must
+ * FLOWMQ_FLOW_UPDATE_IVL uses positive integer milliseconds. FLOWMQ_REUSE_PORT
+ * uses int 0/1 and is consumed only when creating a listener. HWM values must
  * be positive. Heartbeat values are milliseconds and must be nonnegative.
  * FLOWMQ_HEARTBEAT_IVL defaults to
  * zero (disabled); once enabled, FLOWMQ_HEARTBEAT_TIMEOUT defaults to the
@@ -144,8 +146,10 @@ FLOWMQ_C_API int flowmq_last_endpoint(const flowmq_socket_t *socket, char *buffe
  * copies the immutable policy synchronously. A socket with this policy may
  * bind only a TLS listener configured to require client certificates.
  * FLOW_UPDATE quantum defaults to one quarter of receive byte HWM with a
- * bounded 64 KiB floor, and its interval defaults to 10 ms. These options are
- * fixed before bind/connect. Reconnect, heartbeat, and flow-credit progress are
+ * bounded 64 KiB floor, and its interval defaults to 10 ms. FLOWMQ_REUSE_PORT
+ * defaults to 0; value 1 requests SO_REUSEPORT and fails bind with
+ * SALTS_ENOTSUP when the released CNet/backend does not support it. These
+ * options are fixed before bind/connect. Reconnect, heartbeat, and flow-credit progress are
  * caller-driven by flowmq_send(), flowmq_recv(), or flowmq_poll().
  */
 FLOWMQ_C_API int flowmq_setsockopt(flowmq_socket_t *socket, int option,
