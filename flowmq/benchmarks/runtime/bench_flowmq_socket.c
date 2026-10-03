@@ -651,10 +651,12 @@ spec("FlowMQ direct socket benchmark") {
     const size_t multipart_large_samples =
         bench_socket_samples(BENCH_MULTIPART_LARGE_SAMPLES, 1u);
     mem_buffer_t *payload_buffer;
+    mem_buffer_t *large_buffer;
     mem_buffer_t *retained_large_buffer;
     mem_buffer_t *multipart_small_buffer;
     mem_buffer_t *multipart_large_buffer;
     mem_slice_t payload_slice;
+    mem_slice_t large_slice;
     mem_slice_t retained_large_slice;
     mem_slice_t multipart_small_slices[BENCH_MULTIPART_SMALL_PARTS] = {0};
     mem_slice_t multipart_large_slices[BENCH_MULTIPART_LARGE_PARTS] = {0};
@@ -671,6 +673,8 @@ spec("FlowMQ direct socket benchmark") {
 
     payload_buffer =
         mem_wrap_external(payload, sizeof(payload), NULL, NULL);
+    large_buffer =
+        mem_wrap_external(large_payload, sizeof(large_payload), NULL, NULL);
     retained_large_buffer =
         mem_wrap_external(retained_large_payload,
                           sizeof(retained_large_payload), NULL, NULL);
@@ -679,13 +683,16 @@ spec("FlowMQ direct socket benchmark") {
     multipart_large_buffer =
         mem_wrap_external(multipart_large, sizeof(multipart_large), NULL, NULL);
     check_not_null(payload_buffer);
+    check_not_null(large_buffer);
     check_not_null(retained_large_buffer);
     check_not_null(multipart_small_buffer);
     check_not_null(multipart_large_buffer);
     payload_slice = mem_slice(payload_buffer, 0u, sizeof(payload));
+    large_slice = mem_slice(large_buffer, 0u, sizeof(large_payload));
     retained_large_slice =
         mem_slice(retained_large_buffer, 0u, sizeof(retained_large_payload));
     check_not_null(payload_slice.buffer);
+    check_not_null(large_slice.buffer);
     check_not_null(retained_large_slice.buffer);
     for (size_t part = 0u; part < BENCH_MULTIPART_SMALL_PARTS; ++part) {
       multipart_small_slices[part] =
@@ -917,10 +924,12 @@ spec("FlowMQ direct socket benchmark") {
     for (size_t part = 0u; part < BENCH_MULTIPART_SMALL_PARTS; ++part)
       mem_slice_release(&multipart_small_slices[part]);
     mem_slice_release(&retained_large_slice);
+    mem_slice_release(&large_slice);
     mem_slice_release(&payload_slice);
     mem_buffer_release(multipart_large_buffer);
     mem_buffer_release(multipart_small_buffer);
     mem_buffer_release(retained_large_buffer);
+    mem_buffer_release(large_buffer);
     mem_buffer_release(payload_buffer);
     check_equal(bench_pair_close(&pair), SALTS_OK);
   }
