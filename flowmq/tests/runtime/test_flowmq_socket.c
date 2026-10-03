@@ -306,6 +306,53 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
+
+  it("transfers one complete TCP DATA packet from CNet producer backing") {
+    static unsigned char payload[] =
+        "owned-cnet-single-packet-fast-path";
+    char endpoint[128] = {0};
+    size_t endpoint_size = 0u;
+    mem_slice_t slice = {0};
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *sender = flowmq_socket(ctx, FLOWMQ_PAIR);
+    flowmq_socket_t *receiver = flowmq_socket(ctx, FLOWMQ_PAIR);
+    int status = SALTS_EBUSY;
+
+    check_not_null(ctx);
+    check_not_null(sender);
+    check_not_null(receiver);
+    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), SALTS_OK);
+    check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
+                                     &endpoint_size),
+                SALTS_OK);
+    check_equal(flowmq_connect(sender, endpoint), SALTS_OK);
+
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
+      status = flowmq_send(sender, payload, sizeof(payload) - 1u,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+
+    status = SALTS_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
+      status = flowmq_recv_slice(receiver, &slice, FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    check_not_null(slice.buffer);
+    check_equal(slice.length, sizeof(payload) - 1u);
+    check_equal(memcmp(slice.data, payload, slice.length), 0);
+    check_true(mem_buffer_pool(slice.buffer) == mem_global());
+
+    mem_slice_release(&slice);
+    check_equal(flowmq_close(sender), SALTS_OK);
+    check_equal(flowmq_close(receiver), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+  }
+
   it("transfers inbound buffer ownership through recv slice across later progress") {
     enum { OWNED_RECV_BYTES = 64u * 1024u + 17u };
     static unsigned char first[OWNED_RECV_BYTES];
