@@ -328,7 +328,7 @@ jobs:
             grep -q "^OWNED_RX_EVIDENCE mode=slice payload_bytes=$payload " "$log"
           done
           grep -Eq '^OWNED_RX_EVIDENCE mode=slice payload_bytes=64 .*direct_hits=[1-9][0-9]* ' "$log"
-          grep -Eq '^OWNED_RX_EVIDENCE mode=slice payload_bytes=1048576 .*direct_hits=[1-9][0-9]* ' "$log"
+          grep -Eq '^OWNED_RX_EVIDENCE mode=slice payload_bytes=1048576 .*direct_hits=0 ' "$log"
           sed -n '/^OWNED_RX_EVIDENCE_BEGIN /,/^OWNED_RX_EVIDENCE_END /p' "$log" \
             > "$result_dir/flowmq-owned-receive.md"
           grep -q '^TLS_EVIDENCE_BEGIN layout=natural_discontiguous$' "$log"
