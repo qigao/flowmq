@@ -2,6 +2,7 @@
 #define _GNU_SOURCE
 #endif
 
+#include "flowmq_owner.h"
 #include "flowmq_socket.h"
 #include "salts_error.h"
 
@@ -40,6 +41,7 @@ typedef enum reuse_port_workload_e {
   REUSE_PORT_SYNC_REQ = 0,
   REUSE_PORT_PIPELINED_DEALER = 1,
   REUSE_PORT_PIPELINED_DEALER_NONBLOCKING = 2,
+  REUSE_PORT_OWNER_LANE_DEALER = 3,
   REUSE_PORT_WORKLOAD_COUNT
 } reuse_port_workload_t;
 
@@ -76,6 +78,15 @@ typedef struct reuse_port_client_arg_s {
   size_t explicit_poll_calls;
   int status;
 } reuse_port_client_arg_t;
+
+typedef struct reuse_port_owner_client_arg_s {
+  reuse_port_shared_t *shared;
+  size_t payload_size;
+  uint64_t latencies[REUSE_PORT_CLIENTS][REUSE_PORT_SAMPLES];
+  uint64_t cpu_ns;
+  size_t owner_poll_calls;
+  int status;
+} reuse_port_owner_client_arg_t;
 
 typedef struct reuse_port_sample_s {
   const char *workload;
@@ -551,6 +562,269 @@ static int reuse_port_client_pipeline_nonblocking(
              : SALTS_EPROTO;
 }
 
+
+static int reuse_port_owner_client_phase(
+    flowmq_owner_t *owner,
+    flowmq_socket_t *sockets[REUSE_PORT_CLIENTS],
+    unsigned char *payloads[REUSE_PORT_CLIENTS],
+    unsigned char *received_buffers[REUSE_PORT_CLIENTS],
+    size_t payload_size,
+    unsigned char phase,
+    size_t count,
+    uint64_t latencies[REUSE_PORT_CLIENTS][REUSE_PORT_SAMPLES],
+    size_t *owner_poll_calls) {
+  size_t next_send[REUSE_PORT_CLIENTS] = {0u};
+  size_t received_count[REUSE_PORT_CLIENTS] = {0u};
+  size_t outstanding[REUSE_PORT_CLIENTS] = {0u};
+  uint64_t started[REUSE_PORT_CLIENTS][REUSE_PORT_SAMPLES] = {{0u}};
+  bool started_valid[REUSE_PORT_CLIENTS][REUSE_PORT_SAMPLES] = {{false}};
+  bool seen[REUSE_PORT_CLIENTS][REUSE_PORT_SAMPLES] = {{false}};
+  const uint64_t deadline =
+      reuse_port_clock_ns(CLOCK_MONOTONIC) +
+      (uint64_t)REUSE_PORT_TIMEOUT_MS * UINT64_C(1000000);
+  int status;
+
+  for (size_t lane = 0u; lane < REUSE_PORT_CLIENTS; ++lane) {
+    payloads[lane][0] = phase;
+    payloads[lane][1] = (unsigned char)lane;
+  }
+
+  for (;;) {
+    bool all_done = true;
+    bool made_progress = false;
+    flowmq_pollitem_t items[REUSE_PORT_CLIENTS];
+
+    for (size_t lane = 0u; lane < REUSE_PORT_CLIENTS; ++lane) {
+      while (next_send[lane] < count &&
+             outstanding[lane] < REUSE_PORT_PIPELINE_WINDOW) {
+        const size_t id = next_send[lane];
+        if (payload_size >= 10u) {
+          const uint64_t wire_id = (uint64_t)id;
+          memcpy(payloads[lane] + 2u, &wire_id, sizeof(wire_id));
+        }
+        if (latencies != NULL && !started_valid[lane][id]) {
+          started[lane][id] = reuse_port_clock_ns(CLOCK_MONOTONIC);
+          if (started[lane][id] == 0u) return SALTS_EIO;
+          started_valid[lane][id] = true;
+        }
+
+        status = flowmq_send(
+            sockets[lane], payloads[lane], payload_size,
+            FLOWMQ_DONTWAIT);
+        if (status == SALTS_OK) {
+          ++next_send[lane];
+          ++outstanding[lane];
+          made_progress = true;
+          continue;
+        }
+        if (status == SALTS_EBUSY || status == SALTS_ENOBUFS) break;
+        return status;
+      }
+    }
+
+    for (size_t lane = 0u; lane < REUSE_PORT_CLIENTS; ++lane) {
+      while (received_count[lane] < count) {
+        size_t received_size = 0u;
+        uint64_t id = received_count[lane];
+        status = flowmq_recv(
+            sockets[lane], received_buffers[lane], payload_size,
+            &received_size, FLOWMQ_DONTWAIT);
+        if (status == SALTS_EBUSY) break;
+        if (status != SALTS_OK) return status;
+        if (received_size != payload_size ||
+            received_buffers[lane][0] != phase ||
+            received_buffers[lane][1] != (unsigned char)lane)
+          return SALTS_EPROTO;
+
+        if (payload_size >= 10u)
+          memcpy(&id, received_buffers[lane] + 2u, sizeof(id));
+        if (id >= count || seen[lane][id] || outstanding[lane] == 0u)
+          return SALTS_EPROTO;
+        seen[lane][id] = true;
+        --outstanding[lane];
+
+        if (latencies != NULL) {
+          const uint64_t finished =
+              reuse_port_clock_ns(CLOCK_MONOTONIC);
+          if (!started_valid[lane][id] ||
+              finished <= started[lane][id])
+            return SALTS_EIO;
+          latencies[lane][id] = finished - started[lane][id];
+        }
+        ++received_count[lane];
+        made_progress = true;
+      }
+    }
+
+    for (size_t lane = 0u; lane < REUSE_PORT_CLIENTS; ++lane) {
+      if (received_count[lane] != count) {
+        all_done = false;
+        break;
+      }
+    }
+    if (all_done) return SALTS_OK;
+
+    for (size_t lane = 0u; lane < REUSE_PORT_CLIENTS; ++lane) {
+      short events = FLOWMQ_POLLIN | FLOWMQ_POLLERR;
+      if (next_send[lane] < count &&
+          outstanding[lane] < REUSE_PORT_PIPELINE_WINDOW)
+        events = (short)(events | FLOWMQ_POLLOUT);
+      items[lane] = (flowmq_pollitem_t){
+          .socket = sockets[lane],
+          .events = events};
+    }
+
+    {
+      size_t ready = 0u;
+      status = flowmq_owner_poll(
+          owner, items, REUSE_PORT_CLIENTS, 100u, &ready);
+      if (owner_poll_calls != NULL) ++*owner_poll_calls;
+      if (status != SALTS_OK) return status;
+      for (size_t lane = 0u; lane < REUSE_PORT_CLIENTS; ++lane) {
+        if ((items[lane].revents & FLOWMQ_POLLERR) != 0)
+          return SALTS_EIO;
+      }
+      (void)ready;
+    }
+
+    if (!made_progress &&
+        reuse_port_clock_ns(CLOCK_MONOTONIC) >= deadline)
+      return SALTS_ETIMEDOUT;
+  }
+}
+
+static void *reuse_port_owner_client_entry(void *user) {
+  reuse_port_owner_client_arg_t *arg =
+      (reuse_port_owner_client_arg_t *)user;
+  reuse_port_shared_t *shared = arg->shared;
+  flowmq_ctx_t *ctx = NULL;
+  flowmq_owner_t *owner = NULL;
+  flowmq_socket_t *sockets[REUSE_PORT_CLIENTS] = {0};
+  unsigned char *payloads[REUSE_PORT_CLIENTS] = {0};
+  unsigned char *received[REUSE_PORT_CLIENTS] = {0};
+  char endpoint[128] = {0};
+  uint64_t cpu_started = 0u;
+  int status = SALTS_OK;
+
+  (void)pthread_mutex_lock(&shared->mutex);
+  memcpy(endpoint, shared->endpoint, sizeof(endpoint));
+  (void)pthread_mutex_unlock(&shared->mutex);
+
+  ctx = flowmq_ctx_new();
+  if (ctx == NULL) {
+    status = SALTS_ENOMEM;
+    goto fail;
+  }
+  {
+    flowmq_owner_config_t config = FLOWMQ_OWNER_CONFIG_INIT;
+    config.socket_capacity = REUSE_PORT_CLIENTS;
+    owner = flowmq_owner_new(ctx, &config);
+  }
+  if (owner == NULL) {
+    status = SALTS_ENOMEM;
+    goto fail;
+  }
+
+  for (size_t lane = 0u; lane < REUSE_PORT_CLIENTS; ++lane) {
+    payloads[lane] = (unsigned char *)malloc(arg->payload_size);
+    received[lane] = (unsigned char *)malloc(arg->payload_size);
+    if (payloads[lane] == NULL || received[lane] == NULL) {
+      status = SALTS_ENOMEM;
+      goto fail;
+    }
+    for (size_t i = 0u; i < arg->payload_size; ++i)
+      payloads[lane][i] =
+          (unsigned char)((i * 29u + lane * 53u + 11u) & 0xffu);
+    payloads[lane][1] = (unsigned char)lane;
+
+    sockets[lane] = flowmq_owner_socket(owner, FLOWMQ_DEALER);
+    if (sockets[lane] == NULL) {
+      status = SALTS_ENOMEM;
+      goto fail;
+    }
+    status = flowmq_connect(sockets[lane], endpoint);
+    if (status != SALTS_OK) goto fail;
+  }
+
+  status = reuse_port_owner_client_phase(
+      owner, sockets, payloads, received, arg->payload_size,
+      0u, REUSE_PORT_WARMUPS, NULL, NULL);
+  if (status != SALTS_OK) goto fail;
+
+  (void)pthread_mutex_lock(&shared->mutex);
+  shared->client_ready += REUSE_PORT_CLIENTS;
+  (void)pthread_cond_broadcast(&shared->changed);
+  while (!atomic_load(&shared->start) &&
+         atomic_load(&shared->failure) == SALTS_OK)
+    (void)pthread_cond_wait(&shared->changed, &shared->mutex);
+  (void)pthread_mutex_unlock(&shared->mutex);
+  if (atomic_load(&shared->failure) != SALTS_OK) {
+    status = SALTS_EIO;
+    goto fail;
+  }
+
+  cpu_started = reuse_port_thread_cpu_ns();
+  if (cpu_started == 0u) {
+    status = SALTS_EIO;
+    goto fail;
+  }
+
+  status = reuse_port_owner_client_phase(
+      owner, sockets, payloads, received, arg->payload_size,
+      1u, REUSE_PORT_SAMPLES, arg->latencies,
+      &arg->owner_poll_calls);
+  if (status != SALTS_OK) goto fail;
+
+  {
+    const uint64_t cpu_finished = reuse_port_thread_cpu_ns();
+    if (cpu_finished <= cpu_started) {
+      status = SALTS_EIO;
+      goto fail;
+    }
+    arg->cpu_ns = cpu_finished - cpu_started;
+  }
+
+  (void)pthread_mutex_lock(&shared->mutex);
+  shared->clients_done += REUSE_PORT_CLIENTS;
+  (void)pthread_cond_broadcast(&shared->changed);
+  (void)pthread_mutex_unlock(&shared->mutex);
+
+  arg->status = SALTS_OK;
+  goto cleanup;
+
+fail:
+  arg->status = status;
+  reuse_port_fail(shared, status);
+
+cleanup:
+  if (owner != NULL) {
+    for (size_t lane = 0u; lane < REUSE_PORT_CLIENTS; ++lane) {
+      if (sockets[lane] != NULL) {
+        const int close_status =
+            flowmq_owner_close_socket(owner, sockets[lane]);
+        if (arg->status == SALTS_OK && close_status != SALTS_OK)
+          arg->status = close_status;
+        sockets[lane] = NULL;
+      }
+    }
+    {
+      const int term_status = flowmq_owner_term(owner);
+      if (arg->status == SALTS_OK && term_status != SALTS_OK)
+        arg->status = term_status;
+    }
+  }
+  if (ctx != NULL) {
+    const int term_status = flowmq_ctx_term(ctx);
+    if (arg->status == SALTS_OK && term_status != SALTS_OK)
+      arg->status = term_status;
+  }
+  for (size_t lane = 0u; lane < REUSE_PORT_CLIENTS; ++lane) {
+    free(received[lane]);
+    free(payloads[lane]);
+  }
+  return NULL;
+}
+
 static void *reuse_port_client_entry(void *user) {
   reuse_port_client_arg_t *arg = (reuse_port_client_arg_t *)user;
   reuse_port_shared_t *shared = arg->shared;
@@ -715,6 +989,8 @@ static const char *reuse_port_workload_name(reuse_port_workload_t workload) {
   case REUSE_PORT_PIPELINED_DEALER: return "pipelined_dealer";
   case REUSE_PORT_PIPELINED_DEALER_NONBLOCKING:
     return "pipelined_dealer_nonblocking";
+  case REUSE_PORT_OWNER_LANE_DEALER:
+    return "owner_lane_dealer";
   default: return "invalid";
   }
 }
@@ -729,10 +1005,13 @@ static int reuse_port_run_mode(reuse_port_workload_t workload,
   reuse_port_shared_t shared;
   reuse_port_server_arg_t servers[REUSE_PORT_SERVERS];
   reuse_port_client_arg_t clients[REUSE_PORT_CLIENTS];
+  reuse_port_owner_client_arg_t owner_client;
   pthread_t server_threads[REUSE_PORT_SERVERS];
   pthread_t client_threads[REUSE_PORT_CLIENTS];
+  pthread_t owner_client_thread;
   bool server_started[REUSE_PORT_SERVERS] = {false, false};
   bool client_started[REUSE_PORT_CLIENTS] = {false, false, false, false};
+  bool owner_client_started = false;
   uint64_t latencies[REUSE_PORT_CLIENTS * REUSE_PORT_SAMPLES];
   const size_t server_count =
       mode == REUSE_PORT_ONE_OWNER ? 1u : REUSE_PORT_SERVERS;
@@ -752,6 +1031,7 @@ static int reuse_port_run_mode(reuse_port_workload_t workload,
   memset(out, 0, sizeof(*out));
   memset(servers, 0, sizeof(servers));
   memset(clients, 0, sizeof(clients));
+  memset(&owner_client, 0, sizeof(owner_client));
   if (status != SALTS_OK) return status;
 
   for (size_t index = 0u;
@@ -778,17 +1058,29 @@ static int reuse_port_run_mode(reuse_port_workload_t workload,
   (void)pthread_mutex_unlock(&shared.mutex);
   if (status != SALTS_OK) goto cleanup;
 
-  for (size_t index = 0u;
-       index < REUSE_PORT_CLIENTS && status == SALTS_OK; ++index) {
-    clients[index].shared = &shared;
-    clients[index].client_id = index;
-    clients[index].payload_size = payload_size;
-    clients[index].workload = workload;
+  if (workload == REUSE_PORT_OWNER_LANE_DEALER) {
+    owner_client.shared = &shared;
+    owner_client.payload_size = payload_size;
     status = pthread_create(
-        &client_threads[index], NULL,
-        reuse_port_client_entry, &clients[index]);
-    if (status != 0) status = -status;
-    else client_started[index] = true;
+        &owner_client_thread, NULL,
+        reuse_port_owner_client_entry, &owner_client);
+    if (status != 0)
+      status = -status;
+    else
+      owner_client_started = true;
+  } else {
+    for (size_t index = 0u;
+         index < REUSE_PORT_CLIENTS && status == SALTS_OK; ++index) {
+      clients[index].shared = &shared;
+      clients[index].client_id = index;
+      clients[index].payload_size = payload_size;
+      clients[index].workload = workload;
+      status = pthread_create(
+          &client_threads[index], NULL,
+          reuse_port_client_entry, &clients[index]);
+      if (status != 0) status = -status;
+      else client_started[index] = true;
+    }
   }
   if (status != SALTS_OK) {
     reuse_port_fail(&shared, status);
@@ -836,15 +1128,26 @@ cleanup:
   if (status != SALTS_OK) reuse_port_fail(&shared, status);
   else atomic_store(&shared.stop, 1);
 
-  for (size_t index = 0u; index < REUSE_PORT_CLIENTS; ++index) {
-    if (client_started[index]) {
-      const int join_status = pthread_join(client_threads[index], NULL);
-      if (status == SALTS_OK && join_status != 0) status = -join_status;
-      if (status == SALTS_OK && clients[index].status != SALTS_OK)
-        status = clients[index].status;
-      if (clients[index].status == SALTS_OK) {
-        client_cpu_ns += clients[index].cpu_ns;
-        client_poll_calls += clients[index].explicit_poll_calls;
+  if (owner_client_started) {
+    const int join_status = pthread_join(owner_client_thread, NULL);
+    if (status == SALTS_OK && join_status != 0) status = -join_status;
+    if (status == SALTS_OK && owner_client.status != SALTS_OK)
+      status = owner_client.status;
+    if (owner_client.status == SALTS_OK) {
+      client_cpu_ns = owner_client.cpu_ns;
+      client_poll_calls = owner_client.owner_poll_calls;
+    }
+  } else {
+    for (size_t index = 0u; index < REUSE_PORT_CLIENTS; ++index) {
+      if (client_started[index]) {
+        const int join_status = pthread_join(client_threads[index], NULL);
+        if (status == SALTS_OK && join_status != 0) status = -join_status;
+        if (status == SALTS_OK && clients[index].status != SALTS_OK)
+          status = clients[index].status;
+        if (clients[index].status == SALTS_OK) {
+          client_cpu_ns += clients[index].cpu_ns;
+          client_poll_calls += clients[index].explicit_poll_calls;
+        }
       }
     }
   }
@@ -877,9 +1180,16 @@ cleanup:
       status = SALTS_EPROTO;
 
     if (status == SALTS_OK) {
-      for (size_t client = 0u; client < REUSE_PORT_CLIENTS; ++client)
-        for (size_t sample = 0u; sample < REUSE_PORT_SAMPLES; ++sample)
-          latencies[latency_count++] = clients[client].latencies[sample];
+      if (workload == REUSE_PORT_OWNER_LANE_DEALER) {
+        for (size_t client = 0u; client < REUSE_PORT_CLIENTS; ++client)
+          for (size_t sample = 0u; sample < REUSE_PORT_SAMPLES; ++sample)
+            latencies[latency_count++] =
+                owner_client.latencies[client][sample];
+      } else {
+        for (size_t client = 0u; client < REUSE_PORT_CLIENTS; ++client)
+          for (size_t sample = 0u; sample < REUSE_PORT_SAMPLES; ++sample)
+            latencies[latency_count++] = clients[client].latencies[sample];
+      }
       if (latency_count != expected_samples) status = SALTS_EPROTO;
     }
   }
@@ -1059,12 +1369,14 @@ int main(void) {
 
   printf("# FlowMQ same-endpoint reuse-port multicore service\n\n");
   printf(
-      "Three workload classes use the same four scheduler-managed client "
-      "connections: sync_req keeps one outstanding request per client; "
+      "Four workload classes use the same four client connections: sync_req "
+      "keeps one outstanding request per scheduler-managed client; "
       "pipelined_dealer keeps up to %u outstanding using blocking public "
-      "send/recv; pipelined_dealer_nonblocking keeps the same window but "
-      "uses FLOWMQ_DONTWAIT plus flowmq_poll(...,0) without millisecond "
-      "sleeps. Control uses one pinned REP owner; candidate uses "
+      "send/recv; pipelined_dealer_nonblocking uses four scheduler-managed "
+      "client threads with FLOWMQ_DONTWAIT plus flowmq_poll(...,0); "
+      "owner_lane_dealer uses one caller thread, one flowmq_owner_t, four "
+      "DEALER sockets and a shared wait with the same pipeline window. "
+      "Control uses one pinned REP owner; candidate uses "
       "two REP owners on "
       "distinct physical CPUs %d and %d bound to the same TCP endpoint with "
       "FLOWMQ_REUSE_PORT=1. Connections never migrate. No relative "
