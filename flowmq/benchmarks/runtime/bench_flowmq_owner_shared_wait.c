@@ -394,8 +394,10 @@ static int shared_wait_control_progress(shared_wait_fixture_t *fixture,
   return SALTS_OK;
 }
 
-static int shared_wait_candidate_progress(shared_wait_fixture_t *fixture,
-                                          uint32_t max_wait_ms) {
+static int shared_wait_candidate_progress_mask(
+    shared_wait_fixture_t *fixture,
+    const bool active[SHARED_WAIT_LANES],
+    uint32_t max_wait_ms) {
   native_io_completion completions[SHARED_WAIT_COMPLETION_CAPACITY];
   uint32_t wait_ms = max_wait_ms;
   size_t completion_count = 0u;
@@ -404,6 +406,7 @@ static int shared_wait_candidate_progress(shared_wait_fixture_t *fixture,
   for (size_t lane = 0u; lane < SHARED_WAIT_LANES; ++lane) {
     size_t events = 0u;
     uint32_t lane_wait = max_wait_ms;
+    if (active != NULL && !active[lane]) continue;
     status = flowmq_socket_internal_advance_external(
         fixture->sockets[lane], &events);
     if (fixture->measuring) ++fixture->advance_calls;
@@ -426,6 +429,7 @@ static int shared_wait_candidate_progress(shared_wait_fixture_t *fixture,
     for (size_t lane = 0u; lane < SHARED_WAIT_LANES && !consumed; ++lane) {
       size_t events = 0u;
       bool lane_consumed = false;
+      if (active != NULL && !active[lane]) continue;
       status = flowmq_socket_internal_route_external_completion(
           fixture->sockets[lane], &completions[index],
           &lane_consumed, &events);
@@ -443,6 +447,12 @@ static int shared_wait_candidate_progress(shared_wait_fixture_t *fixture,
 
   /* No second CNet advance after a routed batch: #713 canonical host loop. */
   return SALTS_OK;
+}
+
+static int shared_wait_candidate_progress(shared_wait_fixture_t *fixture,
+                                          uint32_t max_wait_ms) {
+  return shared_wait_candidate_progress_mask(
+      fixture, NULL, max_wait_ms);
 }
 
 static int shared_wait_progress(shared_wait_fixture_t *fixture,
@@ -652,8 +662,9 @@ static int shared_wait_fixture_stop_candidate(shared_wait_fixture_t *fixture) {
     }
     if (stopped[0] && stopped[1]) break;
     {
-      const int status =
-          shared_wait_candidate_progress(fixture, SHARED_WAIT_MAX_WAIT_MS);
+      const bool active[SHARED_WAIT_LANES] = {!stopped[0], !stopped[1]};
+      const int status = shared_wait_candidate_progress_mask(
+          fixture, active, SHARED_WAIT_MAX_WAIT_MS);
       if (status != SALTS_OK) return status;
     }
     if (shared_wait_deadline_expired(deadline)) return SALTS_ETIMEDOUT;
