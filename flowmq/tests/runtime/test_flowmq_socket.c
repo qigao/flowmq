@@ -159,6 +159,82 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
+  it("keeps reuse-port startup-only and fail-closed") {
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *socket = flowmq_socket(ctx, FLOWMQ_PULL);
+    int reuse_port = 2;
+
+    check_not_null(ctx);
+    check_not_null(socket);
+    check_equal(flowmq_setsockopt(socket, FLOWMQ_REUSE_PORT, &reuse_port,
+                                  sizeof(reuse_port)),
+                SALTS_EINVAL);
+
+    reuse_port = 0;
+    check_equal(flowmq_setsockopt(socket, FLOWMQ_REUSE_PORT, &reuse_port,
+                                  sizeof(reuse_port)),
+                SALTS_OK);
+    check_equal(flowmq_bind(socket, "tcp://127.0.0.1:0"), SALTS_OK);
+
+    reuse_port = 1;
+    check_equal(flowmq_setsockopt(socket, FLOWMQ_REUSE_PORT, &reuse_port,
+                                  sizeof(reuse_port)),
+                SALTS_EBUSY);
+
+    check_equal(flowmq_close(socket), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+  }
+
+  it("binds independent owner-local listeners to one endpoint with reuse-port") {
+    char endpoint[128] = {0};
+    size_t endpoint_size = 0u;
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *first = flowmq_socket(ctx, FLOWMQ_PULL);
+    flowmq_socket_t *second = flowmq_socket(ctx, FLOWMQ_PULL);
+    flowmq_socket_t *replacement = NULL;
+    int reuse_port = 1;
+    int status;
+
+    check_not_null(ctx);
+    check_not_null(first);
+    check_not_null(second);
+    check_equal(flowmq_setsockopt(first, FLOWMQ_REUSE_PORT, &reuse_port,
+                                  sizeof(reuse_port)),
+                SALTS_OK);
+    check_equal(flowmq_setsockopt(second, FLOWMQ_REUSE_PORT, &reuse_port,
+                                  sizeof(reuse_port)),
+                SALTS_OK);
+
+    status = flowmq_bind(first, "tcp://127.0.0.1:0");
+#if defined(_WIN32)
+    check_equal(status, SALTS_ENOTSUP);
+    check_equal(flowmq_close(second), SALTS_OK);
+    check_equal(flowmq_close(first), SALTS_OK);
+#else
+    check_equal(status, SALTS_OK);
+    check_equal(flowmq_last_endpoint(first, endpoint, sizeof(endpoint),
+                                     &endpoint_size),
+                SALTS_OK);
+    check_true(endpoint_size > 1u);
+    check_equal(flowmq_bind(second, endpoint), SALTS_OK);
+
+    check_equal(flowmq_close(second), SALTS_OK);
+    second = NULL;
+
+    replacement = flowmq_socket(ctx, FLOWMQ_PULL);
+    check_not_null(replacement);
+    check_equal(flowmq_setsockopt(replacement, FLOWMQ_REUSE_PORT, &reuse_port,
+                                  sizeof(reuse_port)),
+                SALTS_OK);
+    check_equal(flowmq_bind(replacement, endpoint), SALTS_OK);
+    check_equal(flowmq_close(replacement), SALTS_OK);
+    replacement = NULL;
+
+    check_equal(flowmq_close(first), SALTS_OK);
+#endif
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+  }
+
   it("allows a PAIR socket to own only one peer") {
     char first_endpoint[128] = {0};
     char second_endpoint[128] = {0};
