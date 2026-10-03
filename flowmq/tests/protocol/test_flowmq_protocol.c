@@ -444,6 +444,11 @@ spec("flowmq_protocol") {
     check_equal(flowmq_protocol_decode_packet_header_internal(
                     encoded, FLOWMQ_PROTOCOL_HEADER_SIZE, &packet),
                 SALTS_EPROTO);
+    encoded[0] = 'T';
+    encoded[6] = 0u;
+    check_equal(flowmq_protocol_decode_packet_header_internal(
+                    encoded, FLOWMQ_PROTOCOL_HEADER_SIZE, &packet),
+                SALTS_EPROTO);
     tstr_free(encoded);
   }
 
