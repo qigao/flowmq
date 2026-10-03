@@ -1014,7 +1014,9 @@ static int flowmq_socket_peer_admit_retained(
       frame->payload_size == 0u)
     return SALTS_EINVAL;
   socket = peer->owner;
-  if (socket->transport != FLOWMQ_TRANSPORT_TCP) return SALTS_ENOTSUP;
+  if (socket->transport != FLOWMQ_TRANSPORT_TCP &&
+      socket->transport != FLOWMQ_TRANSPORT_TLS)
+    return SALTS_ENOTSUP;
   if (!flowmq_socket_peer_can_admit(peer, frame->payload_size, 1))
     return SALTS_ENOBUFS;
   if (!flowmq_peer_state_write_idle(&peer->state) ||
@@ -1054,7 +1056,9 @@ static int flowmq_socket_peer_admit_retained_message(
       slice_count > CNET_RETAINED_VECTOR_MAX || payload_size == 0u)
     return SALTS_EINVAL;
   socket = peer->owner;
-  if (socket->transport != FLOWMQ_TRANSPORT_TCP) return SALTS_ENOTSUP;
+  if (socket->transport != FLOWMQ_TRANSPORT_TCP &&
+      socket->transport != FLOWMQ_TRANSPORT_TLS)
+    return SALTS_ENOTSUP;
   if (!flowmq_socket_peer_ready(peer)) return SALTS_EBUSY;
   if (payload_size > socket->send_hwm_bytes ||
       peer->outbound_bytes > socket->send_hwm_bytes - payload_size ||
@@ -2725,7 +2729,8 @@ static int flowmq_socket_try_send_slice(flowmq_socket_t *socket,
   if (size > FLOWMQ_SOCKET_MAX_FRAME_SIZE || size > socket->send_hwm_bytes)
     return SALTS_EMSGSIZE;
   if (socket->runtime_initialized &&
-      socket->transport != FLOWMQ_TRANSPORT_TCP)
+      socket->transport != FLOWMQ_TRANSPORT_TCP &&
+      socket->transport != FLOWMQ_TRANSPORT_TLS)
     return SALTS_ENOTSUP;
 
   starting_message = !socket->pattern.sending_multipart;
