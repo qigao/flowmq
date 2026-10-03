@@ -241,6 +241,9 @@ typedef struct flowmq_endpoint_parts_s {
 
 static int flowmq_socket_drive(flowmq_socket_t *socket, uint32_t timeout_ms,
                                size_t *events);
+static void flowmq_socket_on_receive_slice(
+    void *user, cnet_connection connection, mem_slice_t slice,
+    cnet_message_kind kind);
 static void flowmq_socket_cancel_send_route(flowmq_socket_t *socket);
 static void flowmq_socket_fail(flowmq_socket_t *socket, int status);
 
