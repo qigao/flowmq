@@ -67,7 +67,7 @@ int flowmq_socket_internal_async_error_matches(
  */
 int flowmq_socket_internal_stop_external(flowmq_socket_t *socket);
 
-int flowmq_socket_internal_detach_owner(
+int flowmq_socket_internal_owner_close_storage(
     flowmq_socket_t *socket, const void *owner_token);
 
 #ifdef __cplusplus
