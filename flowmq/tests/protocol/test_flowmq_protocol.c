@@ -407,6 +407,46 @@ spec("flowmq_protocol") {
     tstr_free(encoded);
   }
 
+  it("decodes a packet header without requiring its body") {
+    static const char payload[] = "header-only-payload";
+    flowmq_protocol_frame_t frame = {0};
+    flowmq_protocol_packet_header_internal_t packet = {0};
+    tstr encoded = NULL;
+
+    frame.kind = FLOWMQ_PROTOCOL_FRAME_DATA;
+    frame.pattern = FLOWMQ_PROTOCOL_PUSH;
+    frame.message_id = UINT64_C(42);
+    frame.identity = vstr_from_cstr("peer");
+    frame.topic = vstr_from_cstr("topic");
+    frame.payload = vstr_from_buf(payload, sizeof(payload) - 1u);
+
+    check_equal(flowmq_protocol_encode_frame(&frame, 1024u, &encoded),
+                SALTS_OK);
+    check_equal(flowmq_protocol_decode_packet_header_internal(
+                    encoded, FLOWMQ_PROTOCOL_HEADER_SIZE - 1u, &packet),
+                FLOWMQ_PROTOCOL_INCOMPLETE);
+    check_equal(flowmq_protocol_decode_packet_header_internal(
+                    encoded, FLOWMQ_PROTOCOL_HEADER_SIZE, &packet),
+                SALTS_OK);
+    check_equal(packet.kind, FLOWMQ_PROTOCOL_FRAME_DATA);
+    check_equal(packet.pattern, FLOWMQ_PROTOCOL_PUSH);
+    check_equal(packet.message_id, UINT64_C(42));
+    check_equal(packet.identity_len, sizeof("peer") - 1u);
+    check_equal(packet.topic_len, sizeof("topic") - 1u);
+    check_equal(packet.chunk_len, sizeof(payload) - 1u);
+    check_equal(packet.payload_len, sizeof(payload) - 1u);
+    check_equal(packet.payload_offset, 0u);
+    check_true((packet.flags & FLOWMQ_PROTOCOL_PACKET_FIRST) != 0u);
+    check_true((packet.flags & FLOWMQ_PROTOCOL_PACKET_LAST) != 0u);
+    check_equal(packet.record_len, tstr_len(encoded));
+
+    encoded[0] = 'X';
+    check_equal(flowmq_protocol_decode_packet_header_internal(
+                    encoded, FLOWMQ_PROTOCOL_HEADER_SIZE, &packet),
+                SALTS_EPROTO);
+    tstr_free(encoded);
+  }
+
   it("reassembles a fragmented FMQ/6 payload into owned storage") {
     static char payload[FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE + 17u];
     flowmq_protocol_frame_t input;
