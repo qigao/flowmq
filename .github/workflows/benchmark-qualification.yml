@@ -31,12 +31,14 @@ jobs:
           dotnet-version: "8.0.x"
 
       - name: Prepare host dependencies
+        shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm
 
       - name: Restore vcpkg dependencies from shared cache
+        shell: bash
         run: |
           set -euo pipefail
           install_root="$RUNNER_TEMP/flowmq-benchmark-vcpkg"
@@ -57,6 +59,7 @@ jobs:
       - name: Restore latest released Salts SDKs
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
           set -euo pipefail
           config="$RUNNER_TEMP/flowmq-benchmark-nuget.config"
@@ -88,6 +91,7 @@ jobs:
           echo "SALTS_UTILS_ROOT=$(sdk_root saltsutils.native linux-x64)" >> "$GITHUB_ENV"
 
       - name: Configure and build benchmark
+        shell: bash
         run: |
           set -euo pipefail
           cmake -S . -B build/benchmark -G Ninja \
@@ -103,6 +107,7 @@ jobs:
       - name: Run socket benchmark
         env:
           FLOWMQ_BENCH_CI: "1"
+        shell: bash
         run: |
           set -euo pipefail
           export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$FLOWMQ_VCPKG_INSTALLED/x64-linux/lib"
@@ -112,18 +117,8 @@ jobs:
             echo "TLS percentile evidence contains a failed operation" >&2
             exit 1
           fi
-          grep -q '^TLS_EVIDENCE_BEGIN layout=natural_discontiguous        uses: actions/upload-artifact@v4
-        with:
-          name: flowmq-socket-benchmark-linux-x64
-          path: ${{ runner.temp }}/flowmq-socket-benchmark.log
-          if-no-files-found: error
- "$log"
-          grep -q '^TLS_EVIDENCE_END layout=natural_discontiguous        uses: actions/upload-artifact@v4
-        with:
-          name: flowmq-socket-benchmark-linux-x64
-          path: ${{ runner.temp }}/flowmq-socket-benchmark.log
-          if-no-files-found: error
- "$log"
+          grep -q '^TLS_EVIDENCE_BEGIN layout=natural_discontiguous$' "$log"
+          grep -q '^TLS_EVIDENCE_END layout=natural_discontiguous$' "$log"
           for row in copy_64b retained_64b copy_64k retained_64k copy_1m retained_1m copy_2x256k retained_2x256k; do
             grep -q "^TLS_EVIDENCE name=$row " "$log"
           done
