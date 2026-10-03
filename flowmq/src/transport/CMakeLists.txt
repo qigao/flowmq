@@ -39,9 +39,8 @@ target_link_libraries(flowmq_transport
                       PUBLIC FlowMQ::Core Salts::Core
                       PRIVATE Salts::CNet Salts::CMeta Salts::NativeIO)
 
-# Diagnostic-only build of the same transport runtime with the private
-# external-progress seam enabled. This target is Linux-only, not installed,
-# and exists solely for #64 owner-lane qualification.
+# Diagnostic-only duplicate of the transport runtime retained for the #67
+# shared-wait benchmark. The production owner API wraps the same private seam.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   add_library(
     flowmq_transport_external_profile STATIC
@@ -53,9 +52,6 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     PROPERTIES
       EXCLUDE_FROM_ALL TRUE
       FOLDER "flowmq/benchmarks/runtime")
-  target_compile_definitions(
-    flowmq_transport_external_profile
-    PRIVATE FLOWMQ_INTERNAL_EXTERNAL_PROGRESS=1)
   target_include_directories(
     flowmq_transport_external_profile
     PUBLIC ${PROJECT_SOURCE_DIR}/flowmq/include
