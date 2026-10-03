@@ -3129,36 +3129,36 @@ static int flowmq_socket_resume_receive(flowmq_socket_peer_t *peer) {
   return cnet_receive(&socket->client, peer->connection, 1u);
 }
 
-static int flowmq_socket_drive(flowmq_socket_t *socket, uint32_t timeout_ms,
-                               size_t *events) {
-  size_t client_events = 0u;
+static int flowmq_socket_listener_progress(flowmq_socket_t *socket) {
   int status;
-  if (events != NULL) *events = 0u;
-  if (socket == NULL || !socket->runtime_initialized) return SALTS_OK;
-  if (socket->listener_initialized) {
+  if (!socket->listener_initialized) return SALTS_OK;
+  {
     int ready = 0;
     status = cnet_listener_wait(&socket->listener, 0u, &ready);
     if (status != SALTS_OK) return status;
-    if (ready) {
-      flowmq_socket_peer_t *peer = flowmq_socket_peer_acquire(socket);
-      cnet_observer observer;
-      if (peer == NULL) return SALTS_ENOBUFS;
-      observer = flowmq_socket_observer(peer);
-      status = socket->transport == FLOWMQ_TRANSPORT_TLS
-                   ? cnet_listener_accept_tls(&socket->listener, &socket->client,
-                                              &socket->tls_server, &observer,
-                                              &peer->connection)
-                   : cnet_listener_accept(&socket->listener, &socket->client,
-                                          &observer, &peer->connection);
-      if (status != SALTS_OK) {
-        flowmq_socket_peer_release(peer);
-        if (status != SALTS_ETIMEDOUT) return status;
-      }
+    if (!ready) return SALTS_OK;
+  }
+  {
+    flowmq_socket_peer_t *peer = flowmq_socket_peer_acquire(socket);
+    cnet_observer observer;
+    if (peer == NULL) return SALTS_ENOBUFS;
+    observer = flowmq_socket_observer(peer);
+    status = socket->transport == FLOWMQ_TRANSPORT_TLS
+                 ? cnet_listener_accept_tls(&socket->listener, &socket->client,
+                                            &socket->tls_server, &observer,
+                                            &peer->connection)
+                 : cnet_listener_accept(&socket->listener, &socket->client,
+                                        &observer, &peer->connection);
+    if (status != SALTS_OK) {
+      flowmq_socket_peer_release(peer);
+      if (status != SALTS_ETIMEDOUT) return status;
     }
   }
-  status = cnet_client_poll(&socket->client, timeout_ms, &client_events);
-  if (status != SALTS_OK) return status;
-  status = flowmq_socket_reconnect_progress(socket);
+  return SALTS_OK;
+}
+
+static int flowmq_socket_progress_local(flowmq_socket_t *socket) {
+  int status = flowmq_socket_reconnect_progress(socket);
   if (status != SALTS_OK) return status;
   for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
     flowmq_socket_peer_t *peer = &socket->peers[i];
@@ -3227,8 +3227,23 @@ static int flowmq_socket_drive(flowmq_socket_t *socket, uint32_t timeout_ms,
       }
     }
   }
-  if (events != NULL) *events = client_events;
   if (socket->async_error != SALTS_OK) return socket->async_error;
+  return SALTS_OK;
+}
+
+static int flowmq_socket_drive(flowmq_socket_t *socket, uint32_t timeout_ms,
+                               size_t *events) {
+  size_t client_events = 0u;
+  int status;
+  if (events != NULL) *events = 0u;
+  if (socket == NULL || !socket->runtime_initialized) return SALTS_OK;
+  status = flowmq_socket_listener_progress(socket);
+  if (status != SALTS_OK) return status;
+  status = cnet_client_poll(&socket->client, timeout_ms, &client_events);
+  if (status != SALTS_OK) return status;
+  status = flowmq_socket_progress_local(socket);
+  if (status != SALTS_OK) return status;
+  if (events != NULL) *events = client_events;
   return SALTS_OK;
 }
 
