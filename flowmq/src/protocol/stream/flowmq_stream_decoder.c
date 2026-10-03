@@ -39,6 +39,10 @@ size_t flowmq_stream_decoder_available(const flowmq_stream_decoder_t *stream) {
   return stream && stream->initialized ? salts_bytes_available(&stream->buffer) : 0u;
 }
 
+size_t flowmq_stream_decoder_buffered(const flowmq_stream_decoder_t *stream) {
+  return stream && stream->initialized ? salts_bytes_size(&stream->buffer) : 0u;
+}
+
 int flowmq_stream_decoder_append(flowmq_stream_decoder_t *stream, const void *data, size_t size) {
   if (!stream || !stream->initialized) return SALTS_EINVAL;
   return salts_bytes_append(&stream->buffer, data, size);
