@@ -57,6 +57,9 @@ int flowmq_socket_internal_route_external_completion(
 int flowmq_socket_internal_poll_revents(
     const flowmq_socket_t *socket, short events, short *revents);
 
+int flowmq_socket_internal_async_error_matches(
+    const flowmq_socket_t *socket, int status);
+
 /*
  * Starts/continues external CNet shutdown. SALTS_EBUSY means the embedding
  * owner must continue advance/observe/route and retry. After SALTS_OK,
