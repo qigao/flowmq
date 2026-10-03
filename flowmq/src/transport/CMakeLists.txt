@@ -39,33 +39,5 @@ target_link_libraries(flowmq_transport
                       PUBLIC FlowMQ::Core Salts::Core
                       PRIVATE Salts::CNet Salts::CMeta Salts::NativeIO)
 
-# Diagnostic-only duplicate of the transport runtime retained for the #67
-# shared-wait benchmark. The production owner API wraps the same private seam.
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-  add_library(
-    flowmq_transport_external_profile STATIC
-    ${FLOWMQ_TRANSPORT_SOURCES}
-    ${FLOWMQ_TRANSPORT_HEADERS}
-    ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_socket_external_internal.h)
-  set_target_properties(
-    flowmq_transport_external_profile
-    PROPERTIES
-      EXCLUDE_FROM_ALL TRUE
-      FOLDER "flowmq/benchmarks/runtime")
-  target_include_directories(
-    flowmq_transport_external_profile
-    PUBLIC ${PROJECT_SOURCE_DIR}/flowmq/include
-    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cnet
-            ${PROJECT_SOURCE_DIR}/flowmq/src/runtime
-            ${PROJECT_SOURCE_DIR}/flowmq/src/core/pattern
-            ${PROJECT_SOURCE_DIR}/flowmq/src/core/session
-            ${PROJECT_SOURCE_DIR}/flowmq/src/protocol
-            ${PROJECT_SOURCE_DIR}/flowmq/src/protocol/stream)
-  target_link_libraries(
-    flowmq_transport_external_profile
-    PUBLIC FlowMQ::Core Salts::Core
-    PRIVATE Salts::CNet Salts::CMeta Salts::NativeIO)
-endif()
-
 set(FLOWMQ_TRANSPORT_SOURCES ${FLOWMQ_TRANSPORT_SOURCES} PARENT_SCOPE)
 set(FLOWMQ_TRANSPORT_HEADERS ${FLOWMQ_TRANSPORT_HEADERS} PARENT_SCOPE)
