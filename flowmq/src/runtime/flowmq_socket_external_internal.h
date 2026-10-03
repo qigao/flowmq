@@ -56,6 +56,7 @@ int flowmq_socket_internal_route_external_completion(
     flowmq_socket_t *socket, const native_io_completion *completion,
     bool *consumed, size_t *events);
 
+
 /* Computes ordinary POLLIN/POLLOUT/POLLERR state without driving progress. */
 int flowmq_socket_internal_poll_revents(
     const flowmq_socket_t *socket, short events, short *revents);
