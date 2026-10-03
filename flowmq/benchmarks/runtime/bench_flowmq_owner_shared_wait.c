@@ -31,6 +31,10 @@ enum {
   SHARED_WAIT_BACKEND_REQUEST_CAPACITY = 32
 };
 
+_Static_assert(
+    SHARED_WAIT_COMPLETION_CAPACITY <= SHARED_WAIT_BACKEND_REQUEST_CAPACITY,
+    "shared backend completion capacity must fit request capacity");
+
 static const size_t SHARED_WAIT_PAYLOADS[] = {1024u, 65536u};
 
 typedef enum shared_wait_mode_e {
