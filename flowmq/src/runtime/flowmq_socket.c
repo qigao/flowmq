@@ -146,6 +146,7 @@ struct flowmq_socket_peer_s {
 
 struct flowmq_ctx_s {
   size_t socket_count;
+  size_t owner_count;
   uint64_t next_socket_id;
 };
 
@@ -1925,8 +1926,20 @@ flowmq_ctx_t *flowmq_ctx_new(void) {
 
 int flowmq_ctx_term(flowmq_ctx_t *ctx) {
   if (ctx == NULL) return SALTS_EINVAL;
-  if (ctx->socket_count != 0u) return SALTS_EBUSY;
+  if (ctx->socket_count != 0u || ctx->owner_count != 0u) return SALTS_EBUSY;
   free(ctx);
+  return SALTS_OK;
+}
+
+int flowmq_ctx_internal_owner_acquire(flowmq_ctx_t *ctx) {
+  if (ctx == NULL || ctx->owner_count == SIZE_MAX) return SALTS_EINVAL;
+  ++ctx->owner_count;
+  return SALTS_OK;
+}
+
+int flowmq_ctx_internal_owner_release(flowmq_ctx_t *ctx) {
+  if (ctx == NULL || ctx->owner_count == 0u) return SALTS_EINVAL;
+  --ctx->owner_count;
   return SALTS_OK;
 }
 
