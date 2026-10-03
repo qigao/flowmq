@@ -375,7 +375,8 @@ static int shared_wait_peer_destroy(shared_wait_peer_t *peer,
 }
 
 static int shared_wait_control_progress(shared_wait_fixture_t *fixture,
-                                        uint32_t timeout_ms) {
+                                        uint32_t timeout_ms,
+                                        bool want_write) {
   flowmq_pollitem_t items[SHARED_WAIT_LANES];
   size_t ready = 0u;
   int status;
@@ -383,7 +384,8 @@ static int shared_wait_control_progress(shared_wait_fixture_t *fixture,
   for (size_t lane = 0u; lane < SHARED_WAIT_LANES; ++lane) {
     items[lane] = (flowmq_pollitem_t){
         .socket = fixture->sockets[lane],
-        .events = FLOWMQ_POLLIN | FLOWMQ_POLLOUT | FLOWMQ_POLLERR};
+        .events = (short)(FLOWMQ_POLLIN | FLOWMQ_POLLERR |
+                          (want_write ? FLOWMQ_POLLOUT : 0))};
   }
   status = flowmq_poll(items, SHARED_WAIT_LANES, timeout_ms, &ready);
   if (fixture->measuring) ++fixture->control_poll_calls;
@@ -456,9 +458,11 @@ static int shared_wait_candidate_progress(shared_wait_fixture_t *fixture,
 }
 
 static int shared_wait_progress(shared_wait_fixture_t *fixture,
-                                uint32_t timeout_ms) {
+                                uint32_t timeout_ms,
+                                bool want_write) {
   return fixture->mode == SHARED_WAIT_CONTROL
-             ? shared_wait_control_progress(fixture, timeout_ms)
+             ? shared_wait_control_progress(
+                   fixture, timeout_ms, want_write)
              : shared_wait_candidate_progress(fixture, timeout_ms);
 }
 
@@ -539,7 +543,7 @@ static int shared_wait_round(shared_wait_fixture_t *fixture,
       break;
     {
       const int status =
-          shared_wait_progress(fixture, SHARED_WAIT_MAX_WAIT_MS);
+          shared_wait_progress(fixture, SHARED_WAIT_MAX_WAIT_MS, true);
       if (status != SALTS_OK) return status;
     }
     if (shared_wait_deadline_expired(deadline)) return SALTS_ETIMEDOUT;
@@ -563,7 +567,7 @@ static int shared_wait_round(shared_wait_fixture_t *fixture,
     if (received[0] && received[1]) break;
     {
       const int status =
-          shared_wait_progress(fixture, SHARED_WAIT_MAX_WAIT_MS);
+          shared_wait_progress(fixture, SHARED_WAIT_MAX_WAIT_MS, false);
       if (status != SALTS_OK) return status;
     }
     if (shared_wait_deadline_expired(deadline)) return SALTS_ETIMEDOUT;
