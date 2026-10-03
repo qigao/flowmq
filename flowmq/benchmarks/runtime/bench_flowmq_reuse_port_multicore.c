@@ -24,6 +24,7 @@ enum {
   REUSE_PORT_SAMPLES = 64,
   REUSE_PORT_REPEATS = 7,
   REUSE_PORT_PAYLOAD_COUNT = 2,
+  REUSE_PORT_PIPELINE_WINDOW = 16,
   REUSE_PORT_TIMEOUT_MS = 10000
 };
 
@@ -34,6 +35,12 @@ typedef enum reuse_port_mode_e {
   REUSE_PORT_TWO_OWNERS = 1,
   REUSE_PORT_MODE_COUNT
 } reuse_port_mode_t;
+
+typedef enum reuse_port_workload_e {
+  REUSE_PORT_SYNC_REQ = 0,
+  REUSE_PORT_PIPELINED_DEALER = 1,
+  REUSE_PORT_WORKLOAD_COUNT
+} reuse_port_workload_t;
 
 typedef struct reuse_port_shared_s {
   pthread_mutex_t mutex;
@@ -62,11 +69,13 @@ typedef struct reuse_port_client_arg_s {
   reuse_port_shared_t *shared;
   size_t client_id;
   size_t payload_size;
+  reuse_port_workload_t workload;
   uint64_t latencies[REUSE_PORT_SAMPLES];
   int status;
 } reuse_port_client_arg_t;
 
 typedef struct reuse_port_sample_s {
+  const char *workload;
   const char *mode;
   size_t payload_size;
   size_t repeat;
@@ -353,6 +362,85 @@ static int reuse_port_client_cycle(flowmq_socket_t *socket,
   return SALTS_OK;
 }
 
+
+static int reuse_port_client_pipeline(
+    flowmq_socket_t *socket,
+    unsigned char *payload,
+    unsigned char *received_buffer,
+    size_t payload_size,
+    size_t client_id,
+    unsigned char phase,
+    size_t count,
+    uint64_t *latencies) {
+  uint64_t started[REUSE_PORT_SAMPLES] = {0};
+  bool seen[REUSE_PORT_SAMPLES] = {false};
+  size_t next_send = 0u;
+  size_t received_count = 0u;
+  const size_t window =
+      count < REUSE_PORT_PIPELINE_WINDOW
+          ? count
+          : REUSE_PORT_PIPELINE_WINDOW;
+  int status;
+
+  payload[0] = phase;
+  payload[1] = (unsigned char)client_id;
+
+  while (next_send < window) {
+    if (payload_size >= 10u) {
+      const uint64_t id = (uint64_t)next_send;
+      memcpy(payload + 2u, &id, sizeof(id));
+    }
+    if (latencies != NULL) {
+      started[next_send] = reuse_port_clock_ns(CLOCK_MONOTONIC);
+      if (started[next_send] == 0u) return SALTS_EIO;
+    }
+    status = flowmq_send(socket, payload, payload_size, 0);
+    if (status != SALTS_OK) return status;
+    ++next_send;
+  }
+
+  while (received_count < count) {
+    size_t received_size = 0u;
+    uint64_t id = received_count;
+
+    status = flowmq_recv(
+        socket, received_buffer, payload_size, &received_size, 0);
+    if (status != SALTS_OK) return status;
+    if (received_size != payload_size ||
+        received_buffer[0] != phase ||
+        received_buffer[1] != (unsigned char)client_id)
+      return SALTS_EPROTO;
+
+    if (payload_size >= 10u)
+      memcpy(&id, received_buffer + 2u, sizeof(id));
+    if (id >= count || seen[id]) return SALTS_EPROTO;
+    seen[id] = true;
+
+    if (latencies != NULL) {
+      const uint64_t finished = reuse_port_clock_ns(CLOCK_MONOTONIC);
+      if (finished <= started[id]) return SALTS_EIO;
+      latencies[id] = finished - started[id];
+    }
+    ++received_count;
+
+    if (next_send < count) {
+      if (payload_size >= 10u) {
+        const uint64_t next_id = (uint64_t)next_send;
+        memcpy(payload + 2u, &next_id, sizeof(next_id));
+      }
+      if (latencies != NULL) {
+        started[next_send] = reuse_port_clock_ns(CLOCK_MONOTONIC);
+        if (started[next_send] == 0u) return SALTS_EIO;
+      }
+      status = flowmq_send(socket, payload, payload_size, 0);
+      if (status != SALTS_OK) return status;
+      ++next_send;
+    }
+  }
+
+  return SALTS_OK;
+}
+
 static void *reuse_port_client_entry(void *user) {
   reuse_port_client_arg_t *arg = (reuse_port_client_arg_t *)user;
   reuse_port_shared_t *shared = arg->shared;
@@ -383,7 +471,10 @@ static void *reuse_port_client_entry(void *user) {
     status = SALTS_ENOMEM;
     goto fail;
   }
-  socket = flowmq_socket(ctx, FLOWMQ_REQ);
+  socket = flowmq_socket(
+      ctx, arg->workload == REUSE_PORT_SYNC_REQ
+               ? FLOWMQ_REQ
+               : FLOWMQ_DEALER);
   if (socket == NULL) {
     status = SALTS_ENOMEM;
     goto fail;
@@ -392,9 +483,16 @@ static void *reuse_port_client_entry(void *user) {
   if (status != SALTS_OK) goto fail;
 
   payload[0] = 0u;
-  for (size_t warmup = 0u; warmup < REUSE_PORT_WARMUPS; ++warmup) {
-    status = reuse_port_client_cycle(
-        socket, payload, received, arg->payload_size, NULL);
+  if (arg->workload == REUSE_PORT_SYNC_REQ) {
+    for (size_t warmup = 0u; warmup < REUSE_PORT_WARMUPS; ++warmup) {
+      status = reuse_port_client_cycle(
+          socket, payload, received, arg->payload_size, NULL);
+      if (status != SALTS_OK) goto fail;
+    }
+  } else {
+    status = reuse_port_client_pipeline(
+        socket, payload, received, arg->payload_size, arg->client_id,
+        0u, REUSE_PORT_WARMUPS, NULL);
     if (status != SALTS_OK) goto fail;
   }
 
@@ -411,15 +509,21 @@ static void *reuse_port_client_entry(void *user) {
   }
 
   payload[0] = 1u;
-  for (size_t sample = 0u; sample < REUSE_PORT_SAMPLES; ++sample) {
-    if (arg->payload_size >= 10u) {
-      const uint64_t value =
-          ((uint64_t)arg->client_id << 56u) | (uint64_t)sample;
-      memcpy(payload + 2u, &value, sizeof(value));
+  if (arg->workload == REUSE_PORT_SYNC_REQ) {
+    for (size_t sample = 0u; sample < REUSE_PORT_SAMPLES; ++sample) {
+      if (arg->payload_size >= 10u) {
+        const uint64_t value = (uint64_t)sample;
+        memcpy(payload + 2u, &value, sizeof(value));
+      }
+      status = reuse_port_client_cycle(
+          socket, payload, received, arg->payload_size,
+          &arg->latencies[sample]);
+      if (status != SALTS_OK) goto fail;
     }
-    status = reuse_port_client_cycle(
-        socket, payload, received, arg->payload_size,
-        &arg->latencies[sample]);
+  } else {
+    status = reuse_port_client_pipeline(
+        socket, payload, received, arg->payload_size, arg->client_id,
+        1u, REUSE_PORT_SAMPLES, arg->latencies);
     if (status != SALTS_OK) goto fail;
   }
 
@@ -468,7 +572,14 @@ static uint64_t reuse_port_percentile(uint64_t *values,
   return values[index];
 }
 
-static int reuse_port_run_mode(reuse_port_mode_t mode,
+static const char *reuse_port_workload_name(reuse_port_workload_t workload) {
+  return workload == REUSE_PORT_SYNC_REQ
+             ? "sync_req"
+             : "pipelined_dealer";
+}
+
+static int reuse_port_run_mode(reuse_port_workload_t workload,
+                               reuse_port_mode_t mode,
                                size_t payload_size,
                                size_t repeat,
                                int cpu_a,
@@ -529,6 +640,7 @@ static int reuse_port_run_mode(reuse_port_mode_t mode,
     clients[index].shared = &shared;
     clients[index].client_id = index;
     clients[index].payload_size = payload_size;
+    clients[index].workload = workload;
     status = pthread_create(
         &client_threads[index], NULL,
         reuse_port_client_entry, &clients[index]);
@@ -626,6 +738,7 @@ cleanup:
   }
 
   if (status == SALTS_OK) {
+    out->workload = reuse_port_workload_name(workload);
     out->mode =
         mode == REUSE_PORT_ONE_OWNER
             ? "one_owner"
@@ -704,10 +817,11 @@ static int reuse_port_write_csv(FILE *csv,
   if (csv == NULL || sample == NULL) return SALTS_OK;
   return fprintf(
              csv,
-             "%s,%zu,%zu,%zu,%d,%d,%" PRIu64 ",%" PRIu64
+             "%s,%s,%zu,%zu,%zu,%d,%d,%" PRIu64 ",%" PRIu64
              ",%" PRIu64 ",%" PRIu64 ",%" PRIu64
              ",%.6f,%.6f,%.6f,%zu,%zu\n",
-             sample->mode, sample->payload_size, sample->repeat,
+             sample->workload, sample->mode,
+             sample->payload_size, sample->repeat,
              sample->logical_operations, sample->cpu_a, sample->cpu_b,
              sample->wall_ns, sample->owner_cpu_ns,
              sample->p50_ns, sample->p95_ns, sample->p99_ns,
@@ -722,7 +836,8 @@ static int reuse_port_write_csv(FILE *csv,
 
 int main(void) {
   reuse_port_sample_t
-      results[REUSE_PORT_PAYLOAD_COUNT]
+      results[REUSE_PORT_WORKLOAD_COUNT]
+             [REUSE_PORT_PAYLOAD_COUNT]
              [REUSE_PORT_MODE_COUNT]
              [REUSE_PORT_REPEATS];
   FILE *csv = NULL;
@@ -748,55 +863,66 @@ int main(void) {
   if (csv != NULL) {
     fprintf(
         csv,
-        "mode,payload_bytes,repeat,logical_operations,cpu_a,cpu_b,"
+        "workload,mode,payload_bytes,repeat,logical_operations,cpu_a,cpu_b,"
         "wall_ns,owner_cpu_ns,p50_ns,p95_ns,p99_ns,"
         "operations_per_second,mib_per_second,owner_cpu_us_per_op,"
         "server0_requests,server1_requests\n");
   }
 
-  for (size_t payload = 0u;
-       payload < REUSE_PORT_PAYLOAD_COUNT; ++payload) {
-    for (size_t repeat = 0u;
-         repeat < REUSE_PORT_REPEATS; ++repeat) {
-      for (size_t offset = 0u;
-           offset < REUSE_PORT_MODE_COUNT; ++offset) {
-        const reuse_port_mode_t mode =
-            (reuse_port_mode_t)(
-                (payload + repeat + offset) %
-                REUSE_PORT_MODE_COUNT);
-        reuse_port_sample_t *sample =
-            &results[payload][mode][repeat];
-        status = reuse_port_run_mode(
-            mode, REUSE_PORT_PAYLOADS[payload], repeat + 1u,
-            cpu_a, cpu_b, sample);
-        if (status != SALTS_OK) {
-          fprintf(stderr,
-                  "reuse-port benchmark failed: mode=%u payload=%zu "
-                  "repeat=%zu status=%d\n",
-                  (unsigned)mode, REUSE_PORT_PAYLOADS[payload],
-                  repeat + 1u, status);
-          goto cleanup;
+  for (size_t workload = 0u;
+       workload < REUSE_PORT_WORKLOAD_COUNT; ++workload) {
+    for (size_t payload = 0u;
+         payload < REUSE_PORT_PAYLOAD_COUNT; ++payload) {
+      for (size_t repeat = 0u;
+           repeat < REUSE_PORT_REPEATS; ++repeat) {
+        for (size_t offset = 0u;
+             offset < REUSE_PORT_MODE_COUNT; ++offset) {
+          const reuse_port_mode_t mode =
+              (reuse_port_mode_t)(
+                  (workload + payload + repeat + offset) %
+                  REUSE_PORT_MODE_COUNT);
+          reuse_port_sample_t *sample =
+              &results[workload][payload][mode][repeat];
+          status = reuse_port_run_mode(
+              (reuse_port_workload_t)workload, mode,
+              REUSE_PORT_PAYLOADS[payload], repeat + 1u,
+              cpu_a, cpu_b, sample);
+          if (status != SALTS_OK) {
+            fprintf(stderr,
+                    "reuse-port benchmark failed: workload=%s mode=%u "
+                    "payload=%zu repeat=%zu status=%d\n",
+                    reuse_port_workload_name(
+                        (reuse_port_workload_t)workload),
+                    (unsigned)mode, REUSE_PORT_PAYLOADS[payload],
+                    repeat + 1u, status);
+            goto cleanup;
+          }
+          status = reuse_port_write_csv(csv, sample);
+          if (status != SALTS_OK) goto cleanup;
         }
-        status = reuse_port_write_csv(csv, sample);
-        if (status != SALTS_OK) goto cleanup;
       }
     }
   }
 
   printf("# FlowMQ same-endpoint reuse-port multicore service\n\n");
   printf(
-      "Four scheduler-managed REQ clients execute equal request/reply work. "
-      "Control uses one pinned REP owner; candidate uses two REP owners on "
+      "Two workload classes use the same four scheduler-managed client "
+      "connections: sync_req keeps one outstanding request per client; "
+      "pipelined_dealer keeps up to %u outstanding per client to saturate "
+      "service capacity. Control uses one pinned REP owner; candidate uses "
+      "two REP owners on "
       "distinct physical CPUs %d and %d bound to the same TCP endpoint with "
       "FLOWMQ_REUSE_PORT=1. Connections never migrate. No relative "
       "performance threshold is enforced.\n\n",
-      cpu_a, cpu_b);
-  printf("| payload | mode | ops/s median | MiB/s median | p50 us | "
+      (unsigned)REUSE_PORT_PIPELINE_WINDOW, cpu_a, cpu_b);
+  printf("| workload | payload | mode | ops/s median | MiB/s median | p50 us | "
          "p99 us | service CPU us/op | owner0/owner1 measured requests |\n");
-  printf("| ---: | --- | ---: | ---: | ---: | ---: | ---: | --- |\n");
+  printf("| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | --- |\n");
 
-  for (size_t payload = 0u;
-       payload < REUSE_PORT_PAYLOAD_COUNT; ++payload) {
+  for (size_t workload = 0u;
+       workload < REUSE_PORT_WORKLOAD_COUNT; ++workload) {
+    for (size_t payload = 0u;
+         payload < REUSE_PORT_PAYLOAD_COUNT; ++payload) {
     double rate[REUSE_PORT_MODE_COUNT][REUSE_PORT_REPEATS];
     double mib[REUSE_PORT_MODE_COUNT][REUSE_PORT_REPEATS];
     double p50[REUSE_PORT_MODE_COUNT][REUSE_PORT_REPEATS];
@@ -813,7 +939,7 @@ int main(void) {
       for (size_t repeat = 0u;
            repeat < REUSE_PORT_REPEATS; ++repeat) {
         const reuse_port_sample_t *sample =
-            &results[payload][mode][repeat];
+            &results[workload][payload][mode][repeat];
         rate[mode][repeat] = sample->operations_per_second;
         mib[mode][repeat] = sample->mib_per_second;
         p50[mode][repeat] = (double)sample->p50_ns / 1000.0;
@@ -829,7 +955,9 @@ int main(void) {
               (double)results[payload][mode][repeat].server1_requests;
         }
       }
-      printf("| %zu | %s | %.0f | %.3f | %.3f | %.3f | %.3f | ",
+      printf("| %s | %zu | %s | %.0f | %.3f | %.3f | %.3f | %.3f | ",
+             reuse_port_workload_name(
+                 (reuse_port_workload_t)workload),
              REUSE_PORT_PAYLOADS[payload],
              mode == REUSE_PORT_ONE_OWNER
                  ? "one_owner"
@@ -851,9 +979,9 @@ int main(void) {
     for (size_t repeat = 0u;
          repeat < REUSE_PORT_REPEATS; ++repeat) {
       const reuse_port_sample_t *control =
-          &results[payload][REUSE_PORT_ONE_OWNER][repeat];
+          &results[workload][payload][REUSE_PORT_ONE_OWNER][repeat];
       const reuse_port_sample_t *candidate =
-          &results[payload][REUSE_PORT_TWO_OWNERS][repeat];
+          &results[workload][payload][REUSE_PORT_TWO_OWNERS][repeat];
       speedup[repeat] =
           candidate->operations_per_second /
           control->operations_per_second;
@@ -864,12 +992,15 @@ int main(void) {
           control->owner_cpu_us_per_op;
     }
     printf(
-        "\n%zu-byte two-owner/control paired medians: throughput %.3fx, "
+        "\n%s %zu-byte two-owner/control paired medians: throughput %.3fx, "
         "p99 %.3fx, service CPU/op %.3fx\n\n",
+        reuse_port_workload_name(
+            (reuse_port_workload_t)workload),
         REUSE_PORT_PAYLOADS[payload],
         reuse_port_double_median(speedup, REUSE_PORT_REPEATS),
         reuse_port_double_median(p99_ratio, REUSE_PORT_REPEATS),
         reuse_port_double_median(cpu_ratio, REUSE_PORT_REPEATS));
+    }
   }
 
   status = SALTS_OK;
