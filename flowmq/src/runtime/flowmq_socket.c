@@ -3326,13 +3326,138 @@ int flowmq_socket_internal_progress_local(flowmq_socket_t *socket) {
   return flowmq_socket_progress_local(socket);
 }
 
+static uint32_t flowmq_socket_wait_until_ms(
+    uint64_t now_ms, uint64_t deadline_ms, uint32_t current_wait_ms) {
+  uint64_t delta_ms;
+  if (deadline_ms == 0u) return current_wait_ms;
+  if (deadline_ms <= now_ms) return 0u;
+  delta_ms = deadline_ms - now_ms;
+  return delta_ms < (uint64_t)current_wait_ms
+             ? (uint32_t)delta_ms
+             : current_wait_ms;
+}
+
+static uint32_t flowmq_socket_wait_until_ns(
+    uint64_t now_ns, uint64_t deadline_ns, uint32_t current_wait_ms) {
+  uint64_t delta_ns;
+  uint64_t delta_ms;
+  if (deadline_ns == 0u) return current_wait_ms;
+  if (deadline_ns <= now_ns) return 0u;
+  delta_ns = deadline_ns - now_ns;
+  delta_ms = delta_ns / UINT64_C(1000000);
+  if (delta_ns % UINT64_C(1000000) != 0u) ++delta_ms;
+  return delta_ms < (uint64_t)current_wait_ms
+             ? (uint32_t)delta_ms
+             : current_wait_ms;
+}
+
+static int flowmq_socket_internal_local_timeout(
+    flowmq_socket_t *socket, uint32_t max_wait_ms, uint32_t *wait_ms) {
+  const uint64_t now_ms = salts_monotonic_ms();
+  const uint64_t now_ns = salts_hrtime();
+  uint32_t wait = max_wait_ms;
+
+  if (socket == NULL || wait_ms == NULL) return SALTS_EINVAL;
+
+  if (socket->reconnect_pending) {
+    for (size_t i = 0u; i < FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY; ++i) {
+      const flowmq_socket_endpoint_t *endpoint = &socket->endpoints[i];
+      if (!endpoint->used || endpoint->active || !endpoint->retry_pending)
+        continue;
+      wait = flowmq_socket_wait_until_ms(
+          now_ms, endpoint->next_attempt_ms, wait);
+      if (wait == 0u) break;
+    }
+  }
+
+  for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY && wait != 0u; ++i) {
+    flowmq_socket_peer_t *peer = &socket->peers[i];
+    const int write_idle = flowmq_peer_state_write_idle(&peer->state);
+    if (!flowmq_peer_state_is_used(&peer->state)) continue;
+
+    if (peer->commit_pending) {
+      wait = 0u;
+      break;
+    }
+
+    if (!flowmq_peer_state_is_connected(&peer->state)) continue;
+
+    if (flowmq_peer_state_handshake_has(
+            &peer->state, FLOWMQ_PEER_HANDSHAKE_HELLO_TX) &&
+        !flowmq_peer_state_handshake_has(
+            &peer->state, FLOWMQ_PEER_HANDSHAKE_SETTINGS_TX) &&
+        write_idle) {
+      wait = 0u;
+      break;
+    }
+
+    if (peer->outbound_count != 0u && write_idle) {
+      wait = 0u;
+      break;
+    }
+
+    if (!flowmq_socket_peer_ready(peer)) continue;
+
+    if (peer->pong_pending && write_idle) {
+      wait = 0u;
+      break;
+    }
+
+    if (peer->heartbeat_active) {
+      uint64_t heartbeat_deadline_ns = 0u;
+      const flowmq_protocol_heartbeat_action_t action =
+          flowmq_protocol_heartbeat_deadlines_next(
+              &peer->heartbeat, now_ns, &heartbeat_deadline_ns);
+      if (action == FLOWMQ_PROTOCOL_HEARTBEAT_WAIT) {
+        wait = flowmq_socket_wait_until_ns(
+            now_ns, heartbeat_deadline_ns, wait);
+      } else if (action == FLOWMQ_PROTOCOL_HEARTBEAT_SEND_PING) {
+        if (write_idle) {
+          wait = 0u;
+          break;
+        }
+      } else {
+        wait = 0u;
+        break;
+      }
+    }
+
+    if (peer->flow_control.local_initialized &&
+        peer->flow_control.update_pending) {
+      flowmq_protocol_flow_update_t update;
+      const int status = flowmq_flow_control_next_update(
+          &peer->flow_control, now_ns, &update);
+      if (status == SALTS_OK) {
+        if (write_idle) {
+          wait = 0u;
+          break;
+        }
+      } else if (status == FLOWMQ_FLOW_CONTROL_NO_UPDATE) {
+        wait = flowmq_socket_wait_until_ns(
+            now_ns, peer->flow_control.update_deadline_ns, wait);
+      } else {
+        return status;
+      }
+    }
+  }
+
+  *wait_ms = wait;
+  return SALTS_OK;
+}
+
 int flowmq_socket_internal_external_timeout(
     flowmq_socket_t *socket, uint32_t max_wait_ms, uint32_t *wait_ms) {
+  uint32_t cnet_wait_ms;
+  int status;
   if (socket == NULL || socket->external_backend == NULL ||
       !socket->runtime_initialized || wait_ms == NULL)
     return SALTS_EINVAL;
-  return cnet_client_external_timeout(
-      &socket->client, max_wait_ms, wait_ms);
+  status = cnet_client_external_timeout(
+      &socket->client, max_wait_ms, &cnet_wait_ms);
+  if (status != SALTS_OK) return status;
+  status = flowmq_socket_internal_local_timeout(
+      socket, cnet_wait_ms, wait_ms);
+  return status;
 }
 
 int flowmq_socket_internal_route_external_completion(
