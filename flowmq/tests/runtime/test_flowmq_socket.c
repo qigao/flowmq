@@ -306,6 +306,63 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
+  it("retains single-packet TCP payload as a subrange of CNet receive backing") {
+    static const unsigned char payload[] =
+        "owned-receive-fast-path-single-packet";
+    char endpoint[128] = {0};
+    size_t endpoint_size = 0u;
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *sender = flowmq_socket(ctx, FLOWMQ_PAIR);
+    flowmq_socket_t *receiver = flowmq_socket(ctx, FLOWMQ_PAIR);
+    int saw_owned_subrange = 0;
+
+    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), SALTS_OK);
+    check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
+                                     &endpoint_size),
+                SALTS_OK);
+    check_equal(flowmq_connect(sender, endpoint), SALTS_OK);
+
+    /*
+     * Keep exactly one application DATA message outstanding at a time so the
+     * common receive shape is one complete single-packet frame. TCP is still
+     * allowed to segment it; those iterations legitimately take the decoder
+     * fallback. At least one loopback delivery must exercise the owned
+     * subrange path on the qualified runtime.
+     */
+    for (size_t sample = 0u; sample < 16u; ++sample) {
+      mem_slice_t received = {0};
+      int status = SALTS_EBUSY;
+      for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                          status == SALTS_EBUSY; ++i) {
+        check_equal(progress_pair(sender, receiver), SALTS_OK);
+        status = flowmq_send(sender, payload, sizeof(payload) - 1u,
+                             FLOWMQ_DONTWAIT);
+      }
+      check_equal(status, SALTS_OK);
+
+      status = SALTS_EBUSY;
+      for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                          status == SALTS_EBUSY; ++i) {
+        check_equal(progress_pair(sender, receiver), SALTS_OK);
+        status = flowmq_recv_slice(receiver, &received, FLOWMQ_DONTWAIT);
+      }
+      check_equal(status, SALTS_OK);
+      check_not_null(received.buffer);
+      check_not_null(received.data);
+      check_equal(received.length, sizeof(payload) - 1u);
+      check_equal(memcmp(received.data, payload, received.length), 0);
+      if (received.data !=
+          (const void *)mem_buffer_data(received.buffer))
+        saw_owned_subrange = 1;
+      mem_slice_release(&received);
+    }
+    check_true(saw_owned_subrange);
+
+    check_equal(flowmq_close(sender), SALTS_OK);
+    check_equal(flowmq_close(receiver), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+  }
+
   it("transfers inbound buffer ownership through recv slice across later progress") {
     enum { OWNED_RECV_BYTES = 64u * 1024u + 17u };
     static unsigned char first[OWNED_RECV_BYTES];
