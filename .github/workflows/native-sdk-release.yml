@@ -264,7 +264,7 @@ jobs:
           "$benchmark" 2>&1 | tee "$result_dir/flowmq-shared-wait.md"
           {
             echo ""
-            echo "## FlowMQ shared owner wait vs public multi-socket poll (owner CPU $one_cpu_set)"
+            echo "## FlowMQ public owner lane vs legacy multi-socket poll (owner CPU $one_cpu_set)"
             echo ""
             cat "$result_dir/flowmq-shared-wait.md"
           } >> "$GITHUB_STEP_SUMMARY"
