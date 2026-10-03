@@ -212,7 +212,11 @@ static int bench_exchange(bench_pair_t *pair, const void *payload,
       status = flowmq_send(pair->sender, payload, payload_size,
                            FLOWMQ_DONTWAIT);
   }
-  if (status != SALTS_OK) return status;
+  if (status != SALTS_OK) {
+    fprintf(stderr, "bench_exchange send/progress failed payload=%zu status=%d\n",
+            payload_size, status);
+    return status;
+  }
   status = SALTS_EBUSY;
   for (size_t i = 0u; status == SALTS_EBUSY && i < BENCH_PROGRESS_LIMIT; ++i) {
     status = bench_progress(pair);
@@ -220,10 +224,17 @@ static int bench_exchange(bench_pair_t *pair, const void *payload,
       status = flowmq_recv(pair->receiver, received, sizeof(received),
                            &received_size, FLOWMQ_DONTWAIT);
   }
-  if (status != SALTS_OK) return status;
+  if (status != SALTS_OK) {
+    fprintf(stderr, "bench_exchange recv/progress failed payload=%zu status=%d received=%zu\n",
+            payload_size, status, received_size);
+    return status;
+  }
   if (received_size != payload_size ||
-      memcmp(received, payload, payload_size) != 0)
+      memcmp(received, payload, payload_size) != 0) {
+    fprintf(stderr, "bench_exchange payload mismatch expected=%zu received=%zu\n",
+            payload_size, received_size);
     return SALTS_EPROTO;
+  }
   return SALTS_OK;
 }
 
@@ -801,6 +812,9 @@ spec("FlowMQ direct socket benchmark") {
     }
     check_equal(status, SALTS_OK);
 
+    check_equal(bench_pair_close(&pair), SALTS_OK);
+    status = bench_pair_open_tls(&pair);
+    check_equal(status, SALTS_OK);
     check_equal(bench_exchange(
                     &pair, retained_large_payload,
                     sizeof(retained_large_payload)), SALTS_OK);
@@ -812,6 +826,9 @@ spec("FlowMQ direct socket benchmark") {
     }
     check_equal(status, SALTS_OK);
 
+    check_equal(bench_pair_close(&pair), SALTS_OK);
+    status = bench_pair_open_tls(&pair);
+    check_equal(status, SALTS_OK);
     check_equal(bench_exchange_retained(&pair, &retained_large_slice),
                 SALTS_OK);
     benchmark_bytes("TLS natural framing 1-MiB retained immediate",
