@@ -30,7 +30,14 @@ enum {
 
 static size_t bench_socket_samples(size_t regular, size_t smoke_samples) {
   const char *smoke = getenv("FLOWMQ_BENCH_SMOKE");
-  return smoke != NULL && strcmp(smoke, "0") != 0 ? smoke_samples : regular;
+  const char *ci = getenv("FLOWMQ_BENCH_CI");
+  size_t ci_samples;
+  if (smoke != NULL && strcmp(smoke, "0") != 0) return smoke_samples;
+  if (ci == NULL || strcmp(ci, "0") == 0) return regular;
+  ci_samples = regular / 50u;
+  if (ci_samples < smoke_samples * 32u) ci_samples = smoke_samples * 32u;
+  if (ci_samples > regular) ci_samples = regular;
+  return ci_samples;
 }
 
 typedef struct bench_pair_s {
