@@ -21,6 +21,9 @@ extern "C" {
  * The benchmark-only entry points are retained so #67 remains a direct
  * qualification harness for the same implementation.
  */
+int flowmq_ctx_internal_owner_acquire(flowmq_ctx_t *ctx);
+int flowmq_ctx_internal_owner_release(flowmq_ctx_t *ctx);
+
 int flowmq_socket_internal_attach_external_backend(
     flowmq_socket_t *socket, native_io_backend *backend);
 
