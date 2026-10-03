@@ -604,6 +604,194 @@ static void bench_tls_evidence_print(const bench_tls_evidence_result *result) {
          result->mib_per_second);
 }
 
+typedef enum bench_owned_rx_mode_e {
+  BENCH_OWNED_RX_COPY = 0,
+  BENCH_OWNED_RX_SLICE = 1
+} bench_owned_rx_mode_t;
+
+typedef struct bench_owned_rx_result_s {
+  const char *mode;
+  size_t payload_bytes;
+  size_t samples;
+  uint64_t p50_ns;
+  uint64_t p95_ns;
+  double mib_per_second;
+  size_t direct_hits;
+  size_t fallback_hits;
+  size_t direct_copy_count;
+  size_t fallback_copy_count;
+  int classification_observable;
+} bench_owned_rx_result_t;
+
+static size_t bench_owned_rx_samples(size_t payload_bytes) {
+  if (payload_bytes <= BENCH_PAYLOAD_BYTES)
+    return bench_tls_evidence_samples(101u, 31u);
+  if (payload_bytes <= BENCH_LARGE_PAYLOAD_BYTES)
+    return bench_tls_evidence_samples(61u, 31u);
+  return bench_tls_evidence_samples(31u, 15u);
+}
+
+static int bench_owned_rx_exchange(
+    bench_pair_t *pair, const void *payload, size_t payload_size,
+    bench_owned_rx_mode_t mode, int *out_direct) {
+  static unsigned char received_copy[BENCH_RETAINED_LARGE_PAYLOAD_BYTES];
+  mem_slice_t received_slice = {0};
+  const uint64_t deadline_ms = bench_progress_deadline_ms();
+  size_t received_size = 0u;
+  int status;
+
+  if (pair == NULL || payload == NULL || payload_size == 0u ||
+      payload_size > sizeof(received_copy) || out_direct == NULL)
+    return SALTS_EINVAL;
+  *out_direct = 0;
+
+  status = flowmq_send(pair->sender, payload, payload_size, FLOWMQ_DONTWAIT);
+  while (status == SALTS_EBUSY || status == SALTS_ENOBUFS) {
+    status = bench_progress_wait(pair, deadline_ms, 1);
+    if (status != SALTS_OK) return status;
+    status = flowmq_send(pair->sender, payload, payload_size, FLOWMQ_DONTWAIT);
+  }
+  if (status != SALTS_OK) return status;
+
+  if (mode == BENCH_OWNED_RX_COPY) {
+    status = SALTS_EBUSY;
+    while (status == SALTS_EBUSY) {
+      status = bench_progress_wait(pair, deadline_ms, 0);
+      if (status != SALTS_OK) return status;
+      status = flowmq_recv(pair->receiver, received_copy,
+                           sizeof(received_copy), &received_size,
+                           FLOWMQ_DONTWAIT);
+    }
+    if (status != SALTS_OK) return status;
+    if (received_size != payload_size ||
+        memcmp(received_copy, payload, payload_size) != 0)
+      return SALTS_EPROTO;
+    return SALTS_OK;
+  }
+
+  status = SALTS_EBUSY;
+  while (status == SALTS_EBUSY) {
+    status = bench_progress_wait(pair, deadline_ms, 0);
+    if (status != SALTS_OK) return status;
+    status =
+        flowmq_recv_slice(pair->receiver, &received_slice, FLOWMQ_DONTWAIT);
+  }
+  if (status != SALTS_OK) return status;
+  if (received_slice.buffer == NULL || received_slice.data == NULL ||
+      received_slice.length != payload_size ||
+      memcmp(received_slice.data, payload, payload_size) != 0) {
+    mem_slice_release(&received_slice);
+    return SALTS_EPROTO;
+  }
+  *out_direct =
+      received_slice.data !=
+      (const void *)mem_buffer_data(received_slice.buffer);
+  mem_slice_release(&received_slice);
+  return SALTS_OK;
+}
+
+static int bench_owned_rx_measure(
+    const void *payload, size_t payload_size, bench_owned_rx_mode_t mode,
+    bench_owned_rx_result_t *out) {
+  enum {
+    BENCH_OWNED_RX_MAX_SAMPLES = 128u,
+    BENCH_OWNED_RX_WARMUPS = 3u
+  };
+  bench_pair_t pair;
+  uint64_t latencies[BENCH_OWNED_RX_MAX_SAMPLES];
+  const size_t samples = bench_owned_rx_samples(payload_size);
+  uint64_t elapsed_total = 0u;
+  size_t direct_hits = 0u;
+  int status;
+
+  if (payload == NULL || payload_size == 0u || out == NULL ||
+      samples == 0u || samples > BENCH_OWNED_RX_MAX_SAMPLES)
+    return SALTS_EINVAL;
+
+  memset(&pair, 0, sizeof(pair));
+  memset(latencies, 0, sizeof(latencies));
+  status = bench_pair_open(&pair);
+  if (status != SALTS_OK) return status;
+
+  for (size_t warmup = 0u; warmup < BENCH_OWNED_RX_WARMUPS; ++warmup) {
+    int direct = 0;
+    status = bench_owned_rx_exchange(
+        &pair, payload, payload_size, mode, &direct);
+    if (status != SALTS_OK) goto cleanup;
+  }
+
+  for (size_t sample = 0u; sample < samples; ++sample) {
+    const uint64_t started = salts_hrtime();
+    uint64_t elapsed;
+    int direct = 0;
+    status = bench_owned_rx_exchange(
+        &pair, payload, payload_size, mode, &direct);
+    if (status != SALTS_OK) {
+      fprintf(stderr,
+              "OWNED_RX_EVIDENCE_FAIL mode=%s payload_bytes=%zu "
+              "sample=%zu status=%d\n",
+              mode == BENCH_OWNED_RX_SLICE ? "slice" : "copy",
+              payload_size, sample, status);
+      goto cleanup;
+    }
+    elapsed = salts_hrtime() - started;
+    if (elapsed == 0u || elapsed > UINT64_MAX - elapsed_total) {
+      status = SALTS_ERANGE;
+      goto cleanup;
+    }
+    latencies[sample] = elapsed;
+    elapsed_total += elapsed;
+    if (mode == BENCH_OWNED_RX_SLICE && direct) ++direct_hits;
+  }
+
+  {
+    const int multi_packet =
+        payload_size > FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE;
+    const size_t fallback_copies = multi_packet ? 3u : 2u;
+    *out = (bench_owned_rx_result_t){
+        .mode = mode == BENCH_OWNED_RX_SLICE ? "slice" : "copy",
+        .payload_bytes = payload_size,
+        .samples = samples,
+        .p50_ns = bench_tls_evidence_percentile(latencies, samples, 50u),
+        .p95_ns = bench_tls_evidence_percentile(latencies, samples, 95u),
+        .mib_per_second =
+            ((double)payload_size * (double)samples /
+             (1024.0 * 1024.0)) *
+            1.0e9 / (double)elapsed_total,
+        .direct_hits = mode == BENCH_OWNED_RX_SLICE ? direct_hits : 0u,
+        .fallback_hits =
+            mode == BENCH_OWNED_RX_SLICE ? samples - direct_hits : 0u,
+        .direct_copy_count =
+            mode == BENCH_OWNED_RX_SLICE ? 0u : 1u,
+        .fallback_copy_count =
+            fallback_copies +
+            (mode == BENCH_OWNED_RX_SLICE ? 0u : 1u),
+        .classification_observable =
+            mode == BENCH_OWNED_RX_SLICE ? 1 : 0};
+  }
+
+cleanup:
+  {
+    const int close_status = bench_pair_close(&pair);
+    if (status == SALTS_OK && close_status != SALTS_OK) status = close_status;
+  }
+  return status;
+}
+
+static void bench_owned_rx_print(const bench_owned_rx_result_t *result) {
+  printf(
+      "OWNED_RX_EVIDENCE mode=%s payload_bytes=%zu samples=%zu "
+      "p50_us=%.3f p95_us=%.3f mib_per_second=%.2f "
+      "classification_observable=%d direct_hits=%zu fallback_hits=%zu "
+      "direct_copy_count=%zu fallback_copy_count=%zu\n",
+      result->mode, result->payload_bytes, result->samples,
+      (double)result->p50_ns / 1000.0,
+      (double)result->p95_ns / 1000.0,
+      result->mib_per_second, result->classification_observable,
+      result->direct_hits, result->fallback_hits,
+      result->direct_copy_count, result->fallback_copy_count);
+}
+
 #if defined(FLOWMQ_BENCH_WITH_ZMQ)
 typedef struct bench_zmq_pair_s {
   void *ctx;
@@ -896,6 +1084,33 @@ spec("FlowMQ direct socket benchmark") {
       status = bench_exchange_batch(&pair, payload, sizeof(payload));
     }
     check_equal(status, SALTS_OK);
+
+    {
+      const struct {
+        const void *payload;
+        size_t payload_size;
+      } workloads[] = {
+          {payload, sizeof(payload)},
+          {large_payload, sizeof(large_payload)},
+          {retained_large_payload, sizeof(retained_large_payload)}};
+
+      printf("OWNED_RX_EVIDENCE_BEGIN transport=tcp\n");
+      for (size_t index = 0u;
+           index < sizeof(workloads) / sizeof(workloads[0]); ++index) {
+        for (size_t mode = 0u; mode < 2u; ++mode) {
+          bench_owned_rx_result_t result = {0};
+          status = bench_owned_rx_measure(
+              workloads[index].payload, workloads[index].payload_size,
+              (bench_owned_rx_mode_t)mode, &result);
+          check_equal(status, SALTS_OK);
+          if (status != SALTS_OK) break;
+          bench_owned_rx_print(&result);
+        }
+        if (status != SALTS_OK) break;
+      }
+      check_equal(status, SALTS_OK);
+      printf("OWNED_RX_EVIDENCE_END transport=tcp\n");
+    }
 
     {
       const bench_tls_evidence_workload workloads[] = {
