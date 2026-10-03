@@ -87,6 +87,7 @@ typedef struct owner_parallel_thread_arg_s {
   owner_parallel_gate_t *gate;
   owner_parallel_peer_t *peers[OWNER_PARALLEL_LANES];
   owner_parallel_lane_t lanes[OWNER_PARALLEL_LANES];
+  size_t lane_ids[OWNER_PARALLEL_LANES];
   uint64_t latencies[OWNER_PARALLEL_LANES][OWNER_PARALLEL_SAMPLES];
   size_t lane_count;
   size_t payload_size;
@@ -634,7 +635,7 @@ static void *owner_parallel_owner_entry(void *user) {
   for (size_t lane = 0u; lane < arg->lane_count; ++lane) {
     status = owner_parallel_lane_init(
         &arg->lanes[lane], arg->peers[lane]->endpoint,
-        arg->payload_size, arg->path, lane);
+        arg->payload_size, arg->path, arg->lane_ids[lane]);
     if (status != SALTS_OK) goto fail;
     ++initialized;
 
@@ -772,6 +773,8 @@ static int owner_parallel_run_mode(owner_parallel_mode_t mode,
     args[0].gate = &gate;
     args[0].peers[0] = &peers[0];
     args[0].peers[1] = &peers[1];
+    args[0].lane_ids[0] = 0u;
+    args[0].lane_ids[1] = 1u;
     args[0].lane_count = OWNER_PARALLEL_LANES;
     args[0].payload_size = payload_size;
     args[0].path = path;
@@ -780,6 +783,7 @@ static int owner_parallel_run_mode(owner_parallel_mode_t mode,
     for (size_t lane = 0u; lane < OWNER_PARALLEL_LANES; ++lane) {
       args[lane].gate = &gate;
       args[lane].peers[0] = &peers[lane];
+      args[lane].lane_ids[0] = lane;
       args[lane].lane_count = 1u;
       args[lane].payload_size = payload_size;
       args[lane].path = path;
