@@ -1,4 +1,5 @@
 #include "flowmq_socket.h"
+#include "flowmq_protocol.h"
 #include "flowmq_tls_test_material.h"
 #include "tinytest.h"
 #include "salts_error.h"
