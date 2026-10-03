@@ -2,6 +2,7 @@
 #include "flowmq_tls_test_material.h"
 #include "tinytest.h"
 #include "salts_error.h"
+#include <salts/clock.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -423,6 +424,146 @@ static int bench_exchange_batch(bench_pair_t *pair, const void *payload,
   status = bench_progress(pair);
   if (status != SALTS_OK) return status;
   return bench_progress(pair);
+}
+
+typedef enum bench_tls_evidence_kind {
+  BENCH_TLS_EVIDENCE_COPY = 0,
+  BENCH_TLS_EVIDENCE_RETAINED,
+  BENCH_TLS_EVIDENCE_MULTIPART_COPY,
+  BENCH_TLS_EVIDENCE_MULTIPART_RETAINED
+} bench_tls_evidence_kind;
+
+typedef struct bench_tls_evidence_workload {
+  const char *name;
+  bench_tls_evidence_kind kind;
+  const unsigned char *payload;
+  const mem_slice_t *slice;
+  const mem_slice_t *parts;
+  size_t payload_bytes;
+  size_t part_size;
+  size_t part_count;
+  size_t samples;
+} bench_tls_evidence_workload;
+
+typedef struct bench_tls_evidence_result {
+  const char *name;
+  size_t payload_bytes;
+  size_t samples;
+  uint64_t p50_ns;
+  uint64_t p95_ns;
+  double mib_per_second;
+} bench_tls_evidence_result;
+
+static size_t bench_tls_evidence_samples(size_t regular, size_t ci_samples) {
+  const char *smoke = getenv("FLOWMQ_BENCH_SMOKE");
+  const char *ci = getenv("FLOWMQ_BENCH_CI");
+  if (smoke != NULL && strcmp(smoke, "0") != 0) return 3u;
+  if (ci != NULL && strcmp(ci, "0") != 0) return ci_samples;
+  return regular;
+}
+
+static int bench_tls_evidence_u64_compare(const void *left, const void *right) {
+  const uint64_t a = *(const uint64_t *)left;
+  const uint64_t b = *(const uint64_t *)right;
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+static uint64_t bench_tls_evidence_percentile(uint64_t *values, size_t count,
+                                              unsigned percentile) {
+  size_t index;
+  qsort(values, count, sizeof(*values), bench_tls_evidence_u64_compare);
+  index = ((count - 1u) * (size_t)percentile + 50u) / 100u;
+  return values[index];
+}
+
+static int bench_tls_evidence_exchange(
+    bench_pair_t *pair, const bench_tls_evidence_workload *workload) {
+  switch (workload->kind) {
+    case BENCH_TLS_EVIDENCE_COPY:
+      return bench_exchange(pair, workload->payload, workload->payload_bytes);
+    case BENCH_TLS_EVIDENCE_RETAINED:
+      return bench_exchange_retained(pair, workload->slice);
+    case BENCH_TLS_EVIDENCE_MULTIPART_COPY:
+      return bench_exchange_multipart_copy(
+          pair, workload->payload, workload->part_size, workload->part_count);
+    case BENCH_TLS_EVIDENCE_MULTIPART_RETAINED:
+      return bench_exchange_multipart_retained(
+          pair, workload->parts, workload->part_count);
+  }
+  return SALTS_EINVAL;
+}
+
+static int bench_tls_evidence_measure(
+    const bench_tls_evidence_workload *workload,
+    bench_tls_evidence_result *out) {
+  enum { BENCH_TLS_EVIDENCE_MAX_SAMPLES = 128u, BENCH_TLS_EVIDENCE_WARMUPS = 3u };
+  bench_pair_t pair;
+  uint64_t latencies[BENCH_TLS_EVIDENCE_MAX_SAMPLES];
+  uint64_t elapsed_total = 0u;
+  int status;
+
+  if (workload == NULL || out == NULL || workload->name == NULL ||
+      workload->payload_bytes == 0u || workload->samples == 0u ||
+      workload->samples > BENCH_TLS_EVIDENCE_MAX_SAMPLES)
+    return SALTS_EINVAL;
+
+  memset(&pair, 0, sizeof(pair));
+  memset(latencies, 0, sizeof(latencies));
+  status = bench_pair_open_tls(&pair);
+  if (status != SALTS_OK) return status;
+
+  for (size_t warmup = 0u; warmup < BENCH_TLS_EVIDENCE_WARMUPS; ++warmup) {
+    status = bench_tls_evidence_exchange(&pair, workload);
+    if (status != SALTS_OK) goto cleanup;
+  }
+
+  for (size_t sample = 0u; sample < workload->samples; ++sample) {
+    const uint64_t started = salts_hrtime();
+    uint64_t elapsed;
+    status = bench_tls_evidence_exchange(&pair, workload);
+    if (status != SALTS_OK) {
+      fprintf(stderr,
+              "TLS_EVIDENCE_FAIL name=%s sample=%zu status=%d\n",
+              workload->name, sample, status);
+      goto cleanup;
+    }
+    elapsed = salts_hrtime() - started;
+    if (elapsed == 0u || elapsed > UINT64_MAX - elapsed_total) {
+      status = SALTS_ERANGE;
+      goto cleanup;
+    }
+    latencies[sample] = elapsed;
+    elapsed_total += elapsed;
+  }
+
+  *out = (bench_tls_evidence_result){
+      .name = workload->name,
+      .payload_bytes = workload->payload_bytes,
+      .samples = workload->samples,
+      .p50_ns = bench_tls_evidence_percentile(
+          latencies, workload->samples, 50u),
+      .p95_ns = bench_tls_evidence_percentile(
+          latencies, workload->samples, 95u),
+      .mib_per_second =
+          ((double)workload->payload_bytes * (double)workload->samples /
+           (1024.0 * 1024.0)) *
+          1.0e9 / (double)elapsed_total};
+
+cleanup:
+  {
+    const int close_status = bench_pair_close(&pair);
+    if (status == SALTS_OK && close_status != SALTS_OK) status = close_status;
+  }
+  return status;
+}
+
+static void bench_tls_evidence_print(const bench_tls_evidence_result *result) {
+  printf("TLS_EVIDENCE name=%s payload_bytes=%zu samples=%zu "
+         "p50_us=%.3f p95_us=%.3f mib_per_second=%.2f\n",
+         result->name, result->payload_bytes, result->samples,
+         (double)result->p50_ns / 1000.0,
+         (double)result->p95_ns / 1000.0,
+         result->mib_per_second);
 }
 
 #if defined(FLOWMQ_BENCH_WITH_ZMQ)
