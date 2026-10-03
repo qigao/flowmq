@@ -1,4 +1,5 @@
 #include "flowmq_socket.h"
+#include "flowmq_tls_test_material.h"
 #include "tinytest.h"
 #include "salts_error.h"
 
@@ -36,6 +37,8 @@ typedef struct bench_pair_s {
   flowmq_ctx_t *ctx;
   flowmq_socket_t *sender;
   flowmq_socket_t *receiver;
+  char *cert_path;
+  char *key_path;
 } bench_pair_t;
 
 static int bench_progress(bench_pair_t *pair) {
@@ -78,8 +81,74 @@ static int bench_pair_close(bench_pair_t *pair) {
     status = flowmq_ctx_term(pair->ctx);
     if (result == SALTS_OK && status != SALTS_OK) result = status;
   }
+  if (pair->cert_path != NULL) {
+    if (tt_remove_file(pair->cert_path) != 0 && result == SALTS_OK)
+      result = SALTS_EIO;
+    free(pair->cert_path);
+  }
+  if (pair->key_path != NULL) {
+    if (tt_remove_file(pair->key_path) != 0 && result == SALTS_OK)
+      result = SALTS_EIO;
+    free(pair->key_path);
+  }
   memset(pair, 0, sizeof(*pair));
   return result;
+}
+
+static int bench_pair_open_tls(bench_pair_t *pair) {
+  char endpoint[128];
+  size_t endpoint_size = 0u;
+  int status;
+  memset(pair, 0, sizeof(*pair));
+  pair->cert_path = tt_make_temp_file("flowmq-bench-cert", ".pem");
+  pair->key_path = tt_make_temp_file("flowmq-bench-key", ".pem");
+  if (pair->cert_path == NULL || pair->key_path == NULL) {
+    (void)bench_pair_close(pair);
+    return SALTS_ENOMEM;
+  }
+  if (tt_write_file(pair->cert_path, FLOWMQ_TLS_TEST_CERTIFICATE,
+                    sizeof(FLOWMQ_TLS_TEST_CERTIFICATE) - 1u) != 0 ||
+      tt_write_file(pair->key_path, FLOWMQ_TLS_TEST_KEY,
+                    sizeof(FLOWMQ_TLS_TEST_KEY) - 1u) != 0) {
+    (void)bench_pair_close(pair);
+    return SALTS_EIO;
+  }
+
+  pair->ctx = flowmq_ctx_new();
+  if (pair->ctx == NULL) {
+    (void)bench_pair_close(pair);
+    return SALTS_ENOMEM;
+  }
+  pair->sender = flowmq_socket(pair->ctx, FLOWMQ_PAIR);
+  pair->receiver = flowmq_socket(pair->ctx, FLOWMQ_PAIR);
+  if (pair->sender == NULL || pair->receiver == NULL) {
+    (void)bench_pair_close(pair);
+    return SALTS_ENOMEM;
+  }
+
+  status = flowmq_setsockopt(pair->receiver, FLOWMQ_TLS_CERT_FILE,
+                             pair->cert_path, strlen(pair->cert_path));
+  if (status == SALTS_OK)
+    status = flowmq_setsockopt(pair->receiver, FLOWMQ_TLS_KEY_FILE,
+                               pair->key_path, strlen(pair->key_path));
+  if (status == SALTS_OK)
+    status = flowmq_setsockopt(pair->sender, FLOWMQ_TLS_CA_FILE,
+                               pair->cert_path, strlen(pair->cert_path));
+  if (status == SALTS_OK)
+    status = flowmq_setsockopt(pair->sender, FLOWMQ_TLS_SERVER_NAME,
+                               "localhost", strlen("localhost"));
+  if (status == SALTS_OK)
+    status = flowmq_bind(pair->receiver, "tls://127.0.0.1:0");
+  if (status == SALTS_OK)
+    status = flowmq_last_endpoint(pair->receiver, endpoint, sizeof(endpoint),
+                                  &endpoint_size);
+  if (status == SALTS_OK)
+    status = flowmq_connect(pair->sender, endpoint);
+  if (status != SALTS_OK) {
+    (void)bench_pair_close(pair);
+    return status;
+  }
+  return SALTS_OK;
 }
 
 static int bench_exchange(bench_pair_t *pair, const void *payload,
@@ -588,6 +657,132 @@ spec("FlowMQ direct socket benchmark") {
     mem_slice_release(&payload_slice);
     mem_buffer_release(multipart_large_buffer);
     mem_buffer_release(multipart_small_buffer);
+    mem_buffer_release(retained_large_buffer);
+    mem_buffer_release(payload_buffer);
+    check_equal(bench_pair_close(&pair), SALTS_OK);
+  }
+
+  bench("caller-driven loopback TLS natural framing") {
+    static unsigned char payload[BENCH_PAYLOAD_BYTES];
+    static unsigned char large_payload[BENCH_LARGE_PAYLOAD_BYTES];
+    static unsigned char retained_large_payload[
+        BENCH_RETAINED_LARGE_PAYLOAD_BYTES];
+    static unsigned char multipart_large[
+        BENCH_MULTIPART_LARGE_PARTS * BENCH_MULTIPART_LARGE_PART_BYTES];
+    const size_t samples = bench_socket_samples(BENCH_SAMPLES, 4u);
+    const size_t large_samples =
+        bench_socket_samples(BENCH_LARGE_SAMPLES, 2u);
+    const size_t retained_large_samples =
+        bench_socket_samples(BENCH_RETAINED_LARGE_SAMPLES, 1u);
+    const size_t multipart_large_samples =
+        bench_socket_samples(BENCH_MULTIPART_LARGE_SAMPLES, 1u);
+    mem_buffer_t *payload_buffer;
+    mem_buffer_t *retained_large_buffer;
+    mem_buffer_t *multipart_large_buffer;
+    mem_slice_t payload_slice;
+    mem_slice_t retained_large_slice;
+    mem_slice_t multipart_large_slices[BENCH_MULTIPART_LARGE_PARTS] = {0};
+    bench_pair_t pair;
+    int status;
+
+    memset(payload, 0x6a, sizeof(payload));
+    memset(large_payload, 0xb6, sizeof(large_payload));
+    memset(retained_large_payload, 0x4d, sizeof(retained_large_payload));
+    for (size_t i = 0u; i < sizeof(multipart_large); ++i)
+      multipart_large[i] = (unsigned char)((i * 17u + 7u) & 0xffu);
+
+    payload_buffer = mem_wrap_external(payload, sizeof(payload), NULL, NULL);
+    retained_large_buffer =
+        mem_wrap_external(retained_large_payload,
+                          sizeof(retained_large_payload), NULL, NULL);
+    multipart_large_buffer =
+        mem_wrap_external(multipart_large, sizeof(multipart_large), NULL, NULL);
+    check_not_null(payload_buffer);
+    check_not_null(retained_large_buffer);
+    check_not_null(multipart_large_buffer);
+
+    payload_slice = mem_slice(payload_buffer, 0u, sizeof(payload));
+    retained_large_slice =
+        mem_slice(retained_large_buffer, 0u, sizeof(retained_large_payload));
+    check_not_null(payload_slice.buffer);
+    check_not_null(retained_large_slice.buffer);
+    for (size_t part = 0u; part < BENCH_MULTIPART_LARGE_PARTS; ++part) {
+      multipart_large_slices[part] =
+          mem_slice(multipart_large_buffer,
+                    part * BENCH_MULTIPART_LARGE_PART_BYTES,
+                    BENCH_MULTIPART_LARGE_PART_BYTES);
+      check_not_null(multipart_large_slices[part].buffer);
+    }
+
+    status = bench_pair_open_tls(&pair);
+    check_equal(status, SALTS_OK);
+    check_equal(bench_exchange(&pair, payload, sizeof(payload)), SALTS_OK);
+    benchmark_bytes("TLS natural framing 64-byte copy immediate", samples,
+                    BENCH_PAYLOAD_BYTES) {
+      status = bench_exchange(&pair, payload, sizeof(payload));
+    }
+    check_equal(status, SALTS_OK);
+
+    check_equal(bench_exchange_retained(&pair, &payload_slice), SALTS_OK);
+    benchmark_bytes("TLS natural framing 64-byte retained immediate", samples,
+                    BENCH_PAYLOAD_BYTES) {
+      status = bench_exchange_retained(&pair, &payload_slice);
+    }
+    check_equal(status, SALTS_OK);
+
+    check_equal(bench_exchange(&pair, large_payload, sizeof(large_payload)),
+                SALTS_OK);
+    benchmark_bytes("TLS natural framing 64-KiB copy one-way", large_samples,
+                    BENCH_LARGE_PAYLOAD_BYTES) {
+      status = bench_exchange(&pair, large_payload, sizeof(large_payload));
+    }
+    check_equal(status, SALTS_OK);
+
+    check_equal(bench_exchange_retained(&pair, &retained_large_slice),
+                SALTS_OK);
+    benchmark_bytes("TLS natural framing 1-MiB retained immediate",
+                    retained_large_samples,
+                    BENCH_RETAINED_LARGE_PAYLOAD_BYTES) {
+      status = bench_exchange_retained(&pair, &retained_large_slice);
+    }
+    check_equal(status, SALTS_OK);
+
+    check_equal(bench_pair_close(&pair), SALTS_OK);
+    status = bench_pair_open_tls(&pair);
+    check_equal(status, SALTS_OK);
+    check_equal(bench_exchange_multipart_copy(
+                    &pair, multipart_large, BENCH_MULTIPART_LARGE_PART_BYTES,
+                    BENCH_MULTIPART_LARGE_PARTS), SALTS_OK);
+    benchmark_bytes("TLS natural framing 2x256-KiB copy multipart",
+                    multipart_large_samples,
+                    BENCH_MULTIPART_LARGE_PARTS *
+                        BENCH_MULTIPART_LARGE_PART_BYTES) {
+      status = bench_exchange_multipart_copy(
+          &pair, multipart_large, BENCH_MULTIPART_LARGE_PART_BYTES,
+          BENCH_MULTIPART_LARGE_PARTS);
+    }
+    check_equal(status, SALTS_OK);
+
+    check_equal(bench_pair_close(&pair), SALTS_OK);
+    status = bench_pair_open_tls(&pair);
+    check_equal(status, SALTS_OK);
+    check_equal(bench_exchange_multipart_retained(
+                    &pair, multipart_large_slices,
+                    BENCH_MULTIPART_LARGE_PARTS), SALTS_OK);
+    benchmark_bytes("TLS natural framing 2x256-KiB retained multipart",
+                    multipart_large_samples,
+                    BENCH_MULTIPART_LARGE_PARTS *
+                        BENCH_MULTIPART_LARGE_PART_BYTES) {
+      status = bench_exchange_multipart_retained(
+          &pair, multipart_large_slices, BENCH_MULTIPART_LARGE_PARTS);
+    }
+    check_equal(status, SALTS_OK);
+
+    for (size_t part = 0u; part < BENCH_MULTIPART_LARGE_PARTS; ++part)
+      mem_slice_release(&multipart_large_slices[part]);
+    mem_slice_release(&retained_large_slice);
+    mem_slice_release(&payload_slice);
+    mem_buffer_release(multipart_large_buffer);
     mem_buffer_release(retained_large_buffer);
     mem_buffer_release(payload_buffer);
     check_equal(bench_pair_close(&pair), SALTS_OK);
