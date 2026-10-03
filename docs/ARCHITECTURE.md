@@ -15,8 +15,10 @@ FMQ/6 codec + Salts CNet
 ```
 
 `FlowMQ::Protocol` 不依赖网络；`FlowMQ::Core` 保存 pattern/session 规则；
-`FlowMQ::Transport` 私有依赖 `Salts::CNet`。当前 transport 只有 TCP/TLS，未实现
-transport 会在配置边界 fail fast。
+`FlowMQ::Transport` 私有依赖 `Salts::CNet` 与 `Salts::NativeIO`。NativeIO 只作为
+实现细节支撑 ordinary per-socket wait 与 explicit owner-lane shared wait，不进入安装包的
+public CMake dependency surface。当前 transport 只有 TCP/TLS，未实现 transport 会在配置边界
+fail fast。
 
 物理目录与上述 target 保持一致：
 
@@ -39,7 +41,26 @@ queue、scatter/gather、stream partition 和 circuit breaker 不再编入主库
 ## 执行模型
 
 CNet 是调用者驱动的单-owner协程池，不是线程池。FlowMQ 不创建 progress thread，
-也不把 socket 包装成 Actor/Reactive publisher：
+也不把 socket 包装成 Actor/Reactive publisher。
+
+FlowMQ 1.2 有两个 execution domain：
+
+```text
+ordinary socket domain
+  socket owns its CNet/NativeIO progress
+  flowmq_poll() drives each socket independently
+
+explicit owner-lane domain
+  flowmq_owner_t owns one shared NativeIO backend
+  N owner-created sockets each own one external-progress CNet client
+  flowmq_owner_poll() advances all live clients and performs one shared observe
+```
+
+socket 创建时就决定 execution domain，之后不能 detach、迁移或在两个 poll surface 之间切换。
+owner lane 是一个**同步 owner object**，不是 scheduler/worker pool。一个 connection 从 admission
+到 terminal callback 固定属于同一个 lane-local CNet client。
+
+普通 socket 继续遵守以下规则：
 
 - `start/bind/connect` 负责同步验证、资源创建与异步 I/O admission；
 - `send/recv/poll` 在调用者线程推进 socket 和 CNet 状态；
@@ -52,6 +73,35 @@ CNet 是调用者驱动的单-owner协程池，不是线程池。FlowMQ 不创�
 - CNet callback 只在调用者主动 progress 的 `send/recv/poll` 调用栈内同步执行；
 - socket、decoder、route、pattern FSM 与队列由同一调用线程串行拥有；
 - 同一个普通 socket 不允许跨线程并发使用；跨线程通信使用独立 socket。
+
+owner-lane socket 则由 `flowmq_owner_poll()` 推进：
+
+```text
+for each live socket:
+    cnet_client_advance_external() exactly once
+    collect CNet + FlowMQ-local next deadline
+
+native_io_backend_observe(min_deadline) exactly once
+
+for each completion:
+    route to exactly one owning CNet client
+
+for each live socket:
+    FlowMQ reconnect/control/FLOW_UPDATE/subscription/flush progress exactly once
+
+compute POLLIN/POLLOUT/POLLERR with the same readiness projection as ordinary poll
+```
+
+FlowMQ-local deadline projection至少包含 reconnect next-attempt、heartbeat ping/dead-peer deadline、
+receiver FLOW_UPDATE deadline/quantum 与 caller timeout；因此正式 owner API 不依赖 #67
+prototype 的固定 10ms wait。routed completion batch 后不立即执行第二次 CNet advance，
+下一 cycle 才重新 advance，保持 owner-local progress 的单 pass 语义。
+
+`flowmq_owner_t` 的 socket registry 与 NativeIO capacities 在创建时按 `socket_capacity`
+硬上界预留；不会依据 CPU 数自动扩容，也不会 live resize。owner-created socket 不能放入
+ordinary `flowmq_poll()`，不能直接 `flowmq_close()`，也不能迁移到另一个 owner。当前
+第一阶段 owner lane 只产品化 TCP client-side progress；listener/same-endpoint multicore
+admission 是独立边界。
 
 每个 live peer 独占 heartbeat deadline、pending-PONG 和双向累计 credit 状态。
 peer 的可变协议状态拆成三个独立维度，而不是一个乘积型大 FSM：
@@ -90,8 +140,8 @@ socket inbound queue 仍可能保存引用该 generation 的已完成 message pa
 multipart receive/commit-pending、heartbeat/PONG、flow-credit counter、queue occupancy 和
 generation fencing 仍是正交事实，不并入上述 lifecycle/handshake/write-lane 状态。
 PING/PONG、FLOW_UPDATE 与 subscription sync 共用 CONTROL write lane，不进入应用 outbound
-FIFO；收到任意合法 FMQ frame 会取消未应答 PING 的 timeout。所有 deadline 只在 owner 调用
-`send/recv/poll` 时检查，不创建 timer thread，也不把 socket 变成 MPSC。
+FIFO；收到任意合法 FMQ frame 会取消未应答 PING 的 timeout。所有 deadline 只在 ordinary `send/recv/poll` 或显式 `flowmq_owner_poll()` 中检查，
+不创建 timer thread，也不把 socket 变成 MPSC。
 
 ROUTER 的 per-peer backpressure 事实保持 peer-owned。成功 admission 后，应用 payload 的
 message/byte outstanding 计数同时覆盖 direct in-flight 与 retained outbound ring；只有 CNet
@@ -153,6 +203,7 @@ application message
   -> single-part fast path may use direct cnet_send() when the peer is writable
   -> coalesce queued frames into one bounded CNet write
   -> later caller-driven cnet_client_poll()
+     or owner-lane cnet_client_advance_external/shared NativeIO observe
 ```
 
 成功 admission 只表示本地 socket 已接管消息。连接建立、CNet write、远端接收与业务处理
@@ -209,9 +260,16 @@ FAILED/CLOSED 才进入自动重连。
 
 ## Shutdown
 
-`flowmq_close()` 先关闭 listener，再以有界 timeout 停止并销毁 CNet client，随后释放
-本地 queue、decoder、route/session、TLS secret 与 pool。当前公开 API 没有 linger 或
-drain 策略；未完成的本地消息随 socket close 取消。
+ordinary socket 的 `flowmq_close()` 先关闭 listener，再以有界 timeout 停止并销毁 CNet
+client，随后释放本地 queue、decoder、route/session、TLS secret 与 pool。当前公开 API
+没有 linger 或 drain 策略；未完成的本地消息随 socket close 取消。
+
+owner-lane socket 必须通过 `flowmq_owner_close_socket()` 关闭。关闭过程先禁止新的 reconnect
+schedule，清空 pending retry，再对该 socket 的 live peer 发起 close；owner 继续对**整个 shared
+backend** 执行 advance/observe/route，因此其它 lane-local socket 不需要暂停。只有目标 client
+达到 `cnet_client_stop_external() == SALTS_OK` 后才释放 socket storage。最后一个 socket
+关闭后 `flowmq_owner_term()` 才允许 close/destroy shared NativeIO backend，并释放 context
+owner lease。
 
 任何阶段都不得在线程外隐藏 progress，也不得在 callback 仍可能访问 owner state 时释放资源。
 
