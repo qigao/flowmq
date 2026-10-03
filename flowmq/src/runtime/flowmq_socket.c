@@ -196,6 +196,13 @@ struct flowmq_socket_s {
   uint64_t reply_peer_generation;
   uint64_t request_peer_generation;
   uint64_t tls_identity_rejections;
+  uint64_t owned_receive_switches;
+  uint64_t owned_receive_callbacks;
+  uint64_t owned_receive_fastpath;
+  uint64_t owned_receive_fallback_decoder;
+  uint64_t owned_receive_fallback_incomplete;
+  uint64_t owned_receive_fallback_coalesced;
+  uint64_t owned_receive_fallback_shape;
   uint64_t publish_peer_generations[FLOWMQ_SOCKET_PEER_CAPACITY];
   uint32_t flow_update_quantum;
   int heartbeat_interval_ms;
@@ -1670,6 +1677,7 @@ static int flowmq_socket_rearm_receive(flowmq_socket_peer_t *peer) {
         &socket->client, peer->connection, flowmq_socket_on_receive_slice, peer);
     if (status != SALTS_OK) return status;
     peer->owned_receive_active = 1u;
+    ++socket->owned_receive_switches;
   }
   return cnet_receive(&socket->client, peer->connection, 1u);
 }
@@ -1682,11 +1690,17 @@ static void flowmq_socket_on_receive_slice(
   int status = SALTS_OK;
   int pause_receive = 0;
   int consumed_owned = 0;
+  const size_t decoder_available =
+      flowmq_stream_decoder_available(&peer->decoder);
   (void)kind;
+  ++socket->owned_receive_callbacks;
+
+  if (decoder_available != 0u)
+    ++socket->owned_receive_fallback_decoder;
 
   if (socket->transport == FLOWMQ_TRANSPORT_TCP &&
       !peer->commit_pending &&
-      flowmq_stream_decoder_available(&peer->decoder) == 0u &&
+      decoder_available == 0u &&
       flowmq_peer_state_handshake_has(
           &peer->state, FLOWMQ_PEER_HANDSHAKE_HELLO_RX) &&
       flowmq_peer_state_handshake_has(
@@ -1710,11 +1724,18 @@ static void flowmq_socket_on_receive_slice(
       if (status == SALTS_OK)
         status = flowmq_socket_process_data_frame(
             peer, &frame, &slice, &pause_receive);
-      if (slice.buffer == NULL)
+      if (slice.buffer == NULL) {
         consumed_owned = 1;
-    } else if (status == FLOWMQ_PROTOCOL_INCOMPLETE ||
-               (status == SALTS_OK && consumed != slice.length)) {
+        ++socket->owned_receive_fastpath;
+      }
+    } else if (status == FLOWMQ_PROTOCOL_INCOMPLETE) {
+      ++socket->owned_receive_fallback_incomplete;
       status = SALTS_OK;
+    } else if (status == SALTS_OK && consumed != slice.length) {
+      ++socket->owned_receive_fallback_coalesced;
+      status = SALTS_OK;
+    } else if (status == SALTS_OK) {
+      ++socket->owned_receive_fallback_shape;
     }
     flowmq_protocol_frame_cleanup(&frame);
   }
@@ -3871,6 +3892,22 @@ static int flowmq_socket_pollout_ready(const flowmq_socket_t *socket) {
     if (flowmq_socket_peer_can_admit(&socket->peers[i], 1u, 1)) return 1;
   }
   return 0;
+}
+
+
+int flowmq_socket_internal_owned_receive_diagnostics(
+    const flowmq_socket_t *socket,
+    flowmq_owned_receive_diagnostics_t *out) {
+  if (socket == NULL || out == NULL) return SALTS_EINVAL;
+  *out = (flowmq_owned_receive_diagnostics_t){
+      .switches = socket->owned_receive_switches,
+      .callbacks = socket->owned_receive_callbacks,
+      .fastpath = socket->owned_receive_fastpath,
+      .fallback_decoder = socket->owned_receive_fallback_decoder,
+      .fallback_incomplete = socket->owned_receive_fallback_incomplete,
+      .fallback_coalesced = socket->owned_receive_fallback_coalesced,
+      .fallback_shape = socket->owned_receive_fallback_shape};
+  return SALTS_OK;
 }
 
 int flowmq_socket_internal_poll_revents(
