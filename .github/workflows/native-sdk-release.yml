@@ -246,6 +246,34 @@ jobs:
           else
             echo "No distinct physical core is available; distinct-core case skipped." | tee -a "$GITHUB_STEP_SUMMARY"
           fi
+      - name: Run FlowMQ shared owner-wait benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$GITHUB_WORKSPACE/vcpkg_installed/x64-linux/lib"
+          source "$GITHUB_WORKSPACE/flowmq-benchmark-results/cpu-set.txt"
+          result_dir="$GITHUB_WORKSPACE/flowmq-shared-wait-results"
+          benchmark="$GITHUB_WORKSPACE/build/flowmq/bin/bench_flowmq_owner_shared_wait"
+          mkdir -p "$result_dir"
+          if [[ ! -x "$benchmark" ]]; then
+            echo "FlowMQ shared-wait benchmark executable not found: $benchmark" >&2
+            exit 1
+          fi
+          export FLOWMQ_SHARED_WAIT_CPU="$one_cpu_set"
+          export FLOWMQ_SHARED_WAIT_OUTPUT="$result_dir/flowmq-shared-wait"
+          "$benchmark" 2>&1 | tee "$result_dir/flowmq-shared-wait.md"
+          {
+            echo ""
+            echo "## FlowMQ shared owner wait vs public multi-socket poll (owner CPU $one_cpu_set)"
+            echo ""
+            cat "$result_dir/flowmq-shared-wait.md"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flowmq-shared-wait-linux-x64
+          path: flowmq-shared-wait-results
+          if-no-files-found: error
+          compression-level: 6
       - uses: actions/upload-artifact@v4
         with:
           name: flowmq-owner-parallel-linux-x64
