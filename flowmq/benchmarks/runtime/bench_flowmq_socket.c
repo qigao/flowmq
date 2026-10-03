@@ -852,6 +852,66 @@ spec("FlowMQ direct socket benchmark") {
     }
     check_equal(status, SALTS_OK);
 
+    {
+      const bench_tls_evidence_workload workloads[] = {
+          {.name = "copy_64b",
+           .kind = BENCH_TLS_EVIDENCE_COPY,
+           .payload = payload,
+           .payload_bytes = sizeof(payload),
+           .samples = bench_tls_evidence_samples(101u, 31u)},
+          {.name = "retained_64b",
+           .kind = BENCH_TLS_EVIDENCE_RETAINED,
+           .slice = &payload_slice,
+           .payload_bytes = sizeof(payload),
+           .samples = bench_tls_evidence_samples(101u, 31u)},
+          {.name = "copy_64k",
+           .kind = BENCH_TLS_EVIDENCE_COPY,
+           .payload = large_payload,
+           .payload_bytes = sizeof(large_payload),
+           .samples = bench_tls_evidence_samples(61u, 31u)},
+          {.name = "retained_64k",
+           .kind = BENCH_TLS_EVIDENCE_RETAINED,
+           .slice = &large_slice,
+           .payload_bytes = sizeof(large_payload),
+           .samples = bench_tls_evidence_samples(61u, 31u)},
+          {.name = "copy_1m",
+           .kind = BENCH_TLS_EVIDENCE_COPY,
+           .payload = retained_large_payload,
+           .payload_bytes = sizeof(retained_large_payload),
+           .samples = bench_tls_evidence_samples(31u, 15u)},
+          {.name = "retained_1m",
+           .kind = BENCH_TLS_EVIDENCE_RETAINED,
+           .slice = &retained_large_slice,
+           .payload_bytes = sizeof(retained_large_payload),
+           .samples = bench_tls_evidence_samples(31u, 15u)},
+          {.name = "copy_2x256k",
+           .kind = BENCH_TLS_EVIDENCE_MULTIPART_COPY,
+           .payload = multipart_large,
+           .payload_bytes = sizeof(multipart_large),
+           .part_size = BENCH_MULTIPART_LARGE_PART_BYTES,
+           .part_count = BENCH_MULTIPART_LARGE_PARTS,
+           .samples = bench_tls_evidence_samples(31u, 15u)},
+          {.name = "retained_2x256k",
+           .kind = BENCH_TLS_EVIDENCE_MULTIPART_RETAINED,
+           .parts = multipart_large_slices,
+           .payload_bytes = sizeof(multipart_large),
+           .part_size = BENCH_MULTIPART_LARGE_PART_BYTES,
+           .part_count = BENCH_MULTIPART_LARGE_PARTS,
+           .samples = bench_tls_evidence_samples(31u, 15u)}};
+
+      printf("TLS_EVIDENCE_BEGIN layout=natural_discontiguous\n");
+      for (size_t index = 0u;
+           index < sizeof(workloads) / sizeof(workloads[0]); ++index) {
+        bench_tls_evidence_result result = {0};
+        status = bench_tls_evidence_measure(&workloads[index], &result);
+        check_equal(status, SALTS_OK);
+        if (status != SALTS_OK) break;
+        bench_tls_evidence_print(&result);
+      }
+      check_equal(status, SALTS_OK);
+      printf("TLS_EVIDENCE_END layout=natural_discontiguous\n");
+    }
+
     for (size_t part = 0u; part < BENCH_MULTIPART_LARGE_PARTS; ++part)
       mem_slice_release(&multipart_large_slices[part]);
     for (size_t part = 0u; part < BENCH_MULTIPART_SMALL_PARTS; ++part)
