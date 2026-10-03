@@ -423,10 +423,10 @@ static int shared_wait_candidate_progress_mask(
       &fixture->backend, completions, SHARED_WAIT_COMPLETION_CAPACITY,
       wait_ms, &completion_count);
   if (fixture->measuring) ++fixture->observe_calls;
-  if (status == SALTS_ETIMEDOUT) return SALTS_OK;
-  if (status != SALTS_OK) return status;
+  if (status != SALTS_OK && status != SALTS_ETIMEDOUT) return status;
 
-  for (size_t index = 0u; index < completion_count; ++index) {
+  if (status != SALTS_ETIMEDOUT) {
+    for (size_t index = 0u; index < completion_count; ++index) {
     bool consumed = false;
     for (size_t lane = 0u; lane < SHARED_WAIT_LANES && !consumed; ++lane) {
       size_t events = 0u;
@@ -444,10 +444,21 @@ static int shared_wait_candidate_progress_mask(
         ++fixture->unrelated_route_attempts;
       }
     }
-    if (!consumed) return SALTS_EPROTO;
+      if (!consumed) return SALTS_EPROTO;
+    }
   }
 
-  /* No second CNet advance after a routed batch: #713 canonical host loop. */
+  /*
+   * Match ordinary flowmq_socket_drive() ordering: CNet progress/callbacks
+   * first, then exactly one FlowMQ-local reconnect/control/flush pass. Any
+   * CNet work admitted by that local pass is advanced at the start of the
+   * next host-loop cycle, never immediately after the routed batch.
+   */
+  for (size_t lane = 0u; lane < SHARED_WAIT_LANES; ++lane) {
+    if (active != NULL && !active[lane]) continue;
+    status = flowmq_socket_internal_progress_local(fixture->sockets[lane]);
+    if (status != SALTS_OK) return status;
+  }
   return SALTS_OK;
 }
 
