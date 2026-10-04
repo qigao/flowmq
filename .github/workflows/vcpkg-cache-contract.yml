@@ -33,6 +33,9 @@ jobs:
       - name: Verify direct-C runtime boundary
         shell: bash
         run: cmake -P cmake/ci/verify-runtime-boundary.cmake
+      - name: Verify TLS provider ownership boundary
+        shell: bash
+        run: cmake -P cmake/ci/verify-provider-boundary.cmake
       - name: Prepare host dependencies
         shell: bash
         run: |
@@ -178,6 +181,10 @@ jobs:
       - name: Verify direct-C runtime boundary
         shell: pwsh
         run: cmake -P cmake/ci/verify-runtime-boundary.cmake
+
+      - name: Verify TLS provider ownership boundary
+        shell: pwsh
+        run: cmake -P cmake/ci/verify-provider-boundary.cmake
 
       - name: Prepare host toolchain
         shell: pwsh
