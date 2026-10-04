@@ -1688,17 +1688,58 @@ static int flowmq_socket_process_receive(flowmq_socket_peer_t *peer) {
 
 static int flowmq_socket_process_owned_stream(
     flowmq_socket_peer_t *peer, int *pause_receive) {
+  flowmq_socket_t *socket;
   int status;
   if (peer == NULL || pause_receive == NULL) return SALTS_EINVAL;
+  socket = peer->owner;
   *pause_receive = 0;
 
   while (flowmq_owned_stream_size(&peer->owned_stream) != 0u) {
+    flowmq_owned_data_projection_t projection =
+        FLOWMQ_OWNED_DATA_PROJECTION_INIT;
     size_t frame_size = 0u;
+
     status = flowmq_owned_stream_first_frame_size(
         &peer->owned_stream, FLOWMQ_SOCKET_MAX_FRAME_SIZE, &frame_size);
     if (status == FLOWMQ_PROTOCOL_INCOMPLETE) return SALTS_OK;
     if (status != SALTS_OK) return status;
     if (frame_size == 0u) return SALTS_EPROTO;
+
+    status = flowmq_owned_stream_project_first_data(
+        &peer->owned_stream, FLOWMQ_SOCKET_MAX_FRAME_SIZE, &projection);
+    if (status == SALTS_OK) {
+      flowmq_protocol_frame_t frame = {
+          .kind = FLOWMQ_PROTOCOL_FRAME_DATA,
+          .pattern = projection.pattern,
+          .message_id = projection.message_id,
+          .more = projection.more,
+          .payload = {.data = NULL, .len = projection.payload_size}};
+      status = frame.pattern == peer->remote_pattern
+                   ? flowmq_pattern_data_direction_validate(
+                         socket->pattern.pattern, &frame)
+                   : SALTS_EPROTO;
+      if (status == SALTS_OK && peer->heartbeat_active)
+        flowmq_protocol_heartbeat_deadlines_on_receive(
+            &peer->heartbeat, salts_hrtime());
+      if (status == SALTS_OK)
+        status = flowmq_socket_process_data_frame(
+            peer, &frame, NULL, &projection, pause_receive);
+      if (status == SALTS_OK)
+        status = flowmq_owned_stream_consume(
+            &peer->owned_stream, frame_size);
+      flowmq_owned_data_projection_reset(&projection);
+      if (status != SALTS_OK) return status;
+      if (*pause_receive) return SALTS_OK;
+      continue;
+    }
+
+    /*
+     * A complete valid non-DATA frame or a DATA payload-vector shape that
+     * exceeds the fixed projection bound stays on the proven copied decoder.
+     */
+    flowmq_owned_data_projection_reset(&projection);
+    if (status != SALTS_ENOTSUP && status != SALTS_ENOSPC)
+      return status;
 
     status = flowmq_owned_stream_replay_prefix(
         &peer->owned_stream, &peer->decoder, frame_size);
