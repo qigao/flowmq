@@ -617,7 +617,8 @@ static void bench_tls_evidence_print(const bench_tls_evidence_result *result) {
 
 typedef enum bench_owned_rx_mode_e {
   BENCH_OWNED_RX_COPY = 0,
-  BENCH_OWNED_RX_SLICE = 1
+  BENCH_OWNED_RX_SLICE = 1,
+  BENCH_OWNED_RX_SLICEV = 2
 } bench_owned_rx_mode_t;
 
 typedef struct bench_owned_rx_result_s {
@@ -630,9 +631,24 @@ typedef struct bench_owned_rx_result_s {
   double mib_per_second;
   size_t subrange_hits;
   size_t base_aligned_hits;
+  size_t multi_range_hits;
+  size_t range_count_min;
+  size_t range_count_max;
   int payload_copy_contract;
   int shape_observable;
 } bench_owned_rx_result_t;
+
+static const char *bench_owned_rx_mode_name(bench_owned_rx_mode_t mode) {
+  switch (mode) {
+    case BENCH_OWNED_RX_COPY:
+      return "copy";
+    case BENCH_OWNED_RX_SLICE:
+      return "slice";
+    case BENCH_OWNED_RX_SLICEV:
+      return "slicev";
+  }
+  return "invalid";
+}
 
 static size_t bench_owned_rx_samples(size_t payload_bytes) {
   if (payload_bytes <= BENCH_PAYLOAD_BYTES)
@@ -644,17 +660,22 @@ static size_t bench_owned_rx_samples(size_t payload_bytes) {
 
 static int bench_owned_rx_exchange(
     bench_pair_t *pair, const void *payload, size_t payload_size,
-    bench_owned_rx_mode_t mode, int *out_direct) {
+    bench_owned_rx_mode_t mode, int *out_direct, size_t *out_range_count) {
+  enum { BENCH_OWNED_RX_VECTOR_CAPACITY = 64u };
   static unsigned char received_copy[BENCH_RETAINED_LARGE_PAYLOAD_BYTES];
   mem_slice_t received_slice = {0};
+  mem_slice_t received_segments[BENCH_OWNED_RX_VECTOR_CAPACITY] = {{0}};
   const uint64_t deadline_ms = bench_progress_deadline_ms();
   size_t received_size = 0u;
+  size_t range_count = 0u;
   int status;
 
   if (pair == NULL || payload == NULL || payload_size == 0u ||
-      payload_size > sizeof(received_copy) || out_direct == NULL)
+      payload_size > sizeof(received_copy) || out_direct == NULL ||
+      out_range_count == NULL)
     return SALTS_EINVAL;
   *out_direct = 0;
+  *out_range_count = 0u;
 
   status = flowmq_send(pair->sender, payload, payload_size, FLOWMQ_DONTWAIT);
   while (status == SALTS_EBUSY || status == SALTS_ENOBUFS) {
@@ -680,25 +701,73 @@ static int bench_owned_rx_exchange(
     return SALTS_OK;
   }
 
+  if (mode == BENCH_OWNED_RX_SLICE) {
+    status = SALTS_EBUSY;
+    while (status == SALTS_EBUSY) {
+      status = bench_progress_wait(pair, deadline_ms, 0);
+      if (status != SALTS_OK) return status;
+      status =
+          flowmq_recv_slice(pair->receiver, &received_slice, FLOWMQ_DONTWAIT);
+    }
+    if (status != SALTS_OK) return status;
+    if (received_slice.buffer == NULL || received_slice.data == NULL ||
+        received_slice.length != payload_size ||
+        memcmp(received_slice.data, payload, payload_size) != 0) {
+      mem_slice_release(&received_slice);
+      return SALTS_EPROTO;
+    }
+    *out_direct =
+        received_slice.data !=
+        (const void *)mem_buffer_data(received_slice.buffer);
+    *out_range_count = 1u;
+    mem_slice_release(&received_slice);
+    return SALTS_OK;
+  }
+
+  if (mode != BENCH_OWNED_RX_SLICEV) return SALTS_EINVAL;
+
   status = SALTS_EBUSY;
   while (status == SALTS_EBUSY) {
     status = bench_progress_wait(pair, deadline_ms, 0);
     if (status != SALTS_OK) return status;
-    status =
-        flowmq_recv_slice(pair->receiver, &received_slice, FLOWMQ_DONTWAIT);
+    range_count = 0u;
+    status = flowmq_recv_slicev(
+        pair->receiver, received_segments, BENCH_OWNED_RX_VECTOR_CAPACITY,
+        &range_count, FLOWMQ_DONTWAIT);
   }
   if (status != SALTS_OK) return status;
-  if (received_slice.buffer == NULL || received_slice.data == NULL ||
-      received_slice.length != payload_size ||
-      memcmp(received_slice.data, payload, payload_size) != 0) {
-    mem_slice_release(&received_slice);
-    return SALTS_EPROTO;
+  if (range_count == 0u || range_count > BENCH_OWNED_RX_VECTOR_CAPACITY)
+    status = SALTS_EPROTO;
+
+  {
+    size_t offset = 0u;
+    for (size_t i = 0u; status == SALTS_OK && i < range_count; ++i) {
+      if (received_segments[i].buffer == NULL ||
+          received_segments[i].data == NULL ||
+          received_segments[i].length == 0u ||
+          received_segments[i].length > payload_size - offset ||
+          memcmp(received_segments[i].data,
+                 (const unsigned char *)payload + offset,
+                 received_segments[i].length) != 0) {
+        status = SALTS_EPROTO;
+        break;
+      }
+      offset += received_segments[i].length;
+    }
+    if (status == SALTS_OK && offset != payload_size)
+      status = SALTS_EPROTO;
   }
-  *out_direct =
-      received_slice.data !=
-      (const void *)mem_buffer_data(received_slice.buffer);
-  mem_slice_release(&received_slice);
-  return SALTS_OK;
+
+  if (status == SALTS_OK) {
+    *out_range_count = range_count;
+    *out_direct =
+        range_count > 1u ||
+        received_segments[0].data !=
+            (const void *)mem_buffer_data(received_segments[0].buffer);
+  }
+  for (size_t i = 0u; i < range_count; ++i)
+    mem_slice_release(&received_segments[i]);
+  return status;
 }
 
 static int bench_owned_rx_measure(
@@ -710,13 +779,21 @@ static int bench_owned_rx_measure(
   };
   bench_pair_t pair;
   uint64_t latencies[BENCH_OWNED_RX_MAX_SAMPLES];
-  const size_t samples = bench_owned_rx_samples(payload_size);
+  size_t samples = bench_owned_rx_samples(payload_size);
   uint64_t elapsed_total = 0u;
-  size_t direct_hits = 0u;
+  size_t subrange_hits = 0u;
+  size_t base_aligned_hits = 0u;
+  size_t multi_range_hits = 0u;
+  size_t range_count_min = SIZE_MAX;
+  size_t range_count_max = 0u;
   int status;
 
-  if (payload == NULL || payload_size == 0u || out == NULL ||
-      samples == 0u || samples > BENCH_OWNED_RX_MAX_SAMPLES)
+  if (payload == NULL || payload_size == 0u || out == NULL)
+    return SALTS_EINVAL;
+  if (mode == BENCH_OWNED_RX_SLICEV &&
+      payload_size > FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE)
+    samples = bench_tls_evidence_samples(128u, 128u);
+  if (samples == 0u || samples > BENCH_OWNED_RX_MAX_SAMPLES)
     return SALTS_EINVAL;
 
   memset(&pair, 0, sizeof(pair));
@@ -726,8 +803,9 @@ static int bench_owned_rx_measure(
 
   for (size_t warmup = 0u; warmup < BENCH_OWNED_RX_WARMUPS; ++warmup) {
     int direct = 0;
+    size_t range_count = 0u;
     status = bench_owned_rx_exchange(
-        &pair, payload, payload_size, mode, &direct);
+        &pair, payload, payload_size, mode, &direct, &range_count);
     if (status != SALTS_OK) goto cleanup;
   }
 
@@ -735,14 +813,14 @@ static int bench_owned_rx_measure(
     const uint64_t started = salts_hrtime();
     uint64_t elapsed;
     int direct = 0;
+    size_t range_count = 0u;
     status = bench_owned_rx_exchange(
-        &pair, payload, payload_size, mode, &direct);
+        &pair, payload, payload_size, mode, &direct, &range_count);
     if (status != SALTS_OK) {
       fprintf(stderr,
               "OWNED_RX_EVIDENCE_FAIL mode=%s payload_bytes=%zu "
               "sample=%zu status=%d\n",
-              mode == BENCH_OWNED_RX_SLICE ? "slice" : "copy",
-              payload_size, sample, status);
+              bench_owned_rx_mode_name(mode), payload_size, sample, status);
       goto cleanup;
     }
     elapsed = salts_hrtime() - started;
@@ -752,26 +830,62 @@ static int bench_owned_rx_measure(
     }
     latencies[sample] = elapsed;
     elapsed_total += elapsed;
-    if (mode == BENCH_OWNED_RX_SLICE && direct) ++direct_hits;
+
+    if (mode != BENCH_OWNED_RX_COPY) {
+      if (range_count == 0u) {
+        status = SALTS_EPROTO;
+        goto cleanup;
+      }
+      if (range_count < range_count_min) range_count_min = range_count;
+      if (range_count > range_count_max) range_count_max = range_count;
+      if (range_count > 1u)
+        ++multi_range_hits;
+      else if (direct)
+        ++subrange_hits;
+      else
+        ++base_aligned_hits;
+    }
   }
 
   {
     const int slice_mode = mode == BENCH_OWNED_RX_SLICE;
-    const int all_subrange = slice_mode && direct_hits == samples;
+    const int slicev_mode = mode == BENCH_OWNED_RX_SLICEV;
+    const int all_subrange =
+        (slice_mode || slicev_mode) &&
+        subrange_hits == samples && base_aligned_hits == 0u &&
+        multi_range_hits == 0u;
+    const int all_vector =
+        slicev_mode && multi_range_hits == samples &&
+        subrange_hits == 0u && base_aligned_hits == 0u;
     const int segmented_legacy =
         slice_mode &&
         payload_size > FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE &&
-        direct_hits == 0u;
+        base_aligned_hits == samples;
+    const int zero_copy_vector =
+        slicev_mode && base_aligned_hits == 0u &&
+        subrange_hits + multi_range_hits == samples;
+
     *out = (bench_owned_rx_result_t){
-        .mode = slice_mode ? "slice" : "copy",
+        .mode = bench_owned_rx_mode_name(mode),
         .contract_basis =
-            !slice_mode
+            mode == BENCH_OWNED_RX_COPY
                 ? "caller_copy"
-                : (all_subrange
-                       ? "owned_subrange"
-                       : (segmented_legacy
-                              ? "segmented_legacy_coalesce"
-                              : "mixed_or_fallback")),
+                : (slice_mode
+                       ? (all_subrange
+                              ? "owned_subrange"
+                              : (segmented_legacy
+                                     ? "segmented_legacy_coalesce"
+                                     : "mixed_or_fallback"))
+                       : (all_vector
+                              ? "owned_vector"
+                              : (all_subrange
+                                     ? "owned_single_range"
+                                     : (multi_range_hits != 0u &&
+                                                base_aligned_hits != 0u
+                                            ? "mixed_vector_or_fallback"
+                                            : (zero_copy_vector
+                                                   ? "owned_vector_mixed_ranges"
+                                                   : "mixed_or_fallback"))))),
         .payload_bytes = payload_size,
         .samples = samples,
         .p50_ns = bench_tls_evidence_percentile(latencies, samples, 50u),
@@ -780,11 +894,22 @@ static int bench_owned_rx_measure(
             ((double)payload_size * (double)samples /
              (1024.0 * 1024.0)) *
             1.0e9 / (double)elapsed_total,
-        .subrange_hits = slice_mode ? direct_hits : 0u,
-        .base_aligned_hits = slice_mode ? samples - direct_hits : 0u,
+        .subrange_hits = mode == BENCH_OWNED_RX_COPY ? 0u : subrange_hits,
+        .base_aligned_hits =
+            mode == BENCH_OWNED_RX_COPY ? 0u : base_aligned_hits,
+        .multi_range_hits =
+            mode == BENCH_OWNED_RX_COPY ? 0u : multi_range_hits,
+        .range_count_min =
+            mode == BENCH_OWNED_RX_COPY ? 0u : range_count_min,
+        .range_count_max =
+            mode == BENCH_OWNED_RX_COPY ? 0u : range_count_max,
         .payload_copy_contract =
-            !slice_mode ? 1 : (all_subrange ? 0 : (segmented_legacy ? 1 : -1)),
-        .shape_observable = slice_mode ? 1 : 0};
+            mode == BENCH_OWNED_RX_COPY
+                ? 1
+                : (slice_mode
+                       ? (all_subrange ? 0 : (segmented_legacy ? 1 : -1))
+                       : (zero_copy_vector ? 0 : -1)),
+        .shape_observable = mode == BENCH_OWNED_RX_COPY ? 0 : 1};
   }
 
 cleanup:
@@ -799,27 +924,71 @@ static int bench_owned_rx_contract_validate(
     const bench_owned_rx_result_t *result) {
   if (result == NULL || result->mode == NULL || result->contract_basis == NULL)
     return SALTS_EINVAL;
+
   if (strcmp(result->mode, "copy") == 0)
     return result->payload_copy_contract == 1 &&
+                   result->range_count_min == 0u &&
+                   result->range_count_max == 0u &&
                    strcmp(result->contract_basis, "caller_copy") == 0
                ? SALTS_OK
                : SALTS_EPROTO;
-  if (strcmp(result->mode, "slice") != 0) return SALTS_EPROTO;
 
-  if (result->payload_bytes <= FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE) {
-    return result->subrange_hits == result->samples &&
-                   result->base_aligned_hits == 0u &&
-                   result->payload_copy_contract == 0 &&
-                   strcmp(result->contract_basis, "owned_subrange") == 0
+  if (strcmp(result->mode, "slice") == 0) {
+    if (result->range_count_min != 1u || result->range_count_max != 1u)
+      return SALTS_EPROTO;
+    if (result->payload_bytes <= FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE) {
+      return result->subrange_hits == result->samples &&
+                     result->base_aligned_hits == 0u &&
+                     result->multi_range_hits == 0u &&
+                     result->payload_copy_contract == 0 &&
+                     strcmp(result->contract_basis, "owned_subrange") == 0
+                 ? SALTS_OK
+                 : SALTS_EPROTO;
+    }
+
+    return result->subrange_hits == 0u &&
+                   result->base_aligned_hits == result->samples &&
+                   result->multi_range_hits == 0u &&
+                   result->payload_copy_contract == 1 &&
+                   strcmp(result->contract_basis,
+                          "segmented_legacy_coalesce") == 0
                ? SALTS_OK
                : SALTS_EPROTO;
   }
 
-  return result->subrange_hits == 0u &&
-                 result->base_aligned_hits == result->samples &&
-                 result->payload_copy_contract == 1 &&
+  if (strcmp(result->mode, "slicev") != 0) return SALTS_EPROTO;
+
+  if (result->payload_bytes <= FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE) {
+    return result->subrange_hits == result->samples &&
+                   result->base_aligned_hits == 0u &&
+                   result->multi_range_hits == 0u &&
+                   result->range_count_min == 1u &&
+                   result->range_count_max == 1u &&
+                   result->payload_copy_contract == 0 &&
+                   strcmp(result->contract_basis, "owned_single_range") == 0
+               ? SALTS_OK
+               : SALTS_EPROTO;
+  }
+
+  if (result->subrange_hits != 0u ||
+      result->multi_range_hits == 0u ||
+      result->base_aligned_hits + result->multi_range_hits != result->samples ||
+      result->range_count_max <= 1u)
+    return SALTS_EPROTO;
+
+  if (result->base_aligned_hits == 0u) {
+    return result->multi_range_hits == result->samples &&
+                   result->range_count_min > 1u &&
+                   result->payload_copy_contract == 0 &&
+                   strcmp(result->contract_basis, "owned_vector") == 0
+               ? SALTS_OK
+               : SALTS_EPROTO;
+  }
+
+  return result->range_count_min == 1u &&
+                 result->payload_copy_contract == -1 &&
                  strcmp(result->contract_basis,
-                        "segmented_legacy_coalesce") == 0
+                        "mixed_vector_or_fallback") == 0
              ? SALTS_OK
              : SALTS_EPROTO;
 }
@@ -829,14 +998,17 @@ static void bench_owned_rx_print(const bench_owned_rx_result_t *result) {
       "OWNED_RX_EVIDENCE mode=%s payload_bytes=%zu samples=%zu "
       "p50_us=%.3f p95_us=%.3f mib_per_second=%.2f "
       "shape_observable=%d subrange_hits=%zu base_aligned_hits=%zu "
+      "multi_range_hits=%zu range_count_min=%zu range_count_max=%zu "
       "direct_hits=%zu payload_copy_contract=%d contract_basis=%s\n",
       result->mode, result->payload_bytes, result->samples,
       (double)result->p50_ns / 1000.0,
       (double)result->p95_ns / 1000.0,
       result->mib_per_second, result->shape_observable,
       result->subrange_hits, result->base_aligned_hits,
-      result->subrange_hits, result->payload_copy_contract,
-      result->contract_basis);
+      result->multi_range_hits, result->range_count_min,
+      result->range_count_max,
+      result->subrange_hits + result->multi_range_hits,
+      result->payload_copy_contract, result->contract_basis);
 }
 
 #if defined(FLOWMQ_BENCH_WITH_ZMQ)
@@ -1144,7 +1316,7 @@ spec("FlowMQ direct socket benchmark") {
       printf("OWNED_RX_EVIDENCE_BEGIN transport=tcp\n");
       for (size_t index = 0u;
            index < sizeof(workloads) / sizeof(workloads[0]); ++index) {
-        for (size_t mode = 0u; mode < 2u; ++mode) {
+        for (size_t mode = 0u; mode < 3u; ++mode) {
           bench_owned_rx_result_t result = {0};
           status = bench_owned_rx_measure(
               workloads[index].payload, workloads[index].payload_size,
