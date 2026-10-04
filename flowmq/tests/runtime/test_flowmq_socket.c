@@ -1421,6 +1421,131 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
+  it("releases one retained fanout peer on disconnect while another completes") {
+    static const char topic[] = "fanout.";
+    static unsigned char first_payload[] = "fanout.disconnect";
+    static unsigned char final_payload[] = "still-delivered";
+    flowmq_test_external_release_t first_release = {0};
+    flowmq_test_external_release_t final_release = {0};
+    mem_buffer_t *first_buffer =
+        mem_wrap_external(first_payload, sizeof(first_payload) - 1u,
+                          flowmq_test_external_release, &first_release);
+    mem_buffer_t *final_buffer =
+        mem_wrap_external(final_payload, sizeof(final_payload) - 1u,
+                          flowmq_test_external_release, &final_release);
+    mem_slice_t first_slice = {0};
+    mem_slice_t final_slice = {0};
+    char endpoint[128] = {0};
+    unsigned char event[32] = {0};
+    unsigned char received[64] = {0};
+    size_t endpoint_size = 0u;
+    size_t event_size = 0u;
+    size_t received_size = 0u;
+    size_t option_size;
+    int more = -1;
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *xpub = flowmq_socket(ctx, FLOWMQ_XPUB);
+    flowmq_socket_t *survivor = flowmq_socket(ctx, FLOWMQ_XSUB);
+    flowmq_socket_t *departing = flowmq_socket(ctx, FLOWMQ_XSUB);
+    int status;
+
+    check_not_null(first_buffer);
+    check_not_null(final_buffer);
+    first_slice =
+        mem_slice(first_buffer, 0u, sizeof(first_payload) - 1u);
+    final_slice =
+        mem_slice(final_buffer, 0u, sizeof(final_payload) - 1u);
+    check_not_null(first_slice.buffer);
+    check_not_null(final_slice.buffer);
+
+    check_equal(flowmq_setsockopt(survivor, FLOWMQ_SUBSCRIBE, topic,
+                                  sizeof(topic) - 1u), SALTS_OK);
+    check_equal(flowmq_setsockopt(departing, FLOWMQ_SUBSCRIBE, topic,
+                                  sizeof(topic) - 1u), SALTS_OK);
+    check_equal(flowmq_bind(xpub, "tcp://127.0.0.1:0"), SALTS_OK);
+    check_equal(flowmq_last_endpoint(xpub, endpoint, sizeof(endpoint),
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(survivor, endpoint), SALTS_OK);
+    check_equal(flowmq_connect(departing, endpoint), SALTS_OK);
+
+    for (size_t subscription = 0u; subscription < 2u; ++subscription) {
+      status = SALTS_EBUSY;
+      for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                          status == SALTS_EBUSY; ++i) {
+        check_equal(progress_three(xpub, survivor, departing), SALTS_OK);
+        status = flowmq_recv(xpub, event, sizeof(event), &event_size,
+                             FLOWMQ_DONTWAIT);
+      }
+      check_equal(status, SALTS_OK);
+      check_equal(event[0], 1u);
+    }
+
+    check_equal(flowmq_send_slice(
+                    xpub, &first_slice,
+                    FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE),
+                SALTS_OK);
+    check_equal(flowmq_send_slice(xpub, &final_slice, FLOWMQ_DONTWAIT),
+                SALTS_OK);
+
+    mem_slice_release(&first_slice);
+    mem_slice_release(&final_slice);
+    mem_buffer_release(first_buffer);
+    mem_buffer_release(final_buffer);
+    first_buffer = NULL;
+    final_buffer = NULL;
+    check_equal(first_release.calls, 0u);
+    check_equal(final_release.calls, 0u);
+
+    /*
+     * The publication is already committed to both FlowMQ peer queues, but no
+     * CNet batch reservation was required. Retiring one peer drops only its
+     * publication reference; the surviving peer remains independently queued.
+     */
+    check_equal(flowmq_close(departing), SALTS_OK);
+    departing = NULL;
+
+    status = SALTS_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(xpub, survivor), SALTS_OK);
+      status = flowmq_recv(survivor, received, sizeof(received),
+                           &received_size, FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    check_equal(received_size, sizeof(first_payload) - 1u);
+    check_equal(memcmp(received, first_payload, received_size), 0);
+    option_size = sizeof(more);
+    check_equal(flowmq_getsockopt(survivor, FLOWMQ_RCVMORE, &more,
+                                  &option_size), SALTS_OK);
+    check_equal(more, 1);
+
+    status = SALTS_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(xpub, survivor), SALTS_OK);
+      status = flowmq_recv(survivor, received, sizeof(received),
+                           &received_size, FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    check_equal(received_size, sizeof(final_payload) - 1u);
+    check_equal(memcmp(received, final_payload, received_size), 0);
+    option_size = sizeof(more);
+    check_equal(flowmq_getsockopt(survivor, FLOWMQ_RCVMORE, &more,
+                                  &option_size), SALTS_OK);
+    check_equal(more, 0);
+
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        (first_release.calls == 0u ||
+                         final_release.calls == 0u); ++i)
+      check_equal(progress_pair(xpub, survivor), SALTS_OK);
+    check_equal(first_release.calls, 1u);
+    check_equal(final_release.calls, 1u);
+
+    check_equal(flowmq_close(survivor), SALTS_OK);
+    check_equal(flowmq_close(xpub), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+  }
+
   it("preserves queued frame boundaries and order") {
     char endpoint[128] = {0};
     unsigned char payloads[FLOWMQ_TEST_QUEUED_MESSAGES][16] = {0};
