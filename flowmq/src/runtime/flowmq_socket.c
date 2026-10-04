@@ -3417,16 +3417,6 @@ static int flowmq_socket_try_send_slice(flowmq_socket_t *socket,
   selected_peer_index = socket->send_peer_index;
   selected_peer_generation = socket->send_peer_generation;
 
-  /*
-   * Retained PUB/XPUB multipart needs an atomic fanout ownership transaction
-   * across multiple CNet connections. Keep that shape fail-closed until it has
-   * a dedicated bounded design. The already-merged final-only retained
-   * publication path remains supported below.
-   */
-  if (socket->pattern.desc->routing_class == FLOWMQ_PATTERN_ROUTE_FANOUT &&
-      (!starting_message || !message_end))
-    return SALTS_ENOTSUP;
-
   if (starting_message &&
       socket->pattern.desc->routing_class == FLOWMQ_PATTERN_ROUTE_IDENTITY) {
     /* ROUTER still requires its copied routing-id envelope first. */
@@ -3434,43 +3424,105 @@ static int flowmq_socket_try_send_slice(flowmq_socket_t *socket,
   }
 
   if (socket->pattern.desc->routing_class == FLOWMQ_PATTERN_ROUTE_FANOUT) {
-    uint32_t peer_mask = 0u;
+    uint64_t peer_generations[FLOWMQ_SOCKET_PEER_CAPACITY] = {0};
+    uint32_t peer_mask =
+        starting_message ? 0u : socket->publish_peer_mask;
+    flowmq_socket_retained_publication_t *publication = NULL;
+
+    if (starting_message) {
+      for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
+        flowmq_socket_peer_t *candidate = &socket->peers[i];
+        if (flowmq_socket_peer_ready(candidate) &&
+            flowmq_subscription_set_match(
+                &candidate->subscriptions,
+                (vstr){.data = slice->data, .len = size})) {
+          peer_mask |= UINT32_C(1) << i;
+          peer_generations[i] =
+              candidate->flow_control.local_generation;
+        }
+      }
+    } else {
+      memcpy(peer_generations, socket->publish_peer_generations,
+             sizeof(peer_generations));
+    }
+
+    frame = (flowmq_protocol_frame_t){
+        .kind = FLOWMQ_PROTOCOL_FRAME_DATA,
+        .pattern = socket->pattern.pattern,
+        .message_id = socket->next_message_id + 1u,
+        .more = !message_end,
+        .payload = {.data = slice->data, .len = size}};
+    status =
+        flowmq_socket_prepare_retained_frame(socket, &frame, slice, &retained);
+    if (status != SALTS_OK) return status;
+
+    if (!message_end) {
+      status = flowmq_socket_stage_retained_frame(socket, &retained);
+      flowmq_socket_retained_frame_release(&retained);
+      if (status != SALTS_OK) return status;
+      if (starting_message) {
+        socket->publish_peer_mask = peer_mask;
+        memcpy(socket->publish_peer_generations, peer_generations,
+               sizeof(peer_generations));
+      }
+      flowmq_pattern_state_send_commit(&socket->pattern, 1);
+      return SALTS_OK;
+    }
+
+    if (socket->send_retained_payload_bytes >
+            socket->send_hwm_bytes - size ||
+        retained.slice_count >
+            CNET_RETAINED_VECTOR_MAX - socket->send_retained_count ||
+        retained.encoded_size >
+            socket->max_encoded_size - socket->send_retained_encoded_bytes) {
+      flowmq_socket_retained_frame_release(&retained);
+      return SALTS_EMSGSIZE;
+    }
+    total_payload_size = socket->send_retained_payload_bytes + size;
+    total_encoded_size =
+        socket->send_retained_encoded_bytes + retained.encoded_size;
+    if (total_encoded_size > socket->max_encoded_size) {
+      flowmq_socket_retained_frame_release(&retained);
+      return SALTS_EMSGSIZE;
+    }
+
+    /*
+     * PUB/XPUB mute/drop semantics select the first-part subscription snapshot,
+     * then omit peers that are no longer the same live generation or cannot
+     * accept the complete logical message at final commit.
+     */
     for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
-      flowmq_socket_peer_t *candidate = &socket->peers[i];
-      if (!flowmq_socket_peer_ready(candidate) ||
-          !flowmq_subscription_set_match(
-              &candidate->subscriptions,
-              (vstr){.data = slice->data, .len = size}))
-        continue;
-      if (!flowmq_socket_peer_can_admit(candidate, size, 1) ||
-          !flowmq_peer_state_write_idle(&candidate->state) ||
-          candidate->outbound_count != 0u)
-        continue;
-      peer_mask |= UINT32_C(1) << i;
+      uint32_t bit = UINT32_C(1) << i;
+      if ((peer_mask & bit) == 0u) continue;
+      if (!flowmq_socket_peer_generation_ready(
+              &socket->peers[i], peer_generations[i]) ||
+          !flowmq_socket_peer_can_queue_retained_message(
+              &socket->peers[i], socket, total_payload_size, size))
+        peer_mask &= ~bit;
     }
 
     if (peer_mask != 0u) {
-      frame = (flowmq_protocol_frame_t){
-          .kind = FLOWMQ_PROTOCOL_FRAME_DATA,
-          .pattern = socket->pattern.pattern,
-          .message_id = socket->next_message_id + 1u,
-          .more = 0,
-          .payload = {.data = slice->data, .len = size}};
-      status =
-          flowmq_socket_prepare_retained_frame(socket, &frame, slice, &retained);
-      if (status != SALTS_OK) return status;
-      for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
-        if ((peer_mask & (UINT32_C(1) << i)) == 0u) continue;
-        status =
-            flowmq_socket_peer_admit_retained(&socket->peers[i], &retained);
-        if (status != SALTS_OK) break;
+      status = flowmq_socket_retained_publication_create(
+          socket, &retained, &publication);
+      if (status != SALTS_OK) {
+        flowmq_socket_retained_frame_release(&retained);
+        return status;
       }
-      flowmq_socket_retained_frame_release(&retained);
-      if (status != SALTS_OK) return status;
+      status =
+          flowmq_socket_commit_retained_fanout(socket, publication, peer_mask);
+      flowmq_socket_retained_publication_release(publication);
+      if (status != SALTS_OK) {
+        flowmq_socket_retained_frame_release(&retained);
+        return status;
+      }
     }
 
-    ++socket->next_message_id;
+    flowmq_socket_release_retained_staged(socket);
+    flowmq_socket_retained_frame_release(&retained);
     socket->publish_peer_mask = 0u;
+    memset(socket->publish_peer_generations, 0,
+           sizeof(socket->publish_peer_generations));
+    ++socket->next_message_id;
     flowmq_pattern_state_send_commit(&socket->pattern, 0);
     return SALTS_OK;
   }
