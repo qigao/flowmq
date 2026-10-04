@@ -622,16 +622,16 @@ typedef enum bench_owned_rx_mode_e {
 
 typedef struct bench_owned_rx_result_s {
   const char *mode;
+  const char *contract_basis;
   size_t payload_bytes;
   size_t samples;
   uint64_t p50_ns;
   uint64_t p95_ns;
   double mib_per_second;
-  size_t direct_hits;
-  size_t fallback_hits;
-  size_t direct_copy_count;
-  size_t fallback_copy_count;
-  int classification_observable;
+  size_t subrange_hits;
+  size_t base_aligned_hits;
+  int payload_copy_contract;
+  int shape_observable;
 } bench_owned_rx_result_t;
 
 static size_t bench_owned_rx_samples(size_t payload_bytes) {
@@ -756,11 +756,22 @@ static int bench_owned_rx_measure(
   }
 
   {
-    const int multi_packet =
-        payload_size > FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE;
-    const size_t fallback_copies = multi_packet ? 3u : 2u;
+    const int slice_mode = mode == BENCH_OWNED_RX_SLICE;
+    const int all_subrange = slice_mode && direct_hits == samples;
+    const int segmented_legacy =
+        slice_mode &&
+        payload_size > FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE &&
+        direct_hits == 0u;
     *out = (bench_owned_rx_result_t){
-        .mode = mode == BENCH_OWNED_RX_SLICE ? "slice" : "copy",
+        .mode = slice_mode ? "slice" : "copy",
+        .contract_basis =
+            !slice_mode
+                ? "caller_copy"
+                : (all_subrange
+                       ? "owned_subrange"
+                       : (segmented_legacy
+                              ? "segmented_legacy_coalesce"
+                              : "mixed_or_fallback")),
         .payload_bytes = payload_size,
         .samples = samples,
         .p50_ns = bench_tls_evidence_percentile(latencies, samples, 50u),
@@ -769,16 +780,11 @@ static int bench_owned_rx_measure(
             ((double)payload_size * (double)samples /
              (1024.0 * 1024.0)) *
             1.0e9 / (double)elapsed_total,
-        .direct_hits = mode == BENCH_OWNED_RX_SLICE ? direct_hits : 0u,
-        .fallback_hits =
-            mode == BENCH_OWNED_RX_SLICE ? samples - direct_hits : 0u,
-        .direct_copy_count =
-            mode == BENCH_OWNED_RX_SLICE ? 0u : 1u,
-        .fallback_copy_count =
-            fallback_copies +
-            (mode == BENCH_OWNED_RX_SLICE ? 0u : 1u),
-        .classification_observable =
-            mode == BENCH_OWNED_RX_SLICE ? 1 : 0};
+        .subrange_hits = slice_mode ? direct_hits : 0u,
+        .base_aligned_hits = slice_mode ? samples - direct_hits : 0u,
+        .payload_copy_contract =
+            !slice_mode ? 1 : (all_subrange ? 0 : (segmented_legacy ? 1 : -1)),
+        .shape_observable = slice_mode ? 1 : 0};
   }
 
 cleanup:
@@ -789,18 +795,48 @@ cleanup:
   return status;
 }
 
+static int bench_owned_rx_contract_validate(
+    const bench_owned_rx_result_t *result) {
+  if (result == NULL || result->mode == NULL || result->contract_basis == NULL)
+    return SALTS_EINVAL;
+  if (strcmp(result->mode, "copy") == 0)
+    return result->payload_copy_contract == 1 &&
+                   strcmp(result->contract_basis, "caller_copy") == 0
+               ? SALTS_OK
+               : SALTS_EPROTO;
+  if (strcmp(result->mode, "slice") != 0) return SALTS_EPROTO;
+
+  if (result->payload_bytes <= FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE) {
+    return result->subrange_hits == result->samples &&
+                   result->base_aligned_hits == 0u &&
+                   result->payload_copy_contract == 0 &&
+                   strcmp(result->contract_basis, "owned_subrange") == 0
+               ? SALTS_OK
+               : SALTS_EPROTO;
+  }
+
+  return result->subrange_hits == 0u &&
+                 result->base_aligned_hits == result->samples &&
+                 result->payload_copy_contract == 1 &&
+                 strcmp(result->contract_basis,
+                        "segmented_legacy_coalesce") == 0
+             ? SALTS_OK
+             : SALTS_EPROTO;
+}
+
 static void bench_owned_rx_print(const bench_owned_rx_result_t *result) {
   printf(
       "OWNED_RX_EVIDENCE mode=%s payload_bytes=%zu samples=%zu "
       "p50_us=%.3f p95_us=%.3f mib_per_second=%.2f "
-      "classification_observable=%d direct_hits=%zu fallback_hits=%zu "
-      "direct_copy_count=%zu fallback_copy_count=%zu\n",
+      "shape_observable=%d subrange_hits=%zu base_aligned_hits=%zu "
+      "direct_hits=%zu payload_copy_contract=%d contract_basis=%s\n",
       result->mode, result->payload_bytes, result->samples,
       (double)result->p50_ns / 1000.0,
       (double)result->p95_ns / 1000.0,
-      result->mib_per_second, result->classification_observable,
-      result->direct_hits, result->fallback_hits,
-      result->direct_copy_count, result->fallback_copy_count);
+      result->mib_per_second, result->shape_observable,
+      result->subrange_hits, result->base_aligned_hits,
+      result->subrange_hits, result->payload_copy_contract,
+      result->contract_basis);
 }
 
 #if defined(FLOWMQ_BENCH_WITH_ZMQ)
@@ -1116,6 +1152,14 @@ spec("FlowMQ direct socket benchmark") {
           check_equal(status, SALTS_OK);
           if (status != SALTS_OK) break;
           bench_owned_rx_print(&result);
+          status = bench_owned_rx_contract_validate(&result);
+          if (status != SALTS_OK) {
+            fprintf(stderr,
+                    "OWNED_RX_EVIDENCE_FAIL mode=%s payload_bytes=%zu "
+                    "contract_status=%d\n",
+                    result.mode, result.payload_bytes, status);
+            break;
+          }
         }
         if (status != SALTS_OK) break;
       }
