@@ -1,0 +1,14 @@
+schema FlowMQQual [version(1)];
+
+message AddRequest {
+  uint32 left;
+  optional uint32 scale default 1;
+}
+
+message AddResponse {
+  uint32 sum;
+}
+
+service Calc {
+  Add: AddRequest -> AddResponse;
+}
