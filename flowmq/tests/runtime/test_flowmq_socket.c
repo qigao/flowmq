@@ -1278,32 +1278,146 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
-  it("fails retained multipart PUB and XPUB fanout closed") {
-    static unsigned char payload[] = "fanout-retained";
-    flowmq_test_external_release_t release = {0};
-    mem_buffer_t *buffer =
-        mem_wrap_external(payload, sizeof(payload) - 1u,
-                          flowmq_test_external_release, &release);
-    mem_slice_t slice;
+  it("keeps retained XPUB multipart fanout on the first-part subscription snapshot") {
+    static const char topic[] = "events.";
+    static unsigned char first_payload[] = "events.retained";
+    static unsigned char final_payload[] = "fanout-body";
+    flowmq_test_external_release_t first_release = {0};
+    flowmq_test_external_release_t final_release = {0};
+    mem_buffer_t *first_buffer =
+        mem_wrap_external(first_payload, sizeof(first_payload) - 1u,
+                          flowmq_test_external_release, &first_release);
+    mem_buffer_t *final_buffer =
+        mem_wrap_external(final_payload, sizeof(final_payload) - 1u,
+                          flowmq_test_external_release, &final_release);
+    mem_slice_t first_slice = {0};
+    mem_slice_t final_slice = {0};
+    char endpoint[128] = {0};
+    unsigned char event[32] = {0};
+    unsigned char received[64] = {0};
+    size_t endpoint_size = 0u;
+    size_t event_size = 0u;
+    size_t received_size = 0u;
+    size_t option_size;
+    int more = -1;
     flowmq_ctx_t *ctx = flowmq_ctx_new();
-    flowmq_socket_t *pub = flowmq_socket(ctx, FLOWMQ_PUB);
     flowmq_socket_t *xpub = flowmq_socket(ctx, FLOWMQ_XPUB);
+    flowmq_socket_t *first = flowmq_socket(ctx, FLOWMQ_XSUB);
+    flowmq_socket_t *second = flowmq_socket(ctx, FLOWMQ_XSUB);
+    int status;
 
-    check_not_null(buffer);
-    slice = mem_slice(buffer, 0u, sizeof(payload) - 1u);
-    check_not_null(slice.buffer);
-    check_equal(flowmq_send_slice(pub, &slice,
-                                  FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE),
-                SALTS_ENOTSUP);
-    check_equal(flowmq_send_slice(xpub, &slice,
-                                  FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE),
-                SALTS_ENOTSUP);
-    mem_slice_release(&slice);
-    mem_buffer_release(buffer);
-    check_equal(release.calls, 1u);
+    check_not_null(first_buffer);
+    check_not_null(final_buffer);
+    first_slice =
+        mem_slice(first_buffer, 0u, sizeof(first_payload) - 1u);
+    final_slice =
+        mem_slice(final_buffer, 0u, sizeof(final_payload) - 1u);
+    check_not_null(first_slice.buffer);
+    check_not_null(final_slice.buffer);
 
+    check_equal(flowmq_setsockopt(first, FLOWMQ_SUBSCRIBE, topic,
+                                  sizeof(topic) - 1u), SALTS_OK);
+    check_equal(flowmq_setsockopt(second, FLOWMQ_SUBSCRIBE, topic,
+                                  sizeof(topic) - 1u), SALTS_OK);
+    check_equal(flowmq_bind(xpub, "tcp://127.0.0.1:0"), SALTS_OK);
+    check_equal(flowmq_last_endpoint(xpub, endpoint, sizeof(endpoint),
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(first, endpoint), SALTS_OK);
+    check_equal(flowmq_connect(second, endpoint), SALTS_OK);
+
+    for (size_t subscription = 0u; subscription < 2u; ++subscription) {
+      status = SALTS_EBUSY;
+      for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                          status == SALTS_EBUSY; ++i) {
+        check_equal(progress_three(xpub, first, second), SALTS_OK);
+        status = flowmq_recv(xpub, event, sizeof(event), &event_size,
+                             FLOWMQ_DONTWAIT);
+      }
+      check_equal(status, SALTS_OK);
+      check_equal(event_size, sizeof(topic));
+      check_equal(event[0], 1u);
+      check_equal(memcmp(event + 1u, topic, sizeof(topic) - 1u), 0);
+    }
+
+    check_equal(flowmq_send_slice(
+                    xpub, &first_slice,
+                    FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE),
+                SALTS_OK);
+
+    /*
+     * Change the live subscription set after the first application part and
+     * wait until XPUB has processed the unsubscribe. The retained multipart
+     * publication must still use the first-part snapshot.
+     */
+    check_equal(flowmq_setsockopt(second, FLOWMQ_UNSUBSCRIBE, topic,
+                                  sizeof(topic) - 1u), SALTS_OK);
+    status = SALTS_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == SALTS_EBUSY; ++i) {
+      check_equal(progress_three(xpub, first, second), SALTS_OK);
+      status = flowmq_recv(xpub, event, sizeof(event), &event_size,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    check_equal(event_size, sizeof(topic));
+    check_equal(event[0], 0u);
+
+    check_equal(flowmq_send_slice(xpub, &final_slice, FLOWMQ_DONTWAIT),
+                SALTS_OK);
+
+    mem_slice_release(&first_slice);
+    mem_slice_release(&final_slice);
+    mem_buffer_release(first_buffer);
+    mem_buffer_release(final_buffer);
+    first_buffer = NULL;
+    final_buffer = NULL;
+    check_equal(first_release.calls, 0u);
+    check_equal(final_release.calls, 0u);
+
+    for (size_t receiver = 0u; receiver < 2u; ++receiver) {
+      flowmq_socket_t *xsub = receiver == 0u ? first : second;
+
+      status = SALTS_EBUSY;
+      for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                          status == SALTS_EBUSY; ++i) {
+        check_equal(progress_three(xpub, first, second), SALTS_OK);
+        status = flowmq_recv(xsub, received, sizeof(received),
+                             &received_size, FLOWMQ_DONTWAIT);
+      }
+      check_equal(status, SALTS_OK);
+      check_equal(received_size, sizeof(first_payload) - 1u);
+      check_equal(memcmp(received, first_payload, received_size), 0);
+      option_size = sizeof(more);
+      check_equal(flowmq_getsockopt(xsub, FLOWMQ_RCVMORE, &more,
+                                    &option_size), SALTS_OK);
+      check_equal(more, 1);
+
+      status = SALTS_EBUSY;
+      for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                          status == SALTS_EBUSY; ++i) {
+        check_equal(progress_three(xpub, first, second), SALTS_OK);
+        status = flowmq_recv(xsub, received, sizeof(received),
+                             &received_size, FLOWMQ_DONTWAIT);
+      }
+      check_equal(status, SALTS_OK);
+      check_equal(received_size, sizeof(final_payload) - 1u);
+      check_equal(memcmp(received, final_payload, received_size), 0);
+      option_size = sizeof(more);
+      check_equal(flowmq_getsockopt(xsub, FLOWMQ_RCVMORE, &more,
+                                    &option_size), SALTS_OK);
+      check_equal(more, 0);
+    }
+
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        (first_release.calls == 0u ||
+                         final_release.calls == 0u); ++i)
+      check_equal(progress_three(xpub, first, second), SALTS_OK);
+    check_equal(first_release.calls, 1u);
+    check_equal(final_release.calls, 1u);
+
+    check_equal(flowmq_close(second), SALTS_OK);
+    check_equal(flowmq_close(first), SALTS_OK);
     check_equal(flowmq_close(xpub), SALTS_OK);
-    check_equal(flowmq_close(pub), SALTS_OK);
     check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
