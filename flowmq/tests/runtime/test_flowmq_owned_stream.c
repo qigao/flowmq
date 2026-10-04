@@ -213,7 +213,14 @@ spec("flowmq bounded owned receive stream") {
                     &stream, projection.frame_size),
                 SALTS_OK);
     check_equal(flowmq_owned_stream_size(&stream), (size_t)0u);
-    for (size_t i = 0u; i < 4u; ++i)
+    /*
+     * The first raw backing contains only the first 17 bytes of the FMQ
+     * header, so the payload projection retains no reference to it. Consuming
+     * the raw frame releases that header-only owner immediately. The remaining
+     * backings contribute payload ranges and stay alive through the projection.
+     */
+    check_equal(releases[0].calls, (size_t)1u);
+    for (size_t i = 1u; i < 4u; ++i)
       check_equal(releases[i].calls, (size_t)0u);
 
     flowmq_owned_data_projection_reset(&projection);
