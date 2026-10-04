@@ -1,4 +1,4 @@
-schema FlowMQQual [version(1)];
+schema FlowMQChannelQual [version(1)];
 
 message TelemetryEvent {
   uint32 sequence;
