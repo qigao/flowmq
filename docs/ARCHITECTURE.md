@@ -268,7 +268,7 @@ CNet owned receive backing
              explicit copied fallback remains classified as fallback
 ```
 
-CNet callback boundaries不是 FMQ packet boundaries，因此 FlowMQ 不承诺任意 TCP segmentation/
+CNet callback boundaries 并不是 FMQ packet boundaries，因此 FlowMQ 不承诺任意 TCP segmentation/
 coalescing 都进入 owned-vector fast path。完整 post-handshake plaintext DATA 能在 bounded owned
 stream 内完成时，decoder 只消费 framing/header owner，并把 DATA payload owner 投影到 staged/
 inbound storage；non-DATA、projection overflow 或逃逸该 bounded fast path 的形状继续使用 copied
