@@ -1,0 +1,8 @@
+schema FlowMQChannelQual [version(1)];
+
+message TelemetryEvent {
+  uint32 sequence;
+  string source;
+}
+
+channel Telemetry: TelemetryEvent;
