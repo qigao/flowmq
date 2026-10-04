@@ -101,8 +101,17 @@ typedef struct flowmq_socket_message_s {
   int more;
 } flowmq_socket_message_t;
 
+typedef struct flowmq_socket_retained_publication_s {
+  mem_slice_t slices[CNET_RETAINED_VECTOR_MAX];
+  size_t slice_count;
+  size_t encoded_size;
+  size_t payload_size;
+  size_t refs;
+} flowmq_socket_retained_publication_t;
+
 typedef struct flowmq_socket_outbound_s {
   mem_buffer_t *buffer;
+  flowmq_socket_retained_publication_t *retained;
   size_t encoded_size;
   size_t payload_size;
   int message_end;
@@ -178,6 +187,7 @@ struct flowmq_socket_s {
   flowmq_socket_message_t *inbound;
   flowmq_socket_outbound_t send_staged[FLOWMQ_SOCKET_MULTIPART_CAPACITY];
   mem_slice_t send_retained_staged[CNET_RETAINED_VECTOR_MAX];
+  size_t send_retained_part_sizes[FLOWMQ_SOCKET_MULTIPART_CAPACITY];
   flowmq_protocol_segment_t frame_segments[FLOWMQ_SOCKET_FRAME_SEGMENT_CAPACITY];
   cnet_const_buffer send_segments[FLOWMQ_SOCKET_OUTBOUND_CAPACITY];
   unsigned char framing_scratch[FLOWMQ_SOCKET_FRAMING_CAPACITY];
@@ -377,6 +387,32 @@ static void flowmq_socket_peer_record_rejection(flowmq_socket_peer_t *peer,
 }
 
 
+static flowmq_socket_retained_publication_t *
+flowmq_socket_retained_publication_retain(
+    flowmq_socket_retained_publication_t *publication) {
+  if (publication == NULL || publication->refs == SIZE_MAX) return NULL;
+  ++publication->refs;
+  return publication;
+}
+
+static void flowmq_socket_retained_publication_release(
+    flowmq_socket_retained_publication_t *publication) {
+  if (publication == NULL || publication->refs == 0u) return;
+  --publication->refs;
+  if (publication->refs != 0u) return;
+  for (size_t i = 0u; i < publication->slice_count; ++i)
+    mem_slice_release(&publication->slices[i]);
+  free(publication);
+}
+
+static void flowmq_socket_outbound_release(
+    flowmq_socket_outbound_t *outbound) {
+  if (outbound == NULL) return;
+  mem_buffer_release(outbound->buffer);
+  flowmq_socket_retained_publication_release(outbound->retained);
+  memset(outbound, 0, sizeof(*outbound));
+}
+
 static void flowmq_socket_segmented_payload_release(
     flowmq_socket_segmented_payload_t *payload) {
   if (payload == NULL) return;
@@ -400,7 +436,7 @@ static void flowmq_socket_peer_storage_release(flowmq_socket_peer_t *peer) {
   for (size_t i = 0u; i < peer->outbound_count; ++i) {
     size_t index =
         (peer->outbound_read + i) % FLOWMQ_SOCKET_OUTBOUND_CAPACITY;
-    mem_buffer_release(peer->outbound[index].buffer);
+    flowmq_socket_outbound_release(&peer->outbound[index]);
   }
   peer->staged_count = 0u;
   peer->staged_bytes = 0u;
@@ -927,6 +963,8 @@ static void flowmq_socket_release_retained_staged(flowmq_socket_t *socket) {
   socket->send_retained_payload_bytes = 0u;
   socket->send_retained_encoded_bytes = 0u;
   socket->send_retained_parts = 0u;
+  memset(socket->send_retained_part_sizes, 0,
+         sizeof(socket->send_retained_part_sizes));
 }
 
 static int flowmq_socket_stage_retained_frame(
@@ -948,6 +986,8 @@ static int flowmq_socket_stage_retained_frame(
         frame->slices[i];
     frame->slices[i] = (mem_slice_t){0};
   }
+  socket->send_retained_part_sizes[socket->send_retained_parts] =
+      frame->payload_size;
   socket->send_retained_payload_bytes += frame->payload_size;
   socket->send_retained_encoded_bytes += frame->encoded_size;
   ++socket->send_retained_parts;
@@ -963,6 +1003,168 @@ static int flowmq_socket_stage_retained_frame(
   frame->slice_count = 0u;
   frame->encoded_size = 0u;
   frame->payload_size = 0u;
+  return SALTS_OK;
+}
+
+static int flowmq_socket_retained_publication_clone_slice(
+    flowmq_socket_retained_publication_t *publication,
+    const mem_slice_t *source) {
+  size_t offset = 0u;
+  mem_slice_t retained;
+  int status;
+  if (publication == NULL || source == NULL ||
+      publication->slice_count >= CNET_RETAINED_VECTOR_MAX)
+    return SALTS_EINVAL;
+  status = flowmq_socket_slice_validate(source, &offset);
+  if (status != SALTS_OK) return status;
+  retained = mem_slice(source->buffer, offset, source->length);
+  if (retained.buffer == NULL || retained.data != source->data ||
+      retained.length != source->length) {
+    mem_slice_release(&retained);
+    return SALTS_EPROTO;
+  }
+  publication->slices[publication->slice_count++] = retained;
+  return SALTS_OK;
+}
+
+static int flowmq_socket_retained_publication_create(
+    const flowmq_socket_t *socket,
+    const flowmq_socket_retained_frame_t *final_frame,
+    flowmq_socket_retained_publication_t **out) {
+  flowmq_socket_retained_publication_t *publication;
+  int status = SALTS_OK;
+  if (socket == NULL || final_frame == NULL || out == NULL || *out != NULL ||
+      final_frame->slice_count == 0u || final_frame->payload_size == 0u ||
+      final_frame->slice_count >
+          CNET_RETAINED_VECTOR_MAX - socket->send_retained_count ||
+      final_frame->encoded_size >
+          socket->max_encoded_size - socket->send_retained_encoded_bytes ||
+      final_frame->payload_size >
+          socket->send_hwm_bytes - socket->send_retained_payload_bytes)
+    return SALTS_EINVAL;
+
+  publication = (flowmq_socket_retained_publication_t *)calloc(
+      1u, sizeof(*publication));
+  if (publication == NULL) return SALTS_ENOMEM;
+  publication->refs = 1u;
+  publication->encoded_size =
+      socket->send_retained_encoded_bytes + final_frame->encoded_size;
+  publication->payload_size =
+      socket->send_retained_payload_bytes + final_frame->payload_size;
+
+  for (size_t i = 0u;
+       i < socket->send_retained_count && status == SALTS_OK; ++i)
+    status = flowmq_socket_retained_publication_clone_slice(
+        publication, &socket->send_retained_staged[i]);
+  for (size_t i = 0u;
+       i < final_frame->slice_count && status == SALTS_OK; ++i)
+    status = flowmq_socket_retained_publication_clone_slice(
+        publication, &final_frame->slices[i]);
+
+  if (status != SALTS_OK ||
+      publication->slice_count !=
+          socket->send_retained_count + final_frame->slice_count) {
+    flowmq_socket_retained_publication_release(publication);
+    return status != SALTS_OK ? status : SALTS_EPROTO;
+  }
+
+  *out = publication;
+  return SALTS_OK;
+}
+
+static int flowmq_socket_peer_can_queue_retained_message(
+    const flowmq_socket_peer_t *peer, const flowmq_socket_t *socket,
+    size_t payload_size, size_t final_part_size) {
+  const flowmq_socket_outbound_t *slot;
+  if (peer == NULL || socket == NULL || !flowmq_socket_peer_ready(peer) ||
+      peer->outbound_count >= FLOWMQ_SOCKET_OUTBOUND_CAPACITY ||
+      payload_size > socket->send_hwm_bytes ||
+      peer->outbound_bytes > socket->send_hwm_bytes - payload_size ||
+      peer->outbound_messages >= socket->send_hwm ||
+      flowmq_flow_control_send_credit_check(
+          &peer->flow_control, payload_size) != SALTS_OK ||
+      final_part_size > peer->flow_control.remote_max_frame_size)
+    return 0;
+  for (size_t i = 0u; i < socket->send_retained_parts; ++i) {
+    if (socket->send_retained_part_sizes[i] >
+        peer->flow_control.remote_max_frame_size)
+      return 0;
+  }
+  slot = &peer->outbound[peer->outbound_write];
+  return slot->buffer == NULL && slot->retained == NULL;
+}
+
+static int flowmq_socket_commit_retained_fanout(
+    flowmq_socket_t *socket,
+    flowmq_socket_retained_publication_t *publication,
+    uint32_t peer_mask) {
+  uint64_t old_sent[FLOWMQ_SOCKET_PEER_CAPACITY] = {0};
+  size_t committed = 0u;
+  int status = SALTS_OK;
+  if (socket == NULL || publication == NULL ||
+      publication->refs == 0u || peer_mask == 0u)
+    return SALTS_EINVAL;
+
+  /*
+   * All queue/HWM/generation checks are complete before entry. Credit commit
+   * is the only remaining status-returning mutation; save exact old values so
+   * an invariant failure can roll back before any peer queue becomes visible.
+   */
+  for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
+    flowmq_socket_peer_t *peer;
+    if ((peer_mask & (UINT32_C(1) << i)) == 0u) continue;
+    peer = &socket->peers[i];
+    old_sent[i] = peer->flow_control.sent_data;
+    status = flowmq_flow_control_send_credit_commit(
+        &peer->flow_control, publication->payload_size);
+    if (status != SALTS_OK) {
+      for (size_t j = 0u; j < i; ++j) {
+        if ((peer_mask & (UINT32_C(1) << j)) != 0u)
+          socket->peers[j].flow_control.sent_data = old_sent[j];
+      }
+      return status;
+    }
+    ++committed;
+  }
+
+  if (publication->refs > SIZE_MAX - committed) {
+    for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
+      if ((peer_mask & (UINT32_C(1) << i)) != 0u)
+        socket->peers[i].flow_control.sent_data = old_sent[i];
+    }
+    return SALTS_ERANGE;
+  }
+
+  for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
+    flowmq_socket_peer_t *peer;
+    flowmq_socket_outbound_t *outbound;
+    flowmq_socket_retained_publication_t *retained;
+    if ((peer_mask & (UINT32_C(1) << i)) == 0u) continue;
+    peer = &socket->peers[i];
+    outbound = &peer->outbound[peer->outbound_write];
+    retained = flowmq_socket_retained_publication_retain(publication);
+    if (retained == NULL) {
+      /*
+       * Refcount overflow was precluded above; reaching this branch indicates
+       * internal corruption. Queue mutation has not started for this peer, but
+       * earlier peers may already own references, so fail the socket hard.
+       */
+      flowmq_socket_fail(socket, SALTS_EPROTO);
+      return SALTS_EPROTO;
+    }
+    *outbound = (flowmq_socket_outbound_t){
+        .retained = retained,
+        .encoded_size = publication->encoded_size,
+        .payload_size = publication->payload_size,
+        .message_end = 1};
+    peer->outbound_write =
+        (peer->outbound_write + 1u) % FLOWMQ_SOCKET_OUTBOUND_CAPACITY;
+    ++peer->outbound_count;
+    peer->outbound_bytes += publication->payload_size;
+    ++peer->outbound_messages;
+    flowmq_socket_peer_record_admission(
+        peer, publication->payload_size, 1);
+  }
   return SALTS_OK;
 }
 
@@ -1147,10 +1349,9 @@ static void flowmq_socket_release_send_slices(mem_slice_t *slices,
 
 static int flowmq_socket_peer_flush(flowmq_socket_peer_t *peer) {
   /*
-   * Queued frames already own canonical mem_buffer_t objects. Hand retained
-   * slices to current CNet for both TCP and TLS; CNet preserves plain-stream
-   * scatter/gather and TLS span-wise plaintext ownership under one logical
-   * send terminal.
+   * Copied queue entries are batched as retained canonical buffers. A retained
+   * publication entry already owns the exact logical vector and therefore
+   * flushes alone as one CNet logical write.
    */
   flowmq_socket_t *socket = peer->owner;
   flowmq_socket_outbound_t *outbound;
@@ -1160,6 +1361,7 @@ static int flowmq_socket_peer_flush(flowmq_socket_peer_t *peer) {
   size_t batch_payload_size = 0u;
   size_t batch_messages = 0u;
   int status;
+
   if (!flowmq_peer_state_is_connected(&peer->state) ||
       !flowmq_peer_state_write_idle(&peer->state) ||
       peer->outbound_count == 0u)
@@ -1167,14 +1369,47 @@ static int flowmq_socket_peer_flush(flowmq_socket_peer_t *peer) {
   if (socket->transport != FLOWMQ_TRANSPORT_TCP &&
       socket->transport != FLOWMQ_TRANSPORT_TLS)
     return SALTS_ENOTSUP;
+
+  outbound = &peer->outbound[peer->outbound_read];
+  if (outbound->retained != NULL) {
+    flowmq_socket_retained_publication_t *publication = outbound->retained;
+    if (outbound->buffer != NULL || publication->slice_count == 0u ||
+        publication->slice_count > CNET_RETAINED_VECTOR_MAX ||
+        publication->payload_size != outbound->payload_size ||
+        publication->encoded_size != outbound->encoded_size ||
+        !outbound->message_end)
+      return SALTS_EPROTO;
+
+    status =
+        flowmq_peer_state_write_begin(&peer->state, FLOWMQ_PEER_WRITE_DATA);
+    if (status != SALTS_OK) return status;
+    status = cnet_send_slicev(&socket->client, peer->connection,
+                              publication->slices,
+                              publication->slice_count);
+    if (status != SALTS_OK) {
+      flowmq_peer_state_write_cancel(&peer->state);
+      return status;
+    }
+
+    peer->inflight_payload_size = publication->payload_size;
+    peer->inflight_messages = 1u;
+    flowmq_socket_outbound_release(outbound);
+    peer->outbound_read =
+        (peer->outbound_read + 1u) % FLOWMQ_SOCKET_OUTBOUND_CAPACITY;
+    --peer->outbound_count;
+    return SALTS_OK;
+  }
+
   while (batch_count < peer->outbound_count &&
          batch_count < CNET_RETAINED_VECTOR_MAX) {
     size_t index =
         (peer->outbound_read + batch_count) %
         FLOWMQ_SOCKET_OUTBOUND_CAPACITY;
     outbound = &peer->outbound[index];
-    if (outbound->encoded_size >
-        socket->max_encoded_size - batch_encoded_size)
+    if (outbound->retained != NULL) break;
+    if (outbound->buffer == NULL ||
+        outbound->encoded_size >
+            socket->max_encoded_size - batch_encoded_size)
       break;
     slices[batch_count] =
         mem_slice(outbound->buffer, 0u, outbound->encoded_size);
@@ -1189,6 +1424,7 @@ static int flowmq_socket_peer_flush(flowmq_socket_peer_t *peer) {
     ++batch_count;
   }
   if (batch_count == 0u) return SALTS_EMSGSIZE;
+
   status =
       flowmq_peer_state_write_begin(&peer->state, FLOWMQ_PEER_WRITE_DATA);
   if (status != SALTS_OK) {
@@ -1202,12 +1438,12 @@ static int flowmq_socket_peer_flush(flowmq_socket_peer_t *peer) {
     flowmq_peer_state_write_cancel(&peer->state);
     return status;
   }
+
   peer->inflight_payload_size = batch_payload_size;
   peer->inflight_messages = batch_messages;
   for (size_t i = 0u; i < batch_count; ++i) {
     outbound = &peer->outbound[peer->outbound_read];
-    mem_buffer_release(outbound->buffer);
-    memset(outbound, 0, sizeof(*outbound));
+    flowmq_socket_outbound_release(outbound);
     peer->outbound_read =
         (peer->outbound_read + 1u) % FLOWMQ_SOCKET_OUTBOUND_CAPACITY;
     --peer->outbound_count;
@@ -3181,16 +3417,6 @@ static int flowmq_socket_try_send_slice(flowmq_socket_t *socket,
   selected_peer_index = socket->send_peer_index;
   selected_peer_generation = socket->send_peer_generation;
 
-  /*
-   * Retained PUB/XPUB multipart needs an atomic fanout ownership transaction
-   * across multiple CNet connections. Keep that shape fail-closed until it has
-   * a dedicated bounded design. The already-merged final-only retained
-   * publication path remains supported below.
-   */
-  if (socket->pattern.desc->routing_class == FLOWMQ_PATTERN_ROUTE_FANOUT &&
-      (!starting_message || !message_end))
-    return SALTS_ENOTSUP;
-
   if (starting_message &&
       socket->pattern.desc->routing_class == FLOWMQ_PATTERN_ROUTE_IDENTITY) {
     /* ROUTER still requires its copied routing-id envelope first. */
@@ -3198,43 +3424,123 @@ static int flowmq_socket_try_send_slice(flowmq_socket_t *socket,
   }
 
   if (socket->pattern.desc->routing_class == FLOWMQ_PATTERN_ROUTE_FANOUT) {
-    uint32_t peer_mask = 0u;
+    uint64_t peer_generations[FLOWMQ_SOCKET_PEER_CAPACITY] = {0};
+    uint32_t peer_mask =
+        starting_message ? 0u : socket->publish_peer_mask;
+    flowmq_socket_retained_publication_t *publication = NULL;
+
+    if (starting_message) {
+      for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
+        flowmq_socket_peer_t *candidate = &socket->peers[i];
+        if (flowmq_socket_peer_ready(candidate) &&
+            flowmq_subscription_set_match(
+                &candidate->subscriptions,
+                (vstr){.data = slice->data, .len = size})) {
+          peer_mask |= UINT32_C(1) << i;
+          peer_generations[i] =
+              candidate->flow_control.local_generation;
+        }
+      }
+    } else {
+      memcpy(peer_generations, socket->publish_peer_generations,
+             sizeof(peer_generations));
+    }
+
+    /*
+     * Preserve ordinary PUB/XPUB mute/drop semantics: an empty first-part
+     * snapshot never needs to allocate or retain publication storage.
+     */
+    if (peer_mask == 0u) {
+      if (starting_message) {
+        socket->publish_peer_mask = 0u;
+        memset(socket->publish_peer_generations, 0,
+               sizeof(socket->publish_peer_generations));
+      }
+      if (message_end) {
+        flowmq_socket_release_retained_staged(socket);
+        ++socket->next_message_id;
+      }
+      flowmq_pattern_state_send_commit(&socket->pattern, !message_end);
+      return SALTS_OK;
+    }
+
+    frame = (flowmq_protocol_frame_t){
+        .kind = FLOWMQ_PROTOCOL_FRAME_DATA,
+        .pattern = socket->pattern.pattern,
+        .message_id = socket->next_message_id + 1u,
+        .more = !message_end,
+        .payload = {.data = slice->data, .len = size}};
+    status =
+        flowmq_socket_prepare_retained_frame(socket, &frame, slice, &retained);
+    if (status != SALTS_OK) return status;
+
+    if (!message_end) {
+      status = flowmq_socket_stage_retained_frame(socket, &retained);
+      flowmq_socket_retained_frame_release(&retained);
+      if (status != SALTS_OK) return status;
+      if (starting_message) {
+        socket->publish_peer_mask = peer_mask;
+        memcpy(socket->publish_peer_generations, peer_generations,
+               sizeof(peer_generations));
+      }
+      flowmq_pattern_state_send_commit(&socket->pattern, 1);
+      return SALTS_OK;
+    }
+
+    if (socket->send_retained_payload_bytes >
+            socket->send_hwm_bytes - size ||
+        retained.slice_count >
+            CNET_RETAINED_VECTOR_MAX - socket->send_retained_count ||
+        retained.encoded_size >
+            socket->max_encoded_size - socket->send_retained_encoded_bytes) {
+      flowmq_socket_retained_frame_release(&retained);
+      return SALTS_EMSGSIZE;
+    }
+    total_payload_size = socket->send_retained_payload_bytes + size;
+    total_encoded_size =
+        socket->send_retained_encoded_bytes + retained.encoded_size;
+    if (total_encoded_size > socket->max_encoded_size) {
+      flowmq_socket_retained_frame_release(&retained);
+      return SALTS_EMSGSIZE;
+    }
+
+    /*
+     * PUB/XPUB mute/drop semantics select the first-part subscription snapshot,
+     * then omit peers that are no longer the same live generation or cannot
+     * accept the complete logical message at final commit.
+     */
     for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
-      flowmq_socket_peer_t *candidate = &socket->peers[i];
-      if (!flowmq_socket_peer_ready(candidate) ||
-          !flowmq_subscription_set_match(
-              &candidate->subscriptions,
-              (vstr){.data = slice->data, .len = size}))
-        continue;
-      if (!flowmq_socket_peer_can_admit(candidate, size, 1) ||
-          !flowmq_peer_state_write_idle(&candidate->state) ||
-          candidate->outbound_count != 0u)
-        continue;
-      peer_mask |= UINT32_C(1) << i;
+      uint32_t bit = UINT32_C(1) << i;
+      if ((peer_mask & bit) == 0u) continue;
+      if (!flowmq_socket_peer_generation_ready(
+              &socket->peers[i], peer_generations[i]) ||
+          !flowmq_socket_peer_can_queue_retained_message(
+              &socket->peers[i], socket, total_payload_size, size))
+        peer_mask &= ~bit;
     }
 
     if (peer_mask != 0u) {
-      frame = (flowmq_protocol_frame_t){
-          .kind = FLOWMQ_PROTOCOL_FRAME_DATA,
-          .pattern = socket->pattern.pattern,
-          .message_id = socket->next_message_id + 1u,
-          .more = 0,
-          .payload = {.data = slice->data, .len = size}};
-      status =
-          flowmq_socket_prepare_retained_frame(socket, &frame, slice, &retained);
-      if (status != SALTS_OK) return status;
-      for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
-        if ((peer_mask & (UINT32_C(1) << i)) == 0u) continue;
-        status =
-            flowmq_socket_peer_admit_retained(&socket->peers[i], &retained);
-        if (status != SALTS_OK) break;
+      status = flowmq_socket_retained_publication_create(
+          socket, &retained, &publication);
+      if (status != SALTS_OK) {
+        flowmq_socket_retained_frame_release(&retained);
+        return status;
       }
-      flowmq_socket_retained_frame_release(&retained);
-      if (status != SALTS_OK) return status;
+      status =
+          flowmq_socket_commit_retained_fanout(socket, publication, peer_mask);
+      flowmq_socket_retained_publication_release(publication);
+      if (status != SALTS_OK) {
+        flowmq_socket_retained_frame_release(&retained);
+        return status;
+      }
     }
 
-    ++socket->next_message_id;
+    flowmq_socket_release_retained_staged(socket);
+    flowmq_socket_retained_frame_release(&retained);
     socket->publish_peer_mask = 0u;
+    memset(socket->publish_peer_generations, 0,
+           sizeof(socket->publish_peer_generations));
+    ++socket->next_message_id;
     flowmq_pattern_state_send_commit(&socket->pattern, 0);
     return SALTS_OK;
   }
@@ -4295,6 +4601,31 @@ int flowmq_socket_internal_async_error_matches(
   return socket != NULL && status != SALTS_OK &&
          socket->async_error == status;
 }
+
+int flowmq_socket_internal_fanout_match_count(
+    const flowmq_socket_t *socket, const void *topic, size_t topic_size,
+    size_t *count) {
+  size_t matched = 0u;
+  if (count != NULL) *count = 0u;
+  if (socket == NULL || count == NULL ||
+      (topic == NULL && topic_size != 0u))
+    return SALTS_EINVAL;
+  if (socket->pattern.desc == NULL ||
+      socket->pattern.desc->routing_class != FLOWMQ_PATTERN_ROUTE_FANOUT)
+    return SALTS_ENOTSUP;
+  for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
+    const flowmq_socket_peer_t *peer = &socket->peers[i];
+    if (!flowmq_socket_peer_ready(peer))
+      continue;
+    if (flowmq_subscription_set_match(
+            &peer->subscriptions,
+            (vstr){.data = (char *)topic, .len = topic_size}))
+      ++matched;
+  }
+  *count = matched;
+  return SALTS_OK;
+}
+
 
 int flowmq_poll(flowmq_pollitem_t *items, size_t item_count,
                 uint32_t timeout_ms, size_t *ready) {

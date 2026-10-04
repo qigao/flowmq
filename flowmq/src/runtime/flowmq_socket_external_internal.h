@@ -64,6 +64,11 @@ int flowmq_socket_internal_poll_revents(
 int flowmq_socket_internal_async_error_matches(
     const flowmq_socket_t *socket, int status);
 
+/* Private qualification query; never installed in the public SDK. */
+int flowmq_socket_internal_fanout_match_count(
+    const flowmq_socket_t *socket, const void *topic, size_t topic_size,
+    size_t *count);
+
 /*
  * Starts/continues external CNet shutdown. SALTS_EBUSY means the embedding
  * owner must continue advance/observe/route and retry. After SALTS_OK,

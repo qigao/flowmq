@@ -221,10 +221,11 @@ FLOWMQ_C_API int flowmq_send(flowmq_socket_t *socket, const void *data,
  *
  * Copy-staged and retained-staged DATA are not mixed in one multipart message.
  * ROUTER may still select its routing identity with
- * flowmq_send(..., FLOWMQ_SNDMORE) before retained DATA staging. Retained
- * multipart PUB/XPUB fanout is fail-closed with SALTS_ENOTSUP in this bounded
- * single-logical-terminal design. TLS also returns SALTS_ENOTSUP; there is no
- * retained-to-copy fallback.
+ * flowmq_send(..., FLOWMQ_SNDMORE) before retained DATA staging. PUB/XPUB
+ * retained multipart fanout snapshots matching peers on the first part and
+ * atomically commits one bounded retained publication reference per eligible
+ * peer on the final part. Each peer later admits exactly one CNet logical
+ * retained vector; there is no retained-to-copy fallback.
  *
  * FLOWMQ_DONTWAIT has the same would-block meaning as flowmq_send(). Without
  * it, the owner thread advances this socket until immediate retained admission
