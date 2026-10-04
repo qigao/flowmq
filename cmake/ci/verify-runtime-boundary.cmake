@@ -88,12 +88,32 @@ foreach(_flowmq_sg_required IN ITEMS
   endif()
 endforeach()
 
+foreach(_flowmq_fanout_required IN ITEMS
+        "typedef struct flowmq_socket_retained_publication_s"
+        "flowmq_socket_retained_publication_t *retained;"
+        "static int flowmq_socket_commit_retained_fanout("
+        "flowmq_socket_peer_can_queue_retained_message("
+        "flowmq_socket_retained_publication_create("
+        "status = cnet_send_slicev(&socket->client, peer->connection,"
+        "publication->slices,"
+        "socket->publish_peer_mask = peer_mask;"
+        "memcpy(socket->publish_peer_generations, peer_generations,")
+  string(FIND "${_flowmq_socket_text}"
+              "${_flowmq_fanout_required}"
+              _flowmq_fanout_required_index)
+  if(_flowmq_fanout_required_index EQUAL -1)
+    message(FATAL_ERROR
+      "FlowMQ retained fanout contract is missing atomic publication fragment: "
+      "${_flowmq_fanout_required}")
+  endif()
+endforeach()
+
 string(FIND "${_flowmq_socket_text}"
-            "FLOWMQ_PATTERN_ROUTE_FANOUT &&"
-            _flowmq_retained_fanout_guard_index)
-if(_flowmq_retained_fanout_guard_index EQUAL -1)
+            "flowmq_socket_peer_admit_retained(&socket->peers[i], &retained)"
+            _flowmq_direct_retained_fanout_index)
+if(NOT _flowmq_direct_retained_fanout_index EQUAL -1)
   message(FATAL_ERROR
-    "FlowMQ retained multipart must keep fanout fail-closed until it has an atomic multi-peer ownership design")
+    "FlowMQ retained fanout must commit through bounded peer queues, not direct multi-peer CNet admission")
 endif()
 
 string(FIND "${_flowmq_socket_text}"
@@ -153,4 +173,4 @@ foreach(_flowmq_owned_recv_required IN ITEMS
 endforeach()
 
 message(STATUS
-        "FlowMQ CNet SG / owned receive contract verified: bounded retained multipart, TCP/TLS retained queued-send path, TCP_NODELAY policy, direct inbound owner transfer, no copy fallback")
+        "FlowMQ CNet SG / owned receive contract verified: bounded retained multipart, atomic retained fanout queues, TCP/TLS retained queued-send path, TCP_NODELAY policy, direct inbound owner transfer, no copy fallback")
