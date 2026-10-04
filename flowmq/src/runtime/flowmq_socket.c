@@ -1006,6 +1006,168 @@ static int flowmq_socket_stage_retained_frame(
   return SALTS_OK;
 }
 
+static int flowmq_socket_retained_publication_clone_slice(
+    flowmq_socket_retained_publication_t *publication,
+    const mem_slice_t *source) {
+  size_t offset = 0u;
+  mem_slice_t retained;
+  int status;
+  if (publication == NULL || source == NULL ||
+      publication->slice_count >= CNET_RETAINED_VECTOR_MAX)
+    return SALTS_EINVAL;
+  status = flowmq_socket_slice_validate(source, &offset);
+  if (status != SALTS_OK) return status;
+  retained = mem_slice(source->buffer, offset, source->length);
+  if (retained.buffer == NULL || retained.data != source->data ||
+      retained.length != source->length) {
+    mem_slice_release(&retained);
+    return SALTS_EPROTO;
+  }
+  publication->slices[publication->slice_count++] = retained;
+  return SALTS_OK;
+}
+
+static int flowmq_socket_retained_publication_create(
+    const flowmq_socket_t *socket,
+    const flowmq_socket_retained_frame_t *final_frame,
+    flowmq_socket_retained_publication_t **out) {
+  flowmq_socket_retained_publication_t *publication;
+  int status = SALTS_OK;
+  if (socket == NULL || final_frame == NULL || out == NULL || *out != NULL ||
+      final_frame->slice_count == 0u || final_frame->payload_size == 0u ||
+      final_frame->slice_count >
+          CNET_RETAINED_VECTOR_MAX - socket->send_retained_count ||
+      final_frame->encoded_size >
+          socket->max_encoded_size - socket->send_retained_encoded_bytes ||
+      final_frame->payload_size >
+          socket->send_hwm_bytes - socket->send_retained_payload_bytes)
+    return SALTS_EINVAL;
+
+  publication = (flowmq_socket_retained_publication_t *)calloc(
+      1u, sizeof(*publication));
+  if (publication == NULL) return SALTS_ENOMEM;
+  publication->refs = 1u;
+  publication->encoded_size =
+      socket->send_retained_encoded_bytes + final_frame->encoded_size;
+  publication->payload_size =
+      socket->send_retained_payload_bytes + final_frame->payload_size;
+
+  for (size_t i = 0u;
+       i < socket->send_retained_count && status == SALTS_OK; ++i)
+    status = flowmq_socket_retained_publication_clone_slice(
+        publication, &socket->send_retained_staged[i]);
+  for (size_t i = 0u;
+       i < final_frame->slice_count && status == SALTS_OK; ++i)
+    status = flowmq_socket_retained_publication_clone_slice(
+        publication, &final_frame->slices[i]);
+
+  if (status != SALTS_OK ||
+      publication->slice_count !=
+          socket->send_retained_count + final_frame->slice_count) {
+    flowmq_socket_retained_publication_release(publication);
+    return status != SALTS_OK ? status : SALTS_EPROTO;
+  }
+
+  *out = publication;
+  return SALTS_OK;
+}
+
+static int flowmq_socket_peer_can_queue_retained_message(
+    const flowmq_socket_peer_t *peer, const flowmq_socket_t *socket,
+    size_t payload_size, size_t final_part_size) {
+  const flowmq_socket_outbound_t *slot;
+  if (peer == NULL || socket == NULL || !flowmq_socket_peer_ready(peer) ||
+      peer->outbound_count >= FLOWMQ_SOCKET_OUTBOUND_CAPACITY ||
+      payload_size > socket->send_hwm_bytes ||
+      peer->outbound_bytes > socket->send_hwm_bytes - payload_size ||
+      peer->outbound_messages >= socket->send_hwm ||
+      flowmq_flow_control_send_credit_check(
+          &peer->flow_control, payload_size) != SALTS_OK ||
+      final_part_size > peer->flow_control.remote_max_frame_size)
+    return 0;
+  for (size_t i = 0u; i < socket->send_retained_parts; ++i) {
+    if (socket->send_retained_part_sizes[i] >
+        peer->flow_control.remote_max_frame_size)
+      return 0;
+  }
+  slot = &peer->outbound[peer->outbound_write];
+  return slot->buffer == NULL && slot->retained == NULL;
+}
+
+static int flowmq_socket_commit_retained_fanout(
+    flowmq_socket_t *socket,
+    flowmq_socket_retained_publication_t *publication,
+    uint32_t peer_mask) {
+  uint64_t old_sent[FLOWMQ_SOCKET_PEER_CAPACITY] = {0};
+  size_t committed = 0u;
+  int status = SALTS_OK;
+  if (socket == NULL || publication == NULL ||
+      publication->refs == 0u || peer_mask == 0u)
+    return SALTS_EINVAL;
+
+  /*
+   * All queue/HWM/generation checks are complete before entry. Credit commit
+   * is the only remaining status-returning mutation; save exact old values so
+   * an invariant failure can roll back before any peer queue becomes visible.
+   */
+  for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
+    flowmq_socket_peer_t *peer;
+    if ((peer_mask & (UINT32_C(1) << i)) == 0u) continue;
+    peer = &socket->peers[i];
+    old_sent[i] = peer->flow_control.sent_data;
+    status = flowmq_flow_control_send_credit_commit(
+        &peer->flow_control, publication->payload_size);
+    if (status != SALTS_OK) {
+      for (size_t j = 0u; j < i; ++j) {
+        if ((peer_mask & (UINT32_C(1) << j)) != 0u)
+          socket->peers[j].flow_control.sent_data = old_sent[j];
+      }
+      return status;
+    }
+    ++committed;
+  }
+
+  if (publication->refs > SIZE_MAX - committed) {
+    for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
+      if ((peer_mask & (UINT32_C(1) << i)) != 0u)
+        socket->peers[i].flow_control.sent_data = old_sent[i];
+    }
+    return SALTS_ERANGE;
+  }
+
+  for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
+    flowmq_socket_peer_t *peer;
+    flowmq_socket_outbound_t *outbound;
+    flowmq_socket_retained_publication_t *retained;
+    if ((peer_mask & (UINT32_C(1) << i)) == 0u) continue;
+    peer = &socket->peers[i];
+    outbound = &peer->outbound[peer->outbound_write];
+    retained = flowmq_socket_retained_publication_retain(publication);
+    if (retained == NULL) {
+      /*
+       * Refcount overflow was precluded above; reaching this branch indicates
+       * internal corruption. Queue mutation has not started for this peer, but
+       * earlier peers may already own references, so fail the socket hard.
+       */
+      flowmq_socket_fail(socket, SALTS_EPROTO);
+      return SALTS_EPROTO;
+    }
+    *outbound = (flowmq_socket_outbound_t){
+        .retained = retained,
+        .encoded_size = publication->encoded_size,
+        .payload_size = publication->payload_size,
+        .message_end = 1};
+    peer->outbound_write =
+        (peer->outbound_write + 1u) % FLOWMQ_SOCKET_OUTBOUND_CAPACITY;
+    ++peer->outbound_count;
+    peer->outbound_bytes += publication->payload_size;
+    ++peer->outbound_messages;
+    flowmq_socket_peer_record_admission(
+        peer, publication->payload_size, 1);
+  }
+  return SALTS_OK;
+}
+
 static void flowmq_socket_cancel_send_route(flowmq_socket_t *socket) {
   flowmq_socket_release_send_staged(socket);
   flowmq_socket_release_retained_staged(socket);
