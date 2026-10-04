@@ -61,6 +61,12 @@ cmake_add_test(
            ${PROJECT_SOURCE_DIR}/flowmq/src/protocol/stream
   FOLDER "flowmq/tests/runtime")
 
+add_test(
+  NAME test_flowmq_segmented_receive_contract
+  COMMAND ${CMAKE_COMMAND}
+          "-DFLOWMQ_SOCKET_SOURCE=${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_socket.c"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/runtime/flowmq_segmented_receive_contract_test.cmake")
+
 cmake_add_test(
   test_flowmq_owner
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/test_flowmq_owner.c
@@ -111,6 +117,7 @@ set(FLOWMQ_TRANSPORT_TESTS
     test_flowmq_transport
     test_flowmq_socket
     test_flowmq_owned_stream
+    test_flowmq_segmented_receive_contract
     test_flowmq_owner
     test_flowmq_socket_option
     test_flowmq_peer_state)
