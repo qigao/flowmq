@@ -2,6 +2,7 @@
 
 #include "flowmq_cnet_transport.h"
 #include "flowmq_flow_control.h"
+#include "flowmq_owned_stream.h"
 #include "flowmq_pattern.h"
 #include "flowmq_pattern_state.h"
 #include "flowmq_peer_state.h"
@@ -114,6 +115,7 @@ struct flowmq_socket_peer_s {
   flowmq_peer_state_t state;
   cnet_connection connection;
   flowmq_stream_decoder_t decoder;
+  flowmq_owned_stream_t owned_stream;
   flowmq_subscription_set_t subscriptions;
   flowmq_subscription_set_t synced_subscriptions;
   flowmq_protocol_heartbeat_deadlines_t heartbeat;
@@ -383,6 +385,7 @@ static void flowmq_socket_peer_storage_release(flowmq_socket_peer_t *peer) {
   peer->outbound_bytes = 0u;
   peer->commit_pending = 0u;
   flowmq_peer_state_write_cancel(&peer->state);
+  flowmq_owned_stream_reset(&peer->owned_stream);
   flowmq_stream_decoder_destroy(&peer->decoder);
   flowmq_subscription_set_destroy(&peer->subscriptions);
   flowmq_subscription_set_destroy(&peer->synced_subscriptions);
@@ -1582,6 +1585,59 @@ static int flowmq_socket_process_receive(flowmq_socket_peer_t *peer) {
   }
 }
 
+
+static int flowmq_socket_process_owned_stream(
+    flowmq_socket_peer_t *peer, int *pause_receive) {
+  int status;
+  if (peer == NULL || pause_receive == NULL) return SALTS_EINVAL;
+  *pause_receive = 0;
+
+  while (flowmq_owned_stream_size(&peer->owned_stream) != 0u) {
+    size_t frame_size = 0u;
+    status = flowmq_owned_stream_first_frame_size(
+        &peer->owned_stream, FLOWMQ_SOCKET_MAX_FRAME_SIZE, &frame_size);
+    if (status == FLOWMQ_PROTOCOL_INCOMPLETE) return SALTS_OK;
+    if (status != SALTS_OK) return status;
+    if (frame_size == 0u) return SALTS_EPROTO;
+
+    status = flowmq_owned_stream_replay_prefix(
+        &peer->owned_stream, &peer->decoder, frame_size);
+    if (status != SALTS_OK) return status;
+    status = flowmq_socket_process_receive(peer);
+    if (status == SALTS_ENOBUFS) {
+      *pause_receive = 1;
+      return SALTS_OK;
+    }
+    if (status != SALTS_OK) return status;
+    if (flowmq_stream_decoder_size(&peer->decoder) != 0u)
+      return SALTS_EPROTO;
+  }
+  return SALTS_OK;
+}
+
+static int flowmq_socket_owned_stream_fallback(
+    flowmq_socket_peer_t *peer, const mem_slice_t *current,
+    int *pause_receive) {
+  int status;
+  if (peer == NULL || current == NULL || pause_receive == NULL ||
+      current->buffer == NULL || current->data == NULL ||
+      current->length == 0u)
+    return SALTS_EINVAL;
+  *pause_receive = 0;
+
+  status = flowmq_owned_stream_replay(&peer->owned_stream, &peer->decoder);
+  if (status == SALTS_OK)
+    status = flowmq_stream_decoder_append(
+        &peer->decoder, current->data, current->length);
+  if (status == SALTS_OK)
+    status = flowmq_socket_process_receive(peer);
+  if (status == SALTS_ENOBUFS) {
+    *pause_receive = 1;
+    return SALTS_OK;
+  }
+  return status;
+}
+
 static void flowmq_socket_on_state(void *user, cnet_connection connection,
                                    cnet_connection_state state,
                                    const cnet_error *error) {
@@ -1668,7 +1724,8 @@ static int flowmq_socket_rearm_receive(flowmq_socket_peer_t *peer) {
           &peer->state, FLOWMQ_PEER_HANDSHAKE_HELLO_RX) &&
       flowmq_peer_state_handshake_has(
           &peer->state, FLOWMQ_PEER_HANDSHAKE_SETTINGS_RX) &&
-      flowmq_stream_decoder_size(&peer->decoder) == 0u) {
+      flowmq_stream_decoder_size(&peer->decoder) == 0u &&
+      flowmq_owned_stream_size(&peer->owned_stream) == 0u) {
     status = cnet_set_receive_slice_handler(
         &socket->client, peer->connection, flowmq_socket_on_receive_slice, peer);
     if (status != SALTS_OK) return status;
@@ -1685,18 +1742,26 @@ static void flowmq_socket_on_receive_slice(
   int status = SALTS_OK;
   int pause_receive = 0;
   int consumed_owned = 0;
-  const size_t decoder_size =
-      flowmq_stream_decoder_size(&peer->decoder);
-  (void)kind;
+  size_t decoder_size = flowmq_stream_decoder_size(&peer->decoder);
 
-  if (socket->transport == FLOWMQ_TRANSPORT_TCP &&
-      !peer->commit_pending &&
-      decoder_size == 0u &&
+  if (kind != CNET_MESSAGE_BYTES || slice.buffer == NULL ||
+      slice.data == NULL || slice.length == 0u) {
+    status = SALTS_EPROTO;
+  }
+
+  /*
+   * Preserve the existing one-slice DATA transfer first. It is the cheapest
+   * class and avoids touching the bounded stream when one CNet receive already
+   * contains exactly one single-packet DATA frame.
+   */
+  if (status == SALTS_OK &&
+      socket->transport == FLOWMQ_TRANSPORT_TCP &&
+      !peer->commit_pending && decoder_size == 0u &&
+      flowmq_owned_stream_size(&peer->owned_stream) == 0u &&
       flowmq_peer_state_handshake_has(
           &peer->state, FLOWMQ_PEER_HANDSHAKE_HELLO_RX) &&
       flowmq_peer_state_handshake_has(
-          &peer->state, FLOWMQ_PEER_HANDSHAKE_SETTINGS_RX) &&
-      slice.buffer != NULL && slice.data != NULL && slice.length != 0u) {
+          &peer->state, FLOWMQ_PEER_HANDSHAKE_SETTINGS_RX)) {
     flowmq_protocol_frame_t frame = {0};
     size_t consumed = 0u;
     status = flowmq_protocol_decode_frame(
@@ -1715,23 +1780,38 @@ static void flowmq_socket_on_receive_slice(
       if (status == SALTS_OK)
         status = flowmq_socket_process_data_frame(
             peer, &frame, &slice, &pause_receive);
-      if (slice.buffer == NULL)
-        consumed_owned = 1;
+      if (slice.buffer == NULL) consumed_owned = 1;
     } else if (status == FLOWMQ_PROTOCOL_INCOMPLETE ||
-               (status == SALTS_OK && consumed != slice.length)) {
+               (status == SALTS_OK && consumed != slice.length) ||
+               (status == SALTS_OK &&
+                (frame.kind != FLOWMQ_PROTOCOL_FRAME_DATA ||
+                 frame.owned_payload != NULL))) {
       status = SALTS_OK;
     }
     flowmq_protocol_frame_cleanup(&frame);
   }
 
   if (!consumed_owned && status == SALTS_OK) {
-    status = flowmq_stream_decoder_append(
-        &peer->decoder, slice.data, slice.length);
-    if (status == SALTS_OK)
-      status = flowmq_socket_process_receive(peer);
-    if (status == SALTS_ENOBUFS) {
-      pause_receive = 1;
-      status = SALTS_OK;
+    decoder_size = flowmq_stream_decoder_size(&peer->decoder);
+    if (decoder_size != 0u || peer->commit_pending ||
+        !peer->owned_receive_active ||
+        socket->transport != FLOWMQ_TRANSPORT_TCP) {
+      status = flowmq_stream_decoder_append(
+          &peer->decoder, slice.data, slice.length);
+      if (status == SALTS_OK)
+        status = flowmq_socket_process_receive(peer);
+      if (status == SALTS_ENOBUFS) {
+        pause_receive = 1;
+        status = SALTS_OK;
+      }
+    } else {
+      status = flowmq_owned_stream_append_move(&peer->owned_stream, &slice);
+      if (status == SALTS_ENOBUFS) {
+        status = flowmq_socket_owned_stream_fallback(
+            peer, &slice, &pause_receive);
+      } else if (status == SALTS_OK) {
+        status = flowmq_socket_process_owned_stream(peer, &pause_receive);
+      }
     }
   }
 
@@ -3342,15 +3422,23 @@ static int flowmq_socket_try_recv_slice(flowmq_socket_t *socket,
 
 static int flowmq_socket_resume_receive(flowmq_socket_peer_t *peer) {
   flowmq_socket_t *socket = peer->owner;
+  int pause_receive = 0;
   int status;
   if (!peer->commit_pending) return SALTS_OK;
   status = flowmq_socket_commit_staged(peer);
   if (status == SALTS_ENOBUFS) return SALTS_OK;
   if (status != SALTS_OK) return status;
   peer->commit_pending = 0u;
+
   status = flowmq_socket_process_receive(peer);
   if (status == SALTS_ENOBUFS) return SALTS_OK;
   if (status != SALTS_OK) return status;
+  if (flowmq_stream_decoder_size(&peer->decoder) == 0u &&
+      flowmq_owned_stream_size(&peer->owned_stream) != 0u) {
+    status = flowmq_socket_process_owned_stream(peer, &pause_receive);
+    if (status != SALTS_OK) return status;
+    if (pause_receive) return SALTS_OK;
+  }
   return flowmq_socket_rearm_receive(peer);
 }
 
