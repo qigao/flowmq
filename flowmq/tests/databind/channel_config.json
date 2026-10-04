@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "flowmq": {
+    "channel": "FlowMQQual.Telemetry",
+    "pattern": "pubsub",
+    "format": "binary",
+    "max_payload_bytes": 65536
+  }
+}
