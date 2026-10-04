@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "flowmq": {
+    "service": "Calc",
+    "operation": "Add",
+    "pattern": "reqrep",
+    "ingress_format": "json",
+    "egress_format": "json",
+    "max_payload_bytes": 65536
+  }
+}
