@@ -148,6 +148,19 @@ target_include_directories(
 target_link_libraries(flowmq
                       PUBLIC Salts::Core Salts::DataBind
                       PRIVATE Salts::CSTL Salts::CMeta Salts::CNet Salts::NativeIO)
+if(BUILD_TESTS)
+  get_target_property(_flowmq_runtime_links flowmq LINK_LIBRARIES)
+  foreach(_flowmq_frontend_target IN ITEMS
+          Salts::IDL
+          Salts::Schema
+          Salts::CFlow)
+    if("${_flowmq_frontend_target}" IN_LIST _flowmq_runtime_links)
+      message(FATAL_ERROR
+              "FlowMQ runtime must not link control-plane target "
+              "${_flowmq_frontend_target}")
+    endif()
+  endforeach()
+endif()
 if(TARGET flowmq_media_provider_codegen)
   add_dependencies(flowmq flowmq_media_provider_codegen)
 endif()
