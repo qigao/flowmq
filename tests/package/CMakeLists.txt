@@ -29,7 +29,10 @@ foreach(_flowmq_forbidden_dependency IN ITEMS
         Salts::CFlow
         Salts::CSTL
         Salts::CNet
-        Salts::NativeIO)
+        Salts::NativeIO
+        OpenSSL::SSL
+        OpenSSL::Crypto
+        GmSSL::GmSSL)
   if(_flowmq_forbidden_dependency IN_LIST _flowmq_public_links)
     message(FATAL_ERROR
             "installed FlowMQ::FlowMQ leaks obsolete/private dependency "
