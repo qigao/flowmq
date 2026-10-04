@@ -18,7 +18,7 @@ FlowMQ 是 C11 的 pattern-oriented messaging library。它提供 FMQ/6 wire cod
 | `FlowMQ::Transport` | build-tree ZeroMQ-style socket 与 CNet TCP/TLS runtime |
 | `FlowMQ::FlowMQ` | 唯一安装 target；合并上述公开能力 |
 
-> Release boundary: current Salts contains CNet owned-receive #594/#597 的 producer-owned receive contract。本次依赖对齐只把该 producer API 纳入可用基线，不在依赖升级中静默改变 FlowMQ runtime ownership；`flowmq_recv_slice()` 目前仍只消除 inbound ring → caller 的最后一次 copy。decoder/CNet producer-owned backing 的接入继续由 FlowMQ #46 单独实现和验证。
+> Branch/release boundary: `v1.2.0` 指向 #100 的 exact release head，已经包含 owner-lane、reuse-port、retained TLS、producer-owned/segmented receive 与公开 `flowmq_recv_slicev()`。当前 `main` 更新：#101/#102 增加 atomic retained PUB/XPUB fanout，#104 增加 generated DataBind ChannelPlan/ServicePlan qualification。除非显式标记 release，下面的行为描述以 current `main` 为准。
 
 安装包不固定 Salts/SaltsUtils 版本，始终消费 latest published stable SDK；公开链接依赖是
 `Salts::Core` 与 SaltsUtils 提供的 `Salts::DataBind`；`Salts::CNet`、`Salts::NativeIO`、
@@ -152,29 +152,49 @@ p99 为约 **0.615x**。小消息结果更依赖 workload/load-generator progres
 reuse-port 可以线性扩展。上述收益都不依赖隐藏 worker 或 connection migration。
 
 发送 API 有两个明确的 ownership surface：`flowmq_send()` 在返回成功前复制 borrowed
-caller bytes；`flowmq_send_slice()` 用于 plaintext TCP 的 canonical retained DATA。
-retained `FLOWMQ_SNDMORE` part 成功后 caller 可立即释放自己的 slice 引用，socket 在有界
-retained staging 中保持 ownership；final part 把完整 multipart 作为一个不超过 32 ranges 的
-CNet logical retained write 提交。copied DATA 与 retained DATA 不在同一 multipart transaction
-中混用；ROUTER routing-id envelope 仍可先通过普通 copy API 选择 peer。超出 aggregate SG/send
-bound 显式失败，不 split、不 flatten、不 copy fallback；disconnect/cancel/close 释放所有 staged
-retains。retained multipart PUB/XPUB 仍保持 fail-closed。TCP 与 verified TLS 都可把非 fanout retained DATA 作为 bounded logical retained write 提交给 CNet；TLS 不增加 plaintext flatten/copy fallback，genuinely discontiguous framing/payload ranges 仍由 CNet 按 retained plaintext cursor 消费。TLS retained 的性能分类继续由 #60 benchmark 单独验证。基准显示
-该 API 不是小消息的默认替代：
-64-byte retained 会承担额外 slice/refcount/framing 固定成本，而 1 MiB owned payload
-已经能通过消除 admission copy 获得可测收益；普通/小 borrowed payload 继续优先使用
-`flowmq_send()`。
+caller bytes；`flowmq_send_slice()` 接受 canonical owned slice，并把 retained ownership 保持到
+对应 CNet terminal。retained `FLOWMQ_SNDMORE` part 成功后 caller 可立即释放自己的 slice 引用，
+socket 在有界 staging 中保存 canonical ranges；final part 把完整 multipart 作为一个不超过
+`CNET_RETAINED_VECTOR_MAX` ranges 的 logical retained write 提交。copied DATA 与 retained DATA
+不在同一 multipart transaction 中混用；ROUTER routing-id envelope 仍可先通过普通 copy API
+选择 peer。超出 aggregate SG/send bound 显式失败，不 split、不 flatten、不 copy fallback；
+disconnect/cancel/close 精确释放 staged retains。
 
-接收侧同样保留两个显式 surface：`flowmq_recv()` 把一个 inbound part 复制到 caller storage；
-`flowmq_recv_slice()` 则把 inbound ring 已经持有的 canonical `mem_buffer_t` ownership 直接
-转移成 `mem_slice_t`，因此消除最后一次 message-pool → caller copy。caller 必须传入空的
-`mem_slice_t`；仍持有 backing 的 descriptor 会得到 `SALTS_EINVAL` 且保持原 owner 不变，
-避免覆盖 live reference。flow credit、HWM occupancy、
-`RCVMORE` 与 REQ/REP FSM 都在 dequeue 时推进，不会因为应用持有 slice 而冻结 transport credit。
-current Salts 的 `mem_pool_t` 销毁不会等待 outstanding pooled buffers，所以该 zero-copy slice
-可以跨后续 `poll/send/recv` progress 持有，但必须在 `flowmq_close()` 前
-`mem_slice_release()`；FlowMQ 不会为了延长 close 后 lifetime 偷偷复制到 detached buffer。
-当前 decoder payload → inbound `message_pool` 仍有一次 copy，属于后续独立的 decoder-owned
-receive backing 优化，不与 public recv-slice ABI 混在同一阶段。
+current `main` 的 PUB/XPUB retained multipart 已不再 fail-closed。第一 retained part 冻结当时
+ready 且 subscription-matching 的 peer generation snapshot；final part 重新验证 generation、
+完整 message HWM/credit/frame bound 与 peer queue slot，在任何 peer queue 可见前完成所有
+fallible allocation/range clone。commit 后每个仍 eligible peer 只持有同一 shared retained
+publication 的一个 bounded reference，并在自己的 owner progress 中独立提交 exactly one
+`cnet_send_slicev()` logical write。snapshot 后的 subscription change 不改写当前 multipart
+peer set；final commit 时已失效/不可 admission 的 peer 按既有 PUB mute/drop 语义被省略。
+不存在 retained-to-copy fallback。该 atomic fanout 是 #101/#102 之后的 current-main contract，
+不属于 `v1.2.0` tag。
+
+TCP 与 verified TLS 的 retained send 都沿 CNet retained plaintext cursor 消费 genuinely
+discontiguous framing/payload ranges，不增加 plaintext flatten/copy fallback。该 API 不是小消息
+的默认替代：64-byte retained 会承担额外 slice/refcount/framing 固定成本，而较大 owned payload
+可通过消除 admission copy 获益；普通/小 borrowed payload 继续优先使用 `flowmq_send()`。
+
+接收侧现在有三个显式 surface：
+
+- `flowmq_recv()`：兼容 copy surface。对于 owned/segmented DATA，直接从 queue 持有的 payload
+  ranges 拷贝到 caller storage；必需的 caller copy 是该 API 的语义。
+- `flowmq_recv_slice()`：保持“一个 contiguous canonical slice”的 legacy contract。单 range
+  owned DATA 直接转移；真正 multi-range DATA 会在消费 flow credit/FSM 之前执行一次 targeted
+  coalesce，失败时 queued message 保持完全不变。
+- `flowmq_recv_slicev()`：bounded vector ownership surface。caller 提供空的 `mem_slice_t`
+  descriptor array；single-range 直接返回 1 个 owner，multi-range 可直接转移已经由 inbound
+  queue 持有的 canonical payload vector，不为 vector 形状强制 coalesce。capacity 不足返回
+  `SALTS_ENOBUFS` 并报告 required count，不消费 queued part/FSM/credit。
+
+producer-owned receive fast path 目前针对 plaintext TCP 的可资格形状：CNet backing 可被 bounded
+owned stream 保留，完整 DATA packet 再投影为一个或多个 canonical payload ranges。non-DATA、
+bounded projection overflow，或超出 owned-stream fast path 的 TCP segmentation/coalescing 形状
+继续走显式 copied decoder fallback；文档和 benchmark 不把这些形状伪装成 zero-copy。
+`recv_slicev` 的 1 MiB qualification 因此同时记录 true multi-range vector 与 explicit fallback，
+而不是声称所有 TCP callback shape 都零拷贝。flow credit、HWM occupancy、`RCVMORE` 与
+REQ/REP FSM 都只在成功 dequeue 时推进，不会因为应用继续持有 returned slices 而冻结 transport
+credit；所有 returned `mem_slice_t` 必须由 caller `mem_slice_release()`。
 
 `FLOWMQ_RECONNECT_IVL=18` 与 `FLOWMQ_RECONNECT_IVL_MAX=21` 采用 ZeroMQ 的编号和
 连接级退避语义：IVL 默认 100ms，`-1` 禁止重连，`0` 表示下一轮 owner progress 立即
