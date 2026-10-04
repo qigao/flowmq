@@ -1743,6 +1743,7 @@ static void flowmq_socket_on_receive_slice(
   int pause_receive = 0;
   int consumed_owned = 0;
   size_t decoder_size = flowmq_stream_decoder_size(&peer->decoder);
+  (void)connection;
 
   if (kind != CNET_MESSAGE_BYTES || slice.buffer == NULL ||
       slice.data == NULL || slice.length == 0u) {
@@ -3421,7 +3422,6 @@ static int flowmq_socket_try_recv_slice(flowmq_socket_t *socket,
 }
 
 static int flowmq_socket_resume_receive(flowmq_socket_peer_t *peer) {
-  flowmq_socket_t *socket = peer->owner;
   int pause_receive = 0;
   int status;
   if (!peer->commit_pending) return SALTS_OK;
