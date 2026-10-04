@@ -326,9 +326,13 @@ jobs:
           for payload in 64 65536 1048576; do
             grep -q "^OWNED_RX_EVIDENCE mode=copy payload_bytes=$payload " "$log"
             grep -q "^OWNED_RX_EVIDENCE mode=slice payload_bytes=$payload " "$log"
+            grep -q "^OWNED_RX_EVIDENCE mode=slicev payload_bytes=$payload " "$log"
           done
           grep -Eq '^OWNED_RX_EVIDENCE mode=slice payload_bytes=64 .*direct_hits=[1-9][0-9]* ' "$log"
           grep -Eq '^OWNED_RX_EVIDENCE mode=slice payload_bytes=1048576 .*direct_hits=0 ' "$log"
+          grep -Eq '^OWNED_RX_EVIDENCE mode=slicev payload_bytes=64 .*payload_copy_contract=0 contract_basis=owned_single_range$' "$log"
+          grep -Eq '^OWNED_RX_EVIDENCE mode=slicev payload_bytes=65536 .*payload_copy_contract=0 contract_basis=owned_single_range$' "$log"
+          grep -Eq '^OWNED_RX_EVIDENCE mode=slicev payload_bytes=1048576 .*multi_range_hits=[1-9][0-9]* .*range_count_min=[2-9][0-9]* .*payload_copy_contract=0 contract_basis=owned_vector$' "$log"
           sed -n '/^OWNED_RX_EVIDENCE_BEGIN /,/^OWNED_RX_EVIDENCE_END /p' "$log" \
             > "$result_dir/flowmq-owned-receive.md"
           grep -q '^TLS_EVIDENCE_BEGIN layout=natural_discontiguous$' "$log"
