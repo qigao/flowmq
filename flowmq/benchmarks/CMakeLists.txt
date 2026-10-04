@@ -60,6 +60,12 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 
 cmake_add_benchmark(
+  bench_flowmq_retained_fanout
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_retained_fanout.c
+  LIBS FlowMQ::Transport
+  FOLDER "flowmq/benchmarks/runtime")
+
+cmake_add_benchmark(
   bench_flowmq_pattern_dispatch
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_pattern_dispatch.c
   LIBS FlowMQ::Transport Salts::TinyTest
