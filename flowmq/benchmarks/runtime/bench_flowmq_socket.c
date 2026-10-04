@@ -779,7 +779,7 @@ static int bench_owned_rx_measure(
   };
   bench_pair_t pair;
   uint64_t latencies[BENCH_OWNED_RX_MAX_SAMPLES];
-  const size_t samples = bench_owned_rx_samples(payload_size);
+  size_t samples = bench_owned_rx_samples(payload_size);
   uint64_t elapsed_total = 0u;
   size_t subrange_hits = 0u;
   size_t base_aligned_hits = 0u;
@@ -788,8 +788,12 @@ static int bench_owned_rx_measure(
   size_t range_count_max = 0u;
   int status;
 
-  if (payload == NULL || payload_size == 0u || out == NULL ||
-      samples == 0u || samples > BENCH_OWNED_RX_MAX_SAMPLES)
+  if (payload == NULL || payload_size == 0u || out == NULL)
+    return SALTS_EINVAL;
+  if (mode == BENCH_OWNED_RX_SLICEV &&
+      payload_size > FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE)
+    samples = bench_tls_evidence_samples(128u, 128u);
+  if (samples == 0u || samples > BENCH_OWNED_RX_MAX_SAMPLES)
     return SALTS_EINVAL;
 
   memset(&pair, 0, sizeof(pair));
@@ -876,9 +880,12 @@ static int bench_owned_rx_measure(
                               ? "owned_vector"
                               : (all_subrange
                                      ? "owned_single_range"
-                                     : (zero_copy_vector
-                                            ? "owned_vector_mixed_ranges"
-                                            : "mixed_or_fallback")))),
+                                     : (multi_range_hits != 0u &&
+                                                base_aligned_hits != 0u
+                                            ? "mixed_vector_or_fallback"
+                                            : (zero_copy_vector
+                                                   ? "owned_vector_mixed_ranges"
+                                                   : "mixed_or_fallback"))))),
         .payload_bytes = payload_size,
         .samples = samples,
         .p50_ns = bench_tls_evidence_percentile(latencies, samples, 50u),
@@ -963,13 +970,25 @@ static int bench_owned_rx_contract_validate(
                : SALTS_EPROTO;
   }
 
-  return result->subrange_hits == 0u &&
-                 result->base_aligned_hits == 0u &&
-                 result->multi_range_hits == result->samples &&
-                 result->range_count_min > 1u &&
-                 result->range_count_max >= result->range_count_min &&
-                 result->payload_copy_contract == 0 &&
-                 strcmp(result->contract_basis, "owned_vector") == 0
+  if (result->subrange_hits != 0u ||
+      result->multi_range_hits == 0u ||
+      result->base_aligned_hits + result->multi_range_hits != result->samples ||
+      result->range_count_max <= 1u)
+    return SALTS_EPROTO;
+
+  if (result->base_aligned_hits == 0u) {
+    return result->multi_range_hits == result->samples &&
+                   result->range_count_min > 1u &&
+                   result->payload_copy_contract == 0 &&
+                   strcmp(result->contract_basis, "owned_vector") == 0
+               ? SALTS_OK
+               : SALTS_EPROTO;
+  }
+
+  return result->range_count_min == 1u &&
+                 result->payload_copy_contract == -1 &&
+                 strcmp(result->contract_basis,
+                        "mixed_vector_or_fallback") == 0
              ? SALTS_OK
              : SALTS_EPROTO;
 }
