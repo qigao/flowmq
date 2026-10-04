@@ -238,21 +238,55 @@ PUB/XPUB 的 mute peer 按 ZeroMQ 语义丢弃，PUSH/DEALER/REQ 等模式不静
 
 ## Receive 数据路径
 
+接收路径对 plaintext TCP 的 eligible shapes 使用 released CNet producer-owned receive，
+同时保留一个诚实的 copied fallback：
+
 ```text
-CNet borrowed receive view
-  -> peer-owned bounded stream decoder
-  -> FMQ/6 frame validation + SETTINGS/FLOW_UPDATE credit
+CNet owned receive backing
+  -> bounded peer-owned receive stream
+  -> FMQ frame prefix / payload-range projection
+       |
+       +-> complete DATA:
+       |     one canonical owned range
+       |       or
+       |     bounded segmented canonical range vector
+       |
+       +-> non-DATA / projection overflow / out-of-fast-path TCP shape:
+             copied stream-decoder fallback
   -> per-peer multipart staging
-  -> socket-owned complete message
-  -> recv/msg_recv
+  -> socket-owned complete message queue
+       |
+       +-> flowmq_recv()
+       |     required copy into caller storage
+       |
+       +-> flowmq_recv_slice()
+       |     one range: direct ownership transfer
+       |     N > 1 ranges: exactly one targeted coalesce before dequeue commit
+       |
+       +-> flowmq_recv_slicev()
+             transfer bounded canonical vector when available
+             explicit copied fallback remains classified as fallback
 ```
 
-CNet view 只在 callback 内有效。跨出 callback 或主动 progress 调用边界的数据先复制到 socket-owned
-buffer；完整 multipart 提交前只存在于对应 peer staging。完整消息提交同时检查可配置的消息数
-与 payload byte HWM；容量不足时停止该 peer 的 receive demand，应用消费并再次 `poll` 后恢复。
-只有真实 DATA payload 消耗 wire credit；ROUTER routing-id 和 XPUB subscription event 是本地
-合成 part，不计 credit。应用取走 part 后增加累计 consumed_data，达到配置 quantum 或 deadline
-后由下一次 owner progress 发布 FLOW_UPDATE。
+CNet callback boundaries不是 FMQ packet boundaries，因此 FlowMQ 不承诺任意 TCP segmentation/
+coalescing 都进入 owned-vector fast path。完整 post-handshake plaintext DATA 能在 bounded owned
+stream 内完成时，decoder 只消费 framing/header owner，并把 DATA payload owner 投影到 staged/
+inbound storage；non-DATA、projection overflow 或逃逸该 bounded fast path 的形状继续使用 copied
+decoder。这个 fallback 是显式兼容路径，不被统计成 zero-copy。
+
+`flowmq_recv()` 对 segmented DATA 从 retained ranges 直接复制到 caller；不会先把 vector flatten
+到 message-pool buffer。`flowmq_recv_slice()` 必须返回一个 contiguous canonical slice，因此
+multi-range message 在消费 credit/FSM state 前做 exactly one targeted coalesce；allocation/copy
+失败不会改变 queued message。`flowmq_recv_slicev()` 则可以把 inbound queue 已持有的 bounded
+canonical range vector 直接转移给 caller；capacity 不足只报告 required range count，不推进
+pattern/FSM/credit。
+
+完整 multipart 提交仍同时检查可配置的消息数与 payload byte HWM；容量不足时停止该 peer 的
+receive demand，应用消费并再次 `poll` 后恢复。只有真实 DATA payload 消耗 wire credit；
+ROUTER routing-id 和 XPUB subscription event 是本地合成 part，不计 credit。应用成功取走 part
+后增加累计 consumed_data，达到配置 quantum 或 deadline 后由下一次 owner progress 发布
+FLOW_UPDATE。returned slices 的 backing 可以跨后续 caller-driven progress 持有，但必须由
+caller `mem_slice_release()`。
 
 ## Pattern 状态
 
@@ -265,9 +299,13 @@ buffer；完整 multipart 提交前只存在于对应 peer staging。完整消�
   subscribe/unsubscribe 通过每个 peer 的同步快照增量传播，新 session 从 socket desired
   subscription 集重放。
 - ROUTER：receive 暴露 routing-id 首 part；send 消费 routing-id 首 part。
-- multipart：sender 的 `SNDMORE` parts 先复制到 socket-owned 有界 staging，final part 对完整
-  payload size、part slots 和 message HWM 做一次 admission，再原子转移到选定 peer outbound；
-  receiver 也只观察全部 parts 或完全不观察。
+- multipart：`flowmq_send()` 的 `SNDMORE` parts 使用 socket-owned copied staging；
+  `flowmq_send_slice()` 的 retained parts 使用 canonical slice staging。final part 对完整 payload、
+  part/range slots、HWM/credit 和 peer generation 做一次 transaction admission。current `main`
+  的 PUB/XPUB retained fanout 从第一 part 冻结 matching peer snapshot，final commit 给每个仍
+  eligible peer 原子排入同一 shared retained publication 的一个 bounded reference；每个 peer
+  后续独立提交 exactly one CNet logical retained vector，没有 SG-to-copy fallback。receiver
+  仍只观察全部 parts 或完全不观察。
 
 精确 compatibility matrix 和迁移边界见
 [CNet TCP/TLS 与 ZeroMQ socket 模型](CNET_TCP_TLS_ARCHITECTURE.md)。
@@ -302,5 +340,6 @@ deadline 更新、ROUTER identity、multipart 接收原子可见性、REQ/REP FS
 PUB/SUB filter/fan-out、动态 XPUB/XSUB subscription event 与 reconnect replay、TCP/TLS
 listener restart 后的 caller-driven reconnect、发送/接收 message/byte HWM、
 阻塞/DONTWAIT 分流、多 socket timeout poll、RCVMORE、peer failure isolation、session
-generation fencing 和 multipart 整体发送 admission。下一阶段继续覆盖严格 receive
-fair-queue、可配置 shutdown 边界和更多 pattern benchmark。
+generation fencing、owned/segmented receive、`recv_slicev` vector/fallback classification，以及
+current-main retained PUB/XPUB atomic fanout。下一阶段继续覆盖严格 receive fair-queue、
+可配置 shutdown 边界和更多 pattern benchmark。
