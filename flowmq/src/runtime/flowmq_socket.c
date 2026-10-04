@@ -3446,6 +3446,24 @@ static int flowmq_socket_try_send_slice(flowmq_socket_t *socket,
              sizeof(peer_generations));
     }
 
+    /*
+     * Preserve ordinary PUB/XPUB mute/drop semantics: an empty first-part
+     * snapshot never needs to allocate or retain publication storage.
+     */
+    if (peer_mask == 0u) {
+      if (starting_message) {
+        socket->publish_peer_mask = 0u;
+        memset(socket->publish_peer_generations, 0,
+               sizeof(socket->publish_peer_generations));
+      }
+      if (message_end) {
+        flowmq_socket_release_retained_staged(socket);
+        ++socket->next_message_id;
+      }
+      flowmq_pattern_state_send_commit(&socket->pattern, !message_end);
+      return SALTS_OK;
+    }
+
     frame = (flowmq_protocol_frame_t){
         .kind = FLOWMQ_PROTOCOL_FRAME_DATA,
         .pattern = socket->pattern.pattern,
