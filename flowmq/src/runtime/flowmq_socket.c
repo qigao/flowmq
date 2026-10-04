@@ -3382,6 +3382,86 @@ static int flowmq_socket_try_send_slice(flowmq_socket_t *socket,
   return SALTS_OK;
 }
 
+
+static int flowmq_socket_message_validate(
+    const flowmq_socket_message_t *message) {
+  size_t total = 0u;
+  if (message == NULL) return SALTS_EINVAL;
+  if ((message->buffer == NULL) == (message->segmented == NULL))
+    return SALTS_EPROTO;
+
+  if (message->buffer != NULL) {
+    size_t used = mem_buffer_used(message->buffer);
+    if (message->offset > used || message->size > used - message->offset)
+      return SALTS_EPROTO;
+    return SALTS_OK;
+  }
+
+  if (message->segmented->segment_count == 0u ||
+      message->segmented->segment_count >
+          FLOWMQ_OWNED_STREAM_SEGMENT_CAPACITY)
+    return SALTS_EPROTO;
+  for (size_t i = 0u; i < message->segmented->segment_count; ++i) {
+    const mem_slice_t *slice = &message->segmented->segments[i];
+    if (!flowmq_owned_stream_slice_valid(slice) ||
+        slice->length > message->size - total)
+      return SALTS_EPROTO;
+    total += slice->length;
+  }
+  return total == message->size ? SALTS_OK : SALTS_EPROTO;
+}
+
+static int flowmq_socket_message_copy_payload(
+    const flowmq_socket_message_t *message, void *destination) {
+  unsigned char *out = (unsigned char *)destination;
+  size_t copied = 0u;
+  int status = flowmq_socket_message_validate(message);
+  if (status != SALTS_OK) return status;
+  if (message->size == 0u) return SALTS_OK;
+  if (destination == NULL) return SALTS_EINVAL;
+
+  if (message->buffer != NULL) {
+    memcpy(out,
+           (const unsigned char *)mem_buffer_const_data(message->buffer) +
+               message->offset,
+           message->size);
+    return SALTS_OK;
+  }
+
+  for (size_t i = 0u; i < message->segmented->segment_count; ++i) {
+    const mem_slice_t *slice = &message->segmented->segments[i];
+    memcpy(out + copied, slice->data, slice->length);
+    copied += slice->length;
+  }
+  return copied == message->size ? SALTS_OK : SALTS_EPROTO;
+}
+
+static int flowmq_socket_message_coalesce(
+    flowmq_socket_t *socket, const flowmq_socket_message_t *message,
+    mem_buffer_t **out_buffer) {
+  mem_buffer_t *buffer;
+  int status;
+  if (socket == NULL || message == NULL || out_buffer == NULL ||
+      *out_buffer != NULL || message->segmented == NULL ||
+      message->segmented->segment_count <= 1u)
+    return SALTS_EINVAL;
+  status = flowmq_socket_message_validate(message);
+  if (status != SALTS_OK) return status;
+
+  buffer = mem_get_buffer(&socket->message_pool,
+                          message->size == 0u ? 1u : message->size);
+  if (buffer == NULL) return SALTS_ENOMEM;
+  status = flowmq_socket_message_copy_payload(
+      message, mem_buffer_data(buffer));
+  if (status != SALTS_OK) {
+    mem_buffer_release(buffer);
+    return status;
+  }
+  mem_set_used(buffer, message->size);
+  *out_buffer = buffer;
+  return SALTS_OK;
+}
+
 static int flowmq_socket_try_recv(flowmq_socket_t *socket, void *data,
                                   size_t capacity, size_t *received,
                                   int flags) {
@@ -3413,6 +3493,9 @@ static int flowmq_socket_try_recv(flowmq_socket_t *socket, void *data,
       (!message->more && socket->inbound_messages == 0u))
     return SALTS_EPROTO;
   if (message->peer_index >= FLOWMQ_SOCKET_PEER_CAPACITY) return SALTS_EPROTO;
+  status = flowmq_socket_message_validate(message);
+  if (status != SALTS_OK) return status;
+
   peer = &socket->peers[message->peer_index];
   if (!flowmq_peer_state_is_used(&peer->state) ||
       message->peer_generation == 0u ||
@@ -3428,11 +3511,10 @@ static int flowmq_socket_try_recv(flowmq_socket_t *socket, void *data,
         &peer->flow_control, message->credit_size, consumed_at_ns);
     if (status != SALTS_OK) return status;
   }
-  if (message->size != 0u)
-    memcpy(data,
-           (const unsigned char *)mem_buffer_const_data(message->buffer) +
-               message->offset,
-           message->size);
+
+  status = flowmq_socket_message_copy_payload(message, data);
+  if (status != SALTS_OK) return status;
+
   message_more = message->more;
   socket->last_rcvmore = message_more != 0;
   flowmq_pattern_state_receive_commit(&socket->pattern, message_more);
@@ -3454,7 +3536,8 @@ static int flowmq_socket_try_recv(flowmq_socket_t *socket, void *data,
     socket->request_peer_valid = 0u;
     socket->request_peer_generation = 0u;
   }
-  mem_buffer_release(message->buffer);
+
+  flowmq_socket_message_storage_release(message);
   socket->inbound_bytes -= message->size;
   if (!message_more) --socket->inbound_messages;
   --peer->queued_parts;
@@ -3472,6 +3555,7 @@ static int flowmq_socket_try_recv_slice(flowmq_socket_t *socket,
                                         mem_slice_t *out, int flags) {
   flowmq_socket_message_t *message;
   flowmq_socket_peer_t *peer;
+  mem_buffer_t *coalesced = NULL;
   int message_more;
   int status;
   if (socket == NULL || out == NULL || (flags & ~FLOWMQ_DONTWAIT) != 0)
@@ -3488,7 +3572,8 @@ static int flowmq_socket_try_recv_slice(flowmq_socket_t *socket,
   if (socket->inbound_count == 0u) return SALTS_EBUSY;
 
   message = &socket->inbound[socket->inbound_read];
-  if (message->buffer == NULL) return SALTS_EPROTO;
+  status = flowmq_socket_message_validate(message);
+  if (status != SALTS_OK) return status;
   if (socket->pattern.desc->fsm_class == FLOWMQ_PATTERN_FSM_REQ &&
       socket->request_peer_valid &&
       (message->peer_index != socket->request_peer_index ||
@@ -3506,6 +3591,17 @@ static int flowmq_socket_try_recv_slice(flowmq_socket_t *socket,
       peer->queued_parts == 0u)
     return SALTS_EPROTO;
 
+  /*
+   * Preserve the legacy one-contiguous-slice contract. Build the only required
+   * coalesce before consuming credit/FSM state so allocation failure leaves
+   * the queued message completely unchanged.
+   */
+  if (message->segmented != NULL &&
+      message->segmented->segment_count > 1u) {
+    status = flowmq_socket_message_coalesce(socket, message, &coalesced);
+    if (status != SALTS_OK) return status;
+  }
+
   if (message->credit_size != 0u &&
       !flowmq_peer_state_is_retired(&peer->state)) {
     uint64_t consumed_at_ns = peer->flow_control.update_pending
@@ -3513,7 +3609,10 @@ static int flowmq_socket_try_recv_slice(flowmq_socket_t *socket,
                                   : salts_hrtime();
     status = flowmq_flow_control_consume(
         &peer->flow_control, message->credit_size, consumed_at_ns);
-    if (status != SALTS_OK) return status;
+    if (status != SALTS_OK) {
+      mem_buffer_release(coalesced);
+      return status;
+    }
   }
 
   message_more = message->more;
@@ -3538,16 +3637,25 @@ static int flowmq_socket_try_recv_slice(flowmq_socket_t *socket,
     socket->request_peer_generation = 0u;
   }
 
-  /*
-   * Move the inbound queue's canonical pooled-buffer reference into the
-   * application-visible slice. Do not retain+release: this is one ownership
-   * transfer and also supports a valid zero-length message part.
-   */
-  out->data =
-      (unsigned char *)mem_buffer_data(message->buffer) + message->offset;
-  out->length = message->size;
-  out->buffer = message->buffer;
-  message->buffer = NULL;
+  if (message->buffer != NULL) {
+    out->data =
+        (unsigned char *)mem_buffer_data(message->buffer) + message->offset;
+    out->length = message->size;
+    out->buffer = message->buffer;
+    message->buffer = NULL;
+  } else if (message->segmented->segment_count == 1u) {
+    *out = message->segmented->segments[0];
+    memset(&message->segmented->segments[0], 0,
+           sizeof(message->segmented->segments[0]));
+    free(message->segmented);
+    message->segmented = NULL;
+  } else {
+    out->data = mem_buffer_data(coalesced);
+    out->length = message->size;
+    out->buffer = coalesced;
+    coalesced = NULL;
+    flowmq_socket_message_storage_release(message);
+  }
 
   socket->inbound_bytes -= message->size;
   if (!message_more) --socket->inbound_messages;
