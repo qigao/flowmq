@@ -477,6 +477,61 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
+  it("coalesces segmented 1 MiB receive into one legacy slice") {
+    enum { SEGMENTED_RECV_BYTES = 1024u * 1024u };
+    static unsigned char payload[SEGMENTED_RECV_BYTES];
+    char endpoint[128] = {0};
+    size_t endpoint_size = 0u;
+    mem_slice_t received = {0};
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *sender = flowmq_socket(ctx, FLOWMQ_PAIR);
+    flowmq_socket_t *receiver = flowmq_socket(ctx, FLOWMQ_PAIR);
+    int status = SALTS_EBUSY;
+
+    for (size_t i = 0u; i < sizeof(payload); ++i)
+      payload[i] = (unsigned char)((i * 41u + 17u) & 0xffu);
+
+    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), SALTS_OK);
+    check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(sender, endpoint), SALTS_OK);
+
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
+      status =
+          flowmq_send(sender, payload, sizeof(payload), FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+
+    status = SALTS_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
+      status =
+          flowmq_recv_slice(receiver, &received, FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    check_not_null(received.buffer);
+    check_not_null(received.data);
+    check_equal(received.length, sizeof(payload));
+    check_equal(memcmp(received.data, payload, sizeof(payload)), 0);
+
+    /*
+     * The legacy API promises one contiguous canonical slice. Phase C may
+     * assemble it from multiple retained packet payload ranges, but the
+     * handed-off owner remains stable across later socket progress.
+     */
+    for (size_t i = 0u; i < 8u; ++i)
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
+    check_equal(memcmp(received.data, payload, sizeof(payload)), 0);
+
+    mem_slice_release(&received);
+    check_equal(flowmq_close(sender), SALTS_OK);
+    check_equal(flowmq_close(receiver), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+  }
+
   it("retains a 1 MiB offset TCP slice until the CNet terminal") {
     enum { RETAINED_BYTES = 1024u * 1024u, RETAINED_OFFSET = 13u,
            RETAINED_GUARD = 19u };
