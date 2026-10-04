@@ -3462,17 +3462,18 @@ static int flowmq_socket_message_coalesce(
   return SALTS_OK;
 }
 
-static int flowmq_socket_try_recv(flowmq_socket_t *socket, void *data,
-                                  size_t capacity, size_t *received,
-                                  int flags) {
+static int flowmq_socket_receive_lookup(
+    flowmq_socket_t *socket,
+    flowmq_socket_message_t **out_message,
+    flowmq_socket_peer_t **out_peer) {
   flowmq_socket_message_t *message;
   flowmq_socket_peer_t *peer;
-  int message_more;
   int status;
-  if (received != NULL) *received = 0u;
-  if (socket == NULL || received == NULL || (data == NULL && capacity != 0u) ||
-      (flags & ~FLOWMQ_DONTWAIT) != 0)
+  if (socket == NULL || out_message == NULL || out_peer == NULL)
     return SALTS_EINVAL;
+  *out_message = NULL;
+  *out_peer = NULL;
+
   if (socket->recv_cancel_error != SALTS_OK) {
     status = socket->recv_cancel_error;
     socket->recv_cancel_error = SALTS_OK;
@@ -3481,18 +3482,18 @@ static int flowmq_socket_try_recv(flowmq_socket_t *socket, void *data,
   status = flowmq_pattern_state_receive_validate(&socket->pattern);
   if (status != SALTS_OK) return status;
   if (socket->inbound_count == 0u) return SALTS_EBUSY;
+
   message = &socket->inbound[socket->inbound_read];
   if (socket->pattern.desc->fsm_class == FLOWMQ_PATTERN_FSM_REQ &&
       socket->request_peer_valid &&
       (message->peer_index != socket->request_peer_index ||
        message->peer_generation != socket->request_peer_generation))
     return SALTS_EPROTO;
-  *received = message->size;
-  if (capacity < message->size) return SALTS_EMSGSIZE;
   if (socket->inbound_bytes < message->size ||
       (!message->more && socket->inbound_messages == 0u))
     return SALTS_EPROTO;
-  if (message->peer_index >= FLOWMQ_SOCKET_PEER_CAPACITY) return SALTS_EPROTO;
+  if (message->peer_index >= FLOWMQ_SOCKET_PEER_CAPACITY)
+    return SALTS_EPROTO;
   status = flowmq_socket_message_validate(message);
   if (status != SALTS_OK) return status;
 
@@ -3502,23 +3503,35 @@ static int flowmq_socket_try_recv(flowmq_socket_t *socket, void *data,
       message->peer_generation != peer->flow_control.local_generation ||
       peer->queued_parts == 0u)
     return SALTS_EPROTO;
+
+  *out_message = message;
+  *out_peer = peer;
+  return SALTS_OK;
+}
+
+static int flowmq_socket_receive_consume_credit(
+    flowmq_socket_message_t *message, flowmq_socket_peer_t *peer) {
+  if (message == NULL || peer == NULL) return SALTS_EINVAL;
   if (message->credit_size != 0u &&
       !flowmq_peer_state_is_retired(&peer->state)) {
     uint64_t consumed_at_ns = peer->flow_control.update_pending
                                   ? 0u
                                   : salts_hrtime();
-    status = flowmq_flow_control_consume(
+    return flowmq_flow_control_consume(
         &peer->flow_control, message->credit_size, consumed_at_ns);
-    if (status != SALTS_OK) return status;
   }
+  return SALTS_OK;
+}
 
-  status = flowmq_socket_message_copy_payload(message, data);
-  if (status != SALTS_OK) return status;
-
-  message_more = message->more;
+static void flowmq_socket_receive_commit_pattern(
+    flowmq_socket_t *socket, flowmq_socket_message_t *message,
+    flowmq_socket_peer_t *peer) {
+  const int message_more = message->more;
   socket->last_rcvmore = message_more != 0;
   flowmq_pattern_state_receive_commit(&socket->pattern, message_more);
-  if (!message_more && socket->pattern.desc->fsm_class == FLOWMQ_PATTERN_FSM_REP) {
+
+  if (!message_more &&
+      socket->pattern.desc->fsm_class == FLOWMQ_PATTERN_FSM_REP) {
     if (flowmq_peer_state_is_retired(&peer->state)) {
       if (socket->send_cancel_error == SALTS_OK)
         socket->send_cancel_error = SALTS_ENOTCONN;
@@ -3532,13 +3545,19 @@ static int flowmq_socket_try_recv(flowmq_socket_t *socket, void *data,
       socket->send_cancel_error = SALTS_OK;
     }
   }
-  if (!message_more && socket->pattern.desc->fsm_class == FLOWMQ_PATTERN_FSM_REQ) {
+  if (!message_more &&
+      socket->pattern.desc->fsm_class == FLOWMQ_PATTERN_FSM_REQ) {
     socket->request_peer_valid = 0u;
     socket->request_peer_generation = 0u;
   }
+}
 
-  flowmq_socket_message_storage_release(message);
-  socket->inbound_bytes -= message->size;
+static void flowmq_socket_receive_finish(
+    flowmq_socket_t *socket, flowmq_socket_message_t *message,
+    flowmq_socket_peer_t *peer) {
+  const size_t size = message->size;
+  const int message_more = message->more;
+  socket->inbound_bytes -= size;
   if (!message_more) --socket->inbound_messages;
   --peer->queued_parts;
   memset(message, 0, sizeof(*message));
@@ -3548,6 +3567,33 @@ static int flowmq_socket_try_recv(flowmq_socket_t *socket, void *data,
   if (flowmq_peer_state_is_retired(&peer->state) &&
       peer->queued_parts == 0u)
     flowmq_socket_peer_release(peer);
+}
+
+static int flowmq_socket_try_recv(flowmq_socket_t *socket, void *data,
+                                  size_t capacity, size_t *received,
+                                  int flags) {
+  flowmq_socket_message_t *message;
+  flowmq_socket_peer_t *peer;
+  int status;
+  if (received != NULL) *received = 0u;
+  if (socket == NULL || received == NULL ||
+      (data == NULL && capacity != 0u) ||
+      (flags & ~FLOWMQ_DONTWAIT) != 0)
+    return SALTS_EINVAL;
+
+  status = flowmq_socket_receive_lookup(socket, &message, &peer);
+  if (status != SALTS_OK) return status;
+  *received = message->size;
+  if (capacity < message->size) return SALTS_EMSGSIZE;
+
+  status = flowmq_socket_receive_consume_credit(message, peer);
+  if (status != SALTS_OK) return status;
+  status = flowmq_socket_message_copy_payload(message, data);
+  if (status != SALTS_OK) return status;
+
+  flowmq_socket_receive_commit_pattern(socket, message, peer);
+  flowmq_socket_message_storage_release(message);
+  flowmq_socket_receive_finish(socket, message, peer);
   return SALTS_OK;
 }
 
@@ -3556,40 +3602,14 @@ static int flowmq_socket_try_recv_slice(flowmq_socket_t *socket,
   flowmq_socket_message_t *message;
   flowmq_socket_peer_t *peer;
   mem_buffer_t *coalesced = NULL;
-  int message_more;
   int status;
   if (socket == NULL || out == NULL || (flags & ~FLOWMQ_DONTWAIT) != 0)
     return SALTS_EINVAL;
   if (out->buffer != NULL || out->data != NULL || out->length != 0u)
     return SALTS_EINVAL;
-  if (socket->recv_cancel_error != SALTS_OK) {
-    status = socket->recv_cancel_error;
-    socket->recv_cancel_error = SALTS_OK;
-    return status;
-  }
-  status = flowmq_pattern_state_receive_validate(&socket->pattern);
-  if (status != SALTS_OK) return status;
-  if (socket->inbound_count == 0u) return SALTS_EBUSY;
 
-  message = &socket->inbound[socket->inbound_read];
-  status = flowmq_socket_message_validate(message);
+  status = flowmq_socket_receive_lookup(socket, &message, &peer);
   if (status != SALTS_OK) return status;
-  if (socket->pattern.desc->fsm_class == FLOWMQ_PATTERN_FSM_REQ &&
-      socket->request_peer_valid &&
-      (message->peer_index != socket->request_peer_index ||
-       message->peer_generation != socket->request_peer_generation))
-    return SALTS_EPROTO;
-  if (socket->inbound_bytes < message->size ||
-      (!message->more && socket->inbound_messages == 0u))
-    return SALTS_EPROTO;
-  if (message->peer_index >= FLOWMQ_SOCKET_PEER_CAPACITY) return SALTS_EPROTO;
-
-  peer = &socket->peers[message->peer_index];
-  if (!flowmq_peer_state_is_used(&peer->state) ||
-      message->peer_generation == 0u ||
-      message->peer_generation != peer->flow_control.local_generation ||
-      peer->queued_parts == 0u)
-    return SALTS_EPROTO;
 
   /*
    * Preserve the legacy one-contiguous-slice contract. Build the only required
@@ -3602,40 +3622,12 @@ static int flowmq_socket_try_recv_slice(flowmq_socket_t *socket,
     if (status != SALTS_OK) return status;
   }
 
-  if (message->credit_size != 0u &&
-      !flowmq_peer_state_is_retired(&peer->state)) {
-    uint64_t consumed_at_ns = peer->flow_control.update_pending
-                                  ? 0u
-                                  : salts_hrtime();
-    status = flowmq_flow_control_consume(
-        &peer->flow_control, message->credit_size, consumed_at_ns);
-    if (status != SALTS_OK) {
-      mem_buffer_release(coalesced);
-      return status;
-    }
+  status = flowmq_socket_receive_consume_credit(message, peer);
+  if (status != SALTS_OK) {
+    mem_buffer_release(coalesced);
+    return status;
   }
-
-  message_more = message->more;
-  socket->last_rcvmore = message_more != 0;
-  flowmq_pattern_state_receive_commit(&socket->pattern, message_more);
-  if (!message_more && socket->pattern.desc->fsm_class == FLOWMQ_PATTERN_FSM_REP) {
-    if (flowmq_peer_state_is_retired(&peer->state)) {
-      if (socket->send_cancel_error == SALTS_OK)
-        socket->send_cancel_error = SALTS_ENOTCONN;
-      socket->reply_peer_valid = 0u;
-      socket->reply_peer_generation = 0u;
-      flowmq_pattern_state_cancel_transaction(&socket->pattern);
-    } else {
-      socket->reply_peer_index = message->peer_index;
-      socket->reply_peer_generation = message->peer_generation;
-      socket->reply_peer_valid = 1u;
-      socket->send_cancel_error = SALTS_OK;
-    }
-  }
-  if (!message_more && socket->pattern.desc->fsm_class == FLOWMQ_PATTERN_FSM_REQ) {
-    socket->request_peer_valid = 0u;
-    socket->request_peer_generation = 0u;
-  }
+  flowmq_socket_receive_commit_pattern(socket, message, peer);
 
   if (message->buffer != NULL) {
     out->data =
@@ -3657,16 +3649,64 @@ static int flowmq_socket_try_recv_slice(flowmq_socket_t *socket,
     flowmq_socket_message_storage_release(message);
   }
 
-  socket->inbound_bytes -= message->size;
-  if (!message_more) --socket->inbound_messages;
-  --peer->queued_parts;
-  memset(message, 0, sizeof(*message));
-  socket->inbound_read =
-      (socket->inbound_read + 1u) % FLOWMQ_SOCKET_INBOUND_CAPACITY;
-  --socket->inbound_count;
-  if (flowmq_peer_state_is_retired(&peer->state) &&
-      peer->queued_parts == 0u)
-    flowmq_socket_peer_release(peer);
+  flowmq_socket_receive_finish(socket, message, peer);
+  return SALTS_OK;
+}
+
+static int flowmq_socket_try_recv_slicev(
+    flowmq_socket_t *socket, mem_slice_t *segments, size_t capacity,
+    size_t *count, int flags) {
+  flowmq_socket_message_t *message;
+  flowmq_socket_peer_t *peer;
+  size_t required;
+  int status;
+
+  if (count != NULL) *count = 0u;
+  if (socket == NULL || count == NULL ||
+      (segments == NULL && capacity != 0u) ||
+      (flags & ~FLOWMQ_DONTWAIT) != 0)
+    return SALTS_EINVAL;
+  for (size_t i = 0u; i < capacity; ++i) {
+    if (segments[i].buffer != NULL || segments[i].data != NULL ||
+        segments[i].length != 0u)
+      return SALTS_EINVAL;
+  }
+
+  status = flowmq_socket_receive_lookup(socket, &message, &peer);
+  if (status != SALTS_OK) return status;
+
+  required = message->buffer != NULL
+                 ? 1u
+                 : message->segmented->segment_count;
+  if (capacity < required) {
+    *count = required;
+    return SALTS_ENOBUFS;
+  }
+  if (required != 0u && segments == NULL)
+    return SALTS_EINVAL;
+
+  status = flowmq_socket_receive_consume_credit(message, peer);
+  if (status != SALTS_OK) return status;
+  flowmq_socket_receive_commit_pattern(socket, message, peer);
+
+  if (message->buffer != NULL) {
+    segments[0].data =
+        (unsigned char *)mem_buffer_data(message->buffer) + message->offset;
+    segments[0].length = message->size;
+    segments[0].buffer = message->buffer;
+    message->buffer = NULL;
+  } else {
+    for (size_t i = 0u; i < required; ++i) {
+      segments[i] = message->segmented->segments[i];
+      memset(&message->segmented->segments[i], 0,
+             sizeof(message->segmented->segments[i]));
+    }
+    free(message->segmented);
+    message->segmented = NULL;
+  }
+
+  *count = required;
+  flowmq_socket_receive_finish(socket, message, peer);
   return SALTS_OK;
 }
 
@@ -4162,6 +4202,23 @@ int flowmq_recv_slice(flowmq_socket_t *socket,
   int status;
   for (;;) {
     status = flowmq_socket_try_recv_slice(socket, out, flags);
+    if (status != SALTS_EBUSY) return status;
+    if ((flags & FLOWMQ_DONTWAIT) != 0 ||
+        socket == NULL || !socket->runtime_initialized)
+      return status;
+    status =
+        flowmq_socket_drive(socket, FLOWMQ_SOCKET_BLOCKING_SLICE_MS, NULL);
+    if (status != SALTS_OK) return status;
+  }
+}
+
+int flowmq_recv_slicev(flowmq_socket_t *socket,
+                       mem_slice_t *segments, size_t capacity,
+                       size_t *count, int flags) {
+  int status;
+  for (;;) {
+    status =
+        flowmq_socket_try_recv_slicev(socket, segments, capacity, count, flags);
     if (status != SALTS_EBUSY) return status;
     if ((flags & FLOWMQ_DONTWAIT) != 0 ||
         socket == NULL || !socket->runtime_initialized)

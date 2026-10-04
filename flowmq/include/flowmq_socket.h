@@ -277,6 +277,41 @@ FLOWMQ_C_API int flowmq_recv_slice(flowmq_socket_t *socket,
                                    mem_slice_t *out, int flags);
 
 /**
+ * Transfer one available inbound message part as one or more canonical Salts
+ * Core slices without coalescing segmented DATA payload ranges.
+ *
+ * On SALTS_OK, ownership of exactly *count slice descriptors is transferred to
+ * the caller. Release every returned descriptor with mem_slice_release().
+ * One-range DATA returns count 1; multi-range DATA returns the bounded payload
+ * vector already owned by the FlowMQ inbound queue.
+ *
+ * The caller provides capacity empty/zero-initialized descriptors. If capacity
+ * is smaller than the queued part's required range count, the call returns
+ * SALTS_ENOBUFS, writes the required count to *count, and leaves the queued
+ * part, flow credit, pattern/FSM state, and every output descriptor unchanged.
+ * A zero-capacity NULL segments pointer is therefore a valid size query once a
+ * part is available.
+ *
+ * Every descriptor in the caller-provided capacity must be empty before the
+ * call; malformed output storage returns SALTS_EINVAL before transport/FSM
+ * progress. Would-block and other error results transfer no ownership. Except
+ * for the capacity-query count on SALTS_ENOBUFS, error results leave *count
+ * zero.
+ *
+ * Flow credit, HWM occupancy, multipart state, REQ/REP state and peer
+ * retirement advance exactly once when ownership is successfully dequeued,
+ * matching flowmq_recv() and flowmq_recv_slice().
+ *
+ * Without FLOWMQ_DONTWAIT, advance this socket on the calling thread until a
+ * part is available or progress fails. This API does not expose CNet or
+ * NativeIO physical descriptors; only canonical mem_slice_t ownership crosses
+ * the public boundary.
+ */
+FLOWMQ_C_API int flowmq_recv_slicev(flowmq_socket_t *socket,
+                                    mem_slice_t *segments, size_t capacity,
+                                    size_t *count, int flags);
+
+/**
  * Drive all listed sockets on the calling thread until an item is ready or the
  * timeout expires, then report the level-triggered ready items. A pending
  * transaction-cancellation error is reported as FLOWMQ_POLLERR until the

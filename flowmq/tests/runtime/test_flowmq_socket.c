@@ -477,6 +477,152 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
+  it("transfers one-packet DATA through recv slicev as one owned range") {
+    enum { SLICEV_SMALL_BYTES = 1024u };
+    static unsigned char payload[SLICEV_SMALL_BYTES];
+    char endpoint[128] = {0};
+    size_t endpoint_size = 0u;
+    mem_slice_t segments[2] = {{0}};
+    size_t count = 0u;
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *sender = flowmq_socket(ctx, FLOWMQ_PAIR);
+    flowmq_socket_t *receiver = flowmq_socket(ctx, FLOWMQ_PAIR);
+    int status = SALTS_EBUSY;
+
+    for (size_t i = 0u; i < sizeof(payload); ++i)
+      payload[i] = (unsigned char)((i * 23u + 11u) & 0xffu);
+
+    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), SALTS_OK);
+    check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(sender, endpoint), SALTS_OK);
+
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
+      status =
+          flowmq_send(sender, payload, sizeof(payload), FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+
+    status = SALTS_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
+      status = flowmq_recv_slicev(receiver, segments, 2u, &count,
+                                  FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    check_equal(count, 1u);
+    check_not_null(segments[0].buffer);
+    check_not_null(segments[0].data);
+    check_equal(segments[0].length, sizeof(payload));
+    check_equal(memcmp(segments[0].data, payload, sizeof(payload)), 0);
+    check_null(segments[1].buffer);
+    check_null(segments[1].data);
+    check_equal(segments[1].length, 0u);
+
+    for (size_t i = 0u; i < 8u; ++i)
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
+    check_equal(memcmp(segments[0].data, payload, sizeof(payload)), 0);
+
+    mem_slice_release(&segments[0]);
+    check_equal(flowmq_close(sender), SALTS_OK);
+    check_equal(flowmq_close(receiver), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+  }
+
+  it("preflights capacity and transfers 1 MiB DATA through recv slicev") {
+    enum { SLICEV_LARGE_BYTES = 1024u * 1024u };
+    static unsigned char payload[SLICEV_LARGE_BYTES];
+    char endpoint[128] = {0};
+    size_t endpoint_size = 0u;
+    mem_slice_t *segments = NULL;
+    size_t required = 0u;
+    size_t count = 0u;
+    size_t offset = 0u;
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *sender = flowmq_socket(ctx, FLOWMQ_PAIR);
+    flowmq_socket_t *receiver = flowmq_socket(ctx, FLOWMQ_PAIR);
+    int status = SALTS_EBUSY;
+
+    for (size_t i = 0u; i < sizeof(payload); ++i)
+      payload[i] = (unsigned char)((i * 43u + 19u) & 0xffu);
+
+    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), SALTS_OK);
+    check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint),
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(sender, endpoint), SALTS_OK);
+
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
+      status =
+          flowmq_send(sender, payload, sizeof(payload), FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+
+    /*
+     * Query required ownership-vector capacity without assuming one particular
+     * TCP fragmentation shape. A current run may retain multiple packet payload
+     * ranges or legitimately reach the proven contiguous fallback and require
+     * exactly one range.
+     */
+    status = SALTS_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
+      required = 0u;
+      status = flowmq_recv_slicev(receiver, NULL, 0u, &required,
+                                  FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_ENOBUFS);
+    check_true(required >= 1u);
+
+    segments = (mem_slice_t *)calloc(required, sizeof(*segments));
+    check_not_null(segments);
+    if (segments != NULL) {
+      count = 0u;
+      check_equal(flowmq_recv_slicev(receiver, segments, required, &count,
+                                     FLOWMQ_DONTWAIT),
+                  SALTS_OK);
+      check_equal(count, required);
+
+      for (size_t i = 0u; i < count; ++i) {
+        check_not_null(segments[i].buffer);
+        check_not_null(segments[i].data);
+        check_true(segments[i].length > 0u);
+        check_true(segments[i].length <= sizeof(payload) - offset);
+        check_equal(memcmp(segments[i].data, payload + offset,
+                           segments[i].length),
+                    0);
+        offset += segments[i].length;
+      }
+      check_equal(offset, sizeof(payload));
+
+      /* Caller ownership remains valid across later socket progress. */
+      for (size_t i = 0u; i < 8u; ++i)
+        check_equal(progress_pair(sender, receiver), SALTS_OK);
+      offset = 0u;
+      for (size_t i = 0u; i < count; ++i) {
+        check_equal(memcmp(segments[i].data, payload + offset,
+                           segments[i].length),
+                    0);
+        offset += segments[i].length;
+      }
+      check_equal(offset, sizeof(payload));
+
+      for (size_t i = 0u; i < count; ++i)
+        mem_slice_release(&segments[i]);
+      free(segments);
+      segments = NULL;
+    }
+
+    check_equal(flowmq_close(sender), SALTS_OK);
+    check_equal(flowmq_close(receiver), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+  }
+
   it("coalesces segmented 1 MiB receive into one legacy slice") {
     enum { SEGMENTED_RECV_BYTES = 1024u * 1024u };
     static unsigned char payload[SEGMENTED_RECV_BYTES];
