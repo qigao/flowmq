@@ -144,6 +144,102 @@ spec("flowmq bounded owned receive stream") {
     tstr_free(encoded);
   }
 
+  it("keeps a coalesced tail owned until its frame is replayed") {
+    static const char first_payload[] = "first-owned-frame";
+    static const char second_payload[] = "second-owned-frame";
+    flowmq_protocol_frame_t first = {0};
+    flowmq_protocol_frame_t second = {0};
+    flowmq_protocol_frame_t decoded = {0};
+    flowmq_stream_decoder_t decoder = {0};
+    flowmq_owned_stream_t stream = FLOWMQ_OWNED_STREAM_INIT;
+    owned_stream_release_probe_t release = {0};
+    tstr first_encoded = NULL;
+    tstr second_encoded = NULL;
+    unsigned char *combined;
+    mem_slice_t combined_slice;
+    size_t first_size = 0u;
+    size_t second_size = 0u;
+    size_t consumed = 0u;
+
+    first.kind = FLOWMQ_PROTOCOL_FRAME_DATA;
+    first.pattern = FLOWMQ_PROTOCOL_PUSH;
+    first.message_id = UINT64_C(101);
+    first.payload =
+        vstr_from_buf(first_payload, sizeof(first_payload) - 1u);
+    second.kind = FLOWMQ_PROTOCOL_FRAME_DATA;
+    second.pattern = FLOWMQ_PROTOCOL_PUSH;
+    second.message_id = UINT64_C(102);
+    second.payload =
+        vstr_from_buf(second_payload, sizeof(second_payload) - 1u);
+
+    check_equal(flowmq_protocol_encode_frame(&first, 1024u, &first_encoded),
+                SALTS_OK);
+    check_equal(flowmq_protocol_encode_frame(&second, 1024u, &second_encoded),
+                SALTS_OK);
+    check_not_null(first_encoded);
+    check_not_null(second_encoded);
+
+    combined =
+        (unsigned char *)malloc(tstr_len(first_encoded) +
+                                tstr_len(second_encoded));
+    check_not_null(combined);
+    memcpy(combined, first_encoded, tstr_len(first_encoded));
+    memcpy(combined + tstr_len(first_encoded), second_encoded,
+           tstr_len(second_encoded));
+    combined_slice = owned_stream_copy_slice(
+        combined, tstr_len(first_encoded) + tstr_len(second_encoded),
+        &release);
+    free(combined);
+    check_not_null(combined_slice.buffer);
+    check_equal(flowmq_owned_stream_append_move(&stream, &combined_slice),
+                SALTS_OK);
+
+    check_equal(flowmq_owned_stream_first_frame_size(
+                    &stream, 1024u, &first_size),
+                SALTS_OK);
+    check_equal(first_size, tstr_len(first_encoded));
+    check_equal(flowmq_stream_decoder_prepare(&decoder, 1024u), SALTS_OK);
+    check_equal(flowmq_owned_stream_replay_prefix(
+                    &stream, &decoder, first_size),
+                SALTS_OK);
+    check_equal(release.calls, (size_t)0u);
+    check_equal(flowmq_owned_stream_size(&stream),
+                tstr_len(second_encoded));
+
+    check_equal(flowmq_stream_decoder_next(&decoder, &decoded, &consumed),
+                SALTS_OK);
+    check_equal(decoded.message_id, UINT64_C(101));
+    check_equal(decoded.payload.len, sizeof(first_payload) - 1u);
+    check_equal(memcmp(decoded.payload.data, first_payload,
+                       decoded.payload.len), 0);
+    flowmq_protocol_frame_cleanup(&decoded);
+    check_equal(flowmq_stream_decoder_consume(&decoder, consumed), SALTS_OK);
+
+    check_equal(flowmq_owned_stream_first_frame_size(
+                    &stream, 1024u, &second_size),
+                SALTS_OK);
+    check_equal(second_size, tstr_len(second_encoded));
+    check_equal(flowmq_owned_stream_replay_prefix(
+                    &stream, &decoder, second_size),
+                SALTS_OK);
+    check_equal(release.calls, (size_t)1u);
+    check_equal(flowmq_owned_stream_size(&stream), (size_t)0u);
+
+    consumed = 0u;
+    check_equal(flowmq_stream_decoder_next(&decoder, &decoded, &consumed),
+                SALTS_OK);
+    check_equal(decoded.message_id, UINT64_C(102));
+    check_equal(decoded.payload.len, sizeof(second_payload) - 1u);
+    check_equal(memcmp(decoded.payload.data, second_payload,
+                       decoded.payload.len), 0);
+    flowmq_protocol_frame_cleanup(&decoded);
+    check_equal(flowmq_stream_decoder_consume(&decoder, consumed), SALTS_OK);
+
+    flowmq_stream_decoder_destroy(&decoder);
+    tstr_free(first_encoded);
+    tstr_free(second_encoded);
+  }
+
   it("fails bounded admission without stealing the overflowing slice") {
     unsigned char bytes[FLOWMQ_OWNED_STREAM_SEGMENT_CAPACITY + 1u] = {0};
     owned_stream_release_probe_t release = {0};
