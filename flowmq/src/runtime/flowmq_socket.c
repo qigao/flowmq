@@ -4602,6 +4602,31 @@ int flowmq_socket_internal_async_error_matches(
          socket->async_error == status;
 }
 
+int flowmq_socket_internal_fanout_match_count(
+    const flowmq_socket_t *socket, const void *topic, size_t topic_size,
+    size_t *count) {
+  size_t matched = 0u;
+  if (count != NULL) *count = 0u;
+  if (socket == NULL || count == NULL ||
+      (topic == NULL && topic_size != 0u))
+    return SALTS_EINVAL;
+  if (socket->pattern.desc == NULL ||
+      socket->pattern.desc->routing_class != FLOWMQ_PATTERN_ROUTE_FANOUT)
+    return SALTS_ENOTSUP;
+  for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
+    const flowmq_socket_peer_t *peer = &socket->peers[i];
+    if (!flowmq_socket_peer_ready(peer))
+      continue;
+    if (flowmq_subscription_set_match(
+            &peer->subscriptions,
+            (vstr){.data = (char *)topic, .len = topic_size}))
+      ++matched;
+  }
+  *count = matched;
+  return SALTS_OK;
+}
+
+
 int flowmq_poll(flowmq_pollitem_t *items, size_t item_count,
                 uint32_t timeout_ms, size_t *ready) {
   const uint64_t started_ms = salts_monotonic_ms();
