@@ -3666,6 +3666,11 @@ static int flowmq_socket_try_recv_slicev(
       (segments == NULL && capacity != 0u) ||
       (flags & ~FLOWMQ_DONTWAIT) != 0)
     return SALTS_EINVAL;
+  for (size_t i = 0u; i < capacity; ++i) {
+    if (segments[i].buffer != NULL || segments[i].data != NULL ||
+        segments[i].length != 0u)
+      return SALTS_EINVAL;
+  }
 
   status = flowmq_socket_receive_lookup(socket, &message, &peer);
   if (status != SALTS_OK) return status;
@@ -3679,11 +3684,6 @@ static int flowmq_socket_try_recv_slicev(
   }
   if (required != 0u && segments == NULL)
     return SALTS_EINVAL;
-  for (size_t i = 0u; i < required; ++i) {
-    if (segments[i].buffer != NULL || segments[i].data != NULL ||
-        segments[i].length != 0u)
-      return SALTS_EINVAL;
-  }
 
   status = flowmq_socket_receive_consume_credit(message, peer);
   if (status != SALTS_OK) return status;
