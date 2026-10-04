@@ -23,7 +23,7 @@ spec("FlowMQ generated DataBind projection boundary") {
     check_equal(plan->abi_version,
                 (uint32_t)DATA_BIND_FLOWMQ_CHANNEL_PLAN_ABI_VERSION);
     check_not_null(plan->channel_name);
-    check_equal(strcmp(plan->channel_name, "FlowMQQual.Telemetry"), 0);
+    check_equal(strcmp(plan->channel_name, "FlowMQChannelQual.Telemetry"), 0);
     check_not_null(plan->message_type);
     check_equal(strcmp(plan->message_type, "TelemetryEvent"), 0);
     check_equal(plan->format, DATA_BIND_FORMAT_BINARY);
@@ -58,9 +58,9 @@ spec("FlowMQ generated DataBind projection boundary") {
     check_equal(plan->abi_version,
                 (uint32_t)DATA_BIND_FLOWMQ_SERVICE_PLAN_ABI_VERSION);
     check_not_null(plan->service_name);
-    check_equal(strcmp(plan->service_name, "FlowMQQual.Calc"), 0);
+    check_equal(strcmp(plan->service_name, "FlowMQServiceQual.Calc"), 0);
     check_not_null(plan->operation_name);
-    check_equal(strcmp(plan->operation_name, "FlowMQQual.Calc.Add"), 0);
+    check_equal(strcmp(plan->operation_name, "FlowMQServiceQual.Calc.Add"), 0);
     check_equal(plan->pattern, DATA_BIND_FLOWMQ_SERVICE_REQ_REP);
     check_equal(plan->ingress_format, DATA_BIND_FORMAT_JSON);
     check_equal(plan->egress_format, DATA_BIND_FORMAT_JSON);
