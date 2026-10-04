@@ -244,29 +244,41 @@ static inline int flowmq_owned_stream_first_frame_size(
 }
 
 /*
- * Replay unread raw bytes into the existing copied decoder in order, then
- * release all retained CNet backing references. The available-capacity
+ * Replay one unread prefix into the existing copied decoder in order, then
+ * consume/release exactly that prefix from owned storage. The capacity
  * preflight prevents a normal bounded fallback from partially mutating the
  * decoder.
  */
-static inline int flowmq_owned_stream_replay(
-    flowmq_owned_stream_t *stream, flowmq_stream_decoder_t *decoder) {
+static inline int flowmq_owned_stream_replay_prefix(
+    flowmq_owned_stream_t *stream, flowmq_stream_decoder_t *decoder,
+    size_t size) {
+  size_t remaining = size;
   int status = SALTS_OK;
   if (stream == NULL || decoder == NULL) return SALTS_EINVAL;
-  if (stream->bytes > flowmq_stream_decoder_available(decoder))
-    return SALTS_ENOSPC;
+  if (size > stream->bytes) return SALTS_ERANGE;
+  if (size > flowmq_stream_decoder_available(decoder)) return SALTS_ENOSPC;
 
-  for (size_t i = stream->front; i < stream->segment_count; ++i) {
+  for (size_t i = stream->front;
+       i < stream->segment_count && remaining != 0u; ++i) {
     const mem_slice_t *slice = &stream->segments[i];
     size_t begin = i == stream->front ? stream->front_offset : 0u;
-    size_t size = slice->length - begin;
-    if (size == 0u) continue;
+    size_t take = slice->length - begin;
+    if (take > remaining) take = remaining;
+    if (take == 0u) continue;
     status = flowmq_stream_decoder_append(
-        decoder, (const unsigned char *)slice->data + begin, size);
-    if (status != SALTS_OK) break;
+        decoder, (const unsigned char *)slice->data + begin, take);
+    if (status != SALTS_OK) return status;
+    remaining -= take;
   }
-  flowmq_owned_stream_reset(stream);
-  return status;
+  if (remaining != 0u) return SALTS_EPROTO;
+  return flowmq_owned_stream_consume(stream, size);
+}
+
+/* Replay and release all unread ownership. */
+static inline int flowmq_owned_stream_replay(
+    flowmq_owned_stream_t *stream, flowmq_stream_decoder_t *decoder) {
+  if (stream == NULL) return SALTS_EINVAL;
+  return flowmq_owned_stream_replay_prefix(stream, decoder, stream->bytes);
 }
 
 #endif /* FLOWMQ_OWNED_STREAM_H */
