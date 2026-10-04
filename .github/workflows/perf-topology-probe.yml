@@ -1,0 +1,98 @@
+name: FlowMQ ARM topology probe
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/perf-topology-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  topology:
+    name: Ubuntu ARM64 physical-core topology
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Record CPU topology
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "## Raw topology"
+          lscpu
+          echo
+          echo "## CPU,Core,Socket"
+          lscpu -p=CPU,CORE,SOCKET | grep -v '^#'
+
+          python3 - <<'PY'
+          import os
+          import re
+          import subprocess
+
+          def expand(spec):
+              cpus = set()
+              for part in spec.split(','):
+                  part = part.strip()
+                  if not part:
+                      continue
+                  if '-' in part:
+                      lo, hi = map(int, part.split('-', 1))
+                      cpus.update(range(lo, hi + 1))
+                  else:
+                      cpus.add(int(part))
+              return cpus
+
+          taskset = subprocess.check_output(
+              ["taskset", "-pc", str(os.getpid())], text=True
+          ).strip()
+          allowed_spec = taskset.rsplit(':', 1)[1].strip()
+          allowed = expand(allowed_spec)
+
+          rows = []
+          raw = subprocess.check_output(
+              ["lscpu", "-p=CPU,CORE,SOCKET"], text=True
+          )
+          for line in raw.splitlines():
+              if not line or line.startswith('#'):
+                  continue
+              cpu, core, socket = map(int, line.split(','))
+              if cpu in allowed:
+                  rows.append((cpu, core, socket))
+
+          groups = sorted({(core, socket) for _, core, socket in rows})
+          print(f"runner_allowed_cpu_set={allowed_spec}")
+          print(f"allowed_logical_cpu_count={len(rows)}")
+          print(f"distinct_physical_core_count={len(groups)}")
+          print("allowed_topology=")
+          for cpu, core, socket in rows:
+              print(f"  cpu={cpu} core={core} socket={socket}")
+
+          if len(groups) >= 3:
+              selected = []
+              seen = set()
+              for cpu, core, socket in rows:
+                  key = (core, socket)
+                  if key in seen:
+                      continue
+                  seen.add(key)
+                  selected.append(cpu)
+                  if len(selected) == 3:
+                      break
+              verdict = "available"
+              print("three_cpu_distinct_core_set=" + ",".join(map(str, selected)))
+          else:
+              verdict = "unavailable"
+              print("three_cpu_distinct_core_set=unavailable")
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+              f.write("## FlowMQ ARM64 topology probe\n\n")
+              f.write(f"- allowed CPU set: \`{allowed_spec}\`\n")
+              f.write(f"- allowed logical CPUs: **{len(rows)}**\n")
+              f.write(f"- distinct physical core groups: **{len(groups)}**\n")
+              f.write(f"- >=3-core isolation: **{verdict}**\n")
+              f.write("\n\`\`\`text\n")
+              for cpu, core, socket in rows:
+                  f.write(f"CPU {cpu}: core={core}, socket={socket}\n")
+              f.write("\`\`\`\n")
+          PY
