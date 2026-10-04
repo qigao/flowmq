@@ -292,10 +292,11 @@ FLOWMQ_C_API int flowmq_recv_slice(flowmq_socket_t *socket,
  * A zero-capacity NULL segments pointer is therefore a valid size query once a
  * part is available.
  *
- * When capacity is sufficient, every descriptor that will receive ownership
- * must be empty. SALTS_EINVAL, would-block, and other error results transfer no
- * ownership. Except for the capacity-query count on SALTS_ENOBUFS, error
- * results leave *count zero.
+ * Every descriptor in the caller-provided capacity must be empty before the
+ * call; malformed output storage returns SALTS_EINVAL before transport/FSM
+ * progress. Would-block and other error results transfer no ownership. Except
+ * for the capacity-query count on SALTS_ENOBUFS, error results leave *count
+ * zero.
  *
  * Flow credit, HWM occupancy, multipart state, REQ/REP state and peer
  * retirement advance exactly once when ownership is successfully dequeued,
