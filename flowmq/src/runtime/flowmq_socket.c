@@ -85,8 +85,14 @@ typedef struct flowmq_socket_endpoint_s {
   unsigned retry_pending : 1;
 } flowmq_socket_endpoint_t;
 
+typedef struct flowmq_socket_segmented_payload_s {
+  mem_slice_t segments[FLOWMQ_OWNED_STREAM_SEGMENT_CAPACITY];
+  size_t segment_count;
+} flowmq_socket_segmented_payload_t;
+
 typedef struct flowmq_socket_message_s {
   mem_buffer_t *buffer;
+  flowmq_socket_segmented_payload_t *segmented;
   size_t offset;
   size_t size;
   size_t credit_size;
@@ -370,9 +376,27 @@ static void flowmq_socket_peer_record_rejection(flowmq_socket_peer_t *peer,
       flowmq_socket_counter_add_saturating(peer->rejected_bytes, payload_size);
 }
 
+
+static void flowmq_socket_segmented_payload_release(
+    flowmq_socket_segmented_payload_t *payload) {
+  if (payload == NULL) return;
+  for (size_t i = 0u; i < payload->segment_count; ++i)
+    mem_slice_release(&payload->segments[i]);
+  free(payload);
+}
+
+static void flowmq_socket_message_storage_release(
+    flowmq_socket_message_t *message) {
+  if (message == NULL) return;
+  mem_buffer_release(message->buffer);
+  message->buffer = NULL;
+  flowmq_socket_segmented_payload_release(message->segmented);
+  message->segmented = NULL;
+}
+
 static void flowmq_socket_peer_storage_release(flowmq_socket_peer_t *peer) {
   for (size_t i = 0u; i < peer->staged_count; ++i)
-    mem_buffer_release(peer->staged[i].buffer);
+    flowmq_socket_message_storage_release(&peer->staged[i]);
   for (size_t i = 0u; i < peer->outbound_count; ++i) {
     size_t index =
         (peer->outbound_read + i) % FLOWMQ_SOCKET_OUTBOUND_CAPACITY;
@@ -2311,7 +2335,7 @@ int flowmq_close(flowmq_socket_t *socket) {
   }
   for (size_t i = 0u; i < socket->inbound_count; ++i) {
     size_t index = (socket->inbound_read + i) % FLOWMQ_SOCKET_INBOUND_CAPACITY;
-    mem_buffer_release(socket->inbound[index].buffer);
+    flowmq_socket_message_storage_release(&socket->inbound[index]);
   }
   flowmq_socket_release_send_staged(socket);
   flowmq_socket_release_retained_staged(socket);
