@@ -98,7 +98,7 @@ forbid_marker(recv_copy "memcpy(" "flowmq_recv payload path")
 
 extract_function(
   "static int flowmq_socket_try_recv_slice("
-  "static int flowmq_socket_resume_receive("
+  "static int flowmq_socket_try_recv_slicev("
   recv_slice)
 require_call_count(recv_slice
                    "flowmq_socket_message_coalesce\\("
@@ -106,5 +106,26 @@ require_call_count(recv_slice
                    "flowmq_recv_slice segmented path")
 forbid_marker(recv_slice "memcpy(" "flowmq_recv_slice segmented path")
 
+extract_function(
+  "static int flowmq_socket_try_recv_slicev("
+  "static int flowmq_socket_resume_receive("
+  recv_slicev)
+require_marker(recv_slicev
+               "if (capacity < required)"
+               "flowmq_recv_slicev capacity preflight")
+require_marker(recv_slicev
+               "segments[i] = message->segmented->segments[i];"
+               "flowmq_recv_slicev ownership move")
+require_marker(recv_slicev
+               "flowmq_socket_receive_consume_credit(message, peer);"
+               "flowmq_recv_slicev shared credit")
+require_marker(recv_slicev
+               "flowmq_socket_receive_commit_pattern(socket, message, peer);"
+               "flowmq_recv_slicev shared FSM")
+forbid_marker(recv_slicev "memcpy(" "flowmq_recv_slicev payload path")
+forbid_marker(recv_slicev
+              "flowmq_socket_message_coalesce("
+              "flowmq_recv_slicev payload path")
+
 message(STATUS
-        "segmented receive contract: projection=0 copies, recv=caller copy, recv_slice=N>1 one coalesce")
+        "segmented receive contract: projection=0 copies, recv=caller copy, recv_slice=N>1 one coalesce, recv_slicev=ownership move")
