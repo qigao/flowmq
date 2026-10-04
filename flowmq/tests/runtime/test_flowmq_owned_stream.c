@@ -144,6 +144,115 @@ spec("flowmq bounded owned receive stream") {
     tstr_free(encoded);
   }
 
+  it("projects a multi-packet DATA frame into retained payload ranges") {
+    enum { PAYLOAD_BYTES = FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE * 2u + 113u };
+    static unsigned char payload[PAYLOAD_BYTES];
+    static unsigned char observed[PAYLOAD_BYTES];
+    flowmq_protocol_frame_t frame = {0};
+    flowmq_owned_stream_t stream = FLOWMQ_OWNED_STREAM_INIT;
+    flowmq_owned_data_projection_t projection =
+        FLOWMQ_OWNED_DATA_PROJECTION_INIT;
+    owned_stream_release_probe_t releases[4] = {{0}, {0}, {0}, {0}};
+    mem_slice_t slices[4] = {{0}, {0}, {0}, {0}};
+    tstr encoded = NULL;
+    size_t cuts[5];
+    size_t observed_size = 0u;
+
+    for (size_t i = 0u; i < sizeof(payload); ++i)
+      payload[i] = (unsigned char)((i * 23u + 5u) & 0xffu);
+    frame.kind = FLOWMQ_PROTOCOL_FRAME_DATA;
+    frame.pattern = FLOWMQ_PROTOCOL_PUSH;
+    frame.message_id = UINT64_C(701);
+    frame.more = 1;
+    frame.payload =
+        vstr_from_buf((const char *)payload, sizeof(payload));
+    check_equal(flowmq_protocol_encode_frame(
+                    &frame, sizeof(payload), &encoded),
+                SALTS_OK);
+    check_not_null(encoded);
+
+    cuts[0] = 0u;
+    cuts[1] = 17u;
+    cuts[2] = FLOWMQ_PROTOCOL_HEADER_SIZE + 8192u;
+    cuts[3] = FLOWMQ_PROTOCOL_HEADER_SIZE +
+              FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE + 9u;
+    cuts[4] = tstr_len(encoded);
+    for (size_t i = 0u; i < 4u; ++i) {
+      slices[i] = owned_stream_copy_slice(
+          encoded + cuts[i], cuts[i + 1u] - cuts[i], &releases[i]);
+      check_not_null(slices[i].buffer);
+      check_equal(flowmq_owned_stream_append_move(&stream, &slices[i]),
+                  SALTS_OK);
+    }
+
+    check_equal(flowmq_owned_stream_project_first_data(
+                    &stream, sizeof(payload), &projection),
+                SALTS_OK);
+    check_equal(projection.pattern, FLOWMQ_PROTOCOL_PUSH);
+    check_equal(projection.message_id, UINT64_C(701));
+    check_equal(projection.payload_size, sizeof(payload));
+    check_equal(projection.frame_size, tstr_len(encoded));
+    check_equal(projection.more, 1);
+    check_true(projection.segment_count >= (size_t)3u);
+    check_true(projection.segment_count <=
+               (size_t)FLOWMQ_OWNED_STREAM_SEGMENT_CAPACITY);
+
+    for (size_t i = 0u; i < projection.segment_count; ++i) {
+      check_not_null(projection.segments[i].buffer);
+      check_true(observed_size <= sizeof(observed));
+      check_true(projection.segments[i].length <=
+                 sizeof(observed) - observed_size);
+      memcpy(observed + observed_size, projection.segments[i].data,
+             projection.segments[i].length);
+      observed_size += projection.segments[i].length;
+    }
+    check_equal(observed_size, sizeof(payload));
+    check_equal(memcmp(observed, payload, sizeof(payload)), 0);
+
+    check_equal(flowmq_owned_stream_consume(
+                    &stream, projection.frame_size),
+                SALTS_OK);
+    check_equal(flowmq_owned_stream_size(&stream), (size_t)0u);
+    for (size_t i = 0u; i < 4u; ++i)
+      check_equal(releases[i].calls, (size_t)0u);
+
+    flowmq_owned_data_projection_reset(&projection);
+    for (size_t i = 0u; i < 4u; ++i)
+      check_equal(releases[i].calls, (size_t)1u);
+    tstr_free(encoded);
+  }
+
+  it("leaves complete non-DATA frames on the copied fallback path") {
+    flowmq_protocol_frame_t frame = {0};
+    flowmq_owned_stream_t stream = FLOWMQ_OWNED_STREAM_INIT;
+    flowmq_owned_data_projection_t projection =
+        FLOWMQ_OWNED_DATA_PROJECTION_INIT;
+    owned_stream_release_probe_t release = {0};
+    mem_slice_t slice = {0};
+    tstr encoded = NULL;
+
+    frame.kind = FLOWMQ_PROTOCOL_FRAME_PING;
+    frame.pattern = FLOWMQ_PROTOCOL_PAIR;
+    check_equal(flowmq_protocol_encode_frame(&frame, 1024u, &encoded),
+                SALTS_OK);
+    check_not_null(encoded);
+    slice = owned_stream_copy_slice(
+        encoded, tstr_len(encoded), &release);
+    check_not_null(slice.buffer);
+    check_equal(flowmq_owned_stream_append_move(&stream, &slice), SALTS_OK);
+
+    check_equal(flowmq_owned_stream_project_first_data(
+                    &stream, 1024u, &projection),
+                SALTS_ENOTSUP);
+    check_equal(projection.segment_count, (size_t)0u);
+    check_equal(flowmq_owned_stream_size(&stream), tstr_len(encoded));
+    check_equal(release.calls, (size_t)0u);
+
+    flowmq_owned_stream_reset(&stream);
+    check_equal(release.calls, (size_t)1u);
+    tstr_free(encoded);
+  }
+
   it("keeps a coalesced tail owned until its frame is replayed") {
     static const char first_payload[] = "first-owned-frame";
     static const char second_payload[] = "second-owned-frame";
