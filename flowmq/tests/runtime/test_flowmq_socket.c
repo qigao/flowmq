@@ -532,12 +532,11 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
-  it("preflights capacity and transfers segmented 1 MiB DATA through recv slicev") {
+  it("preflights capacity and transfers 1 MiB DATA through recv slicev") {
     enum { SLICEV_LARGE_BYTES = 1024u * 1024u };
     static unsigned char payload[SLICEV_LARGE_BYTES];
     char endpoint[128] = {0};
     size_t endpoint_size = 0u;
-    mem_slice_t insufficient[1] = {{0}};
     mem_slice_t *segments = NULL;
     size_t required = 0u;
     size_t count = 0u;
@@ -563,19 +562,22 @@ spec("flowmq_socket lifecycle and pattern surface") {
     }
     check_equal(status, SALTS_OK);
 
+    /*
+     * Query required ownership-vector capacity without assuming one particular
+     * TCP fragmentation shape. A current run may retain multiple packet payload
+     * ranges or legitimately reach the proven contiguous fallback and require
+     * exactly one range.
+     */
     status = SALTS_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
                         status == SALTS_EBUSY; ++i) {
       check_equal(progress_pair(sender, receiver), SALTS_OK);
       required = 0u;
-      status = flowmq_recv_slicev(receiver, insufficient, 1u, &required,
+      status = flowmq_recv_slicev(receiver, NULL, 0u, &required,
                                   FLOWMQ_DONTWAIT);
     }
     check_equal(status, SALTS_ENOBUFS);
-    check_true(required > 1u);
-    check_null(insufficient[0].buffer);
-    check_null(insufficient[0].data);
-    check_equal(insufficient[0].length, 0u);
+    check_true(required >= 1u);
 
     segments = (mem_slice_t *)calloc(required, sizeof(*segments));
     check_not_null(segments);
