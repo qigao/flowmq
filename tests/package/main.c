@@ -41,6 +41,8 @@ int main(void)
     flowmq_router_peer_status_t peer_status = FLOWMQ_ROUTER_PEER_STATUS_INIT;
     mem_slice_t invalid_slice = {0};
     mem_slice_t recv_slice = {0};
+    mem_slice_t recv_slices[1] = {{0}};
+    size_t recv_slice_count = 0u;
     int result = 1;
 
     policy.bindings = &binding;
@@ -97,6 +99,15 @@ int main(void)
         goto cleanup;
     if (recv_slice.buffer != NULL || recv_slice.data != NULL ||
         recv_slice.length != 0u)
+        goto cleanup;
+
+    /* Pin the additive owned receive-vector ABI without a live peer. */
+    if (flowmq_recv_slicev(router, recv_slices, 1u, &recv_slice_count,
+                           FLOWMQ_DONTWAIT) != SALTS_EBUSY)
+        goto cleanup;
+    if (recv_slice_count != 0u ||
+        recv_slices[0].buffer != NULL || recv_slices[0].data != NULL ||
+        recv_slices[0].length != 0u)
         goto cleanup;
 
     /*
