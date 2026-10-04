@@ -48,6 +48,7 @@ typedef struct bench_pair_s {
   flowmq_ctx_t *ctx;
   flowmq_socket_t *sender;
   flowmq_socket_t *receiver;
+  char *ca_path;
   char *cert_path;
   char *key_path;
 } bench_pair_t;
@@ -128,6 +129,11 @@ static int bench_pair_close(bench_pair_t *pair) {
     status = flowmq_ctx_term(pair->ctx);
     if (result == SALTS_OK && status != SALTS_OK) result = status;
   }
+  if (pair->ca_path != NULL) {
+    if (tt_remove_file(pair->ca_path) != 0 && result == SALTS_OK)
+      result = SALTS_EIO;
+    free(pair->ca_path);
+  }
   if (pair->cert_path != NULL) {
     if (tt_remove_file(pair->cert_path) != 0 && result == SALTS_OK)
       result = SALTS_EIO;
@@ -187,13 +193,17 @@ static int bench_pair_open_tls(bench_pair_t *pair) {
   size_t endpoint_size = 0u;
   int status;
   memset(pair, 0, sizeof(*pair));
+  pair->ca_path = tt_make_temp_file("flowmq-bench-ca", ".pem");
   pair->cert_path = tt_make_temp_file("flowmq-bench-cert", ".pem");
   pair->key_path = tt_make_temp_file("flowmq-bench-key", ".pem");
-  if (pair->cert_path == NULL || pair->key_path == NULL) {
+  if (pair->ca_path == NULL || pair->cert_path == NULL ||
+      pair->key_path == NULL) {
     (void)bench_pair_close(pair);
     return SALTS_ENOMEM;
   }
-  if (tt_write_file(pair->cert_path, FLOWMQ_TLS_TEST_CERTIFICATE,
+  if (tt_write_file(pair->ca_path, FLOWMQ_TLS_TEST_ROOT_CA,
+                    sizeof(FLOWMQ_TLS_TEST_ROOT_CA) - 1u) != 0 ||
+      tt_write_file(pair->cert_path, FLOWMQ_TLS_TEST_CERTIFICATE,
                     sizeof(FLOWMQ_TLS_TEST_CERTIFICATE) - 1u) != 0 ||
       tt_write_file(pair->key_path, FLOWMQ_TLS_TEST_KEY,
                     sizeof(FLOWMQ_TLS_TEST_KEY) - 1u) != 0) {
@@ -220,7 +230,7 @@ static int bench_pair_open_tls(bench_pair_t *pair) {
                                pair->key_path, strlen(pair->key_path));
   if (status == SALTS_OK)
     status = flowmq_setsockopt(pair->sender, FLOWMQ_TLS_CA_FILE,
-                               pair->cert_path, strlen(pair->cert_path));
+                               pair->ca_path, strlen(pair->ca_path));
   if (status == SALTS_OK)
     status = flowmq_setsockopt(pair->sender, FLOWMQ_TLS_SERVER_NAME,
                                "localhost", strlen("localhost"));

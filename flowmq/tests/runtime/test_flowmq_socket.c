@@ -2018,6 +2018,7 @@ spec("flowmq_socket lifecycle and pattern surface") {
     char received[64] = {0};
     size_t endpoint_size = 0u;
     size_t received_size = 0u;
+    char *ca_path = tt_make_temp_file("flowmq-socket-ca", ".pem");
     char *cert_path = tt_make_temp_file("flowmq-socket-cert", ".pem");
     char *key_path = tt_make_temp_file("flowmq-socket-key", ".pem");
     flowmq_ctx_t *ctx = flowmq_ctx_new();
@@ -2026,8 +2027,11 @@ spec("flowmq_socket lifecycle and pattern surface") {
     int reconnect_ms = 1;
     int status = SALTS_EBUSY;
 
+    check_not_null(ca_path);
     check_not_null(cert_path);
     check_not_null(key_path);
+    check_equal(tt_write_file(ca_path, FLOWMQ_TLS_TEST_ROOT_CA,
+                              sizeof(FLOWMQ_TLS_TEST_ROOT_CA) - 1u), 0);
     check_equal(tt_write_file(cert_path, FLOWMQ_TLS_TEST_CERTIFICATE,
                               sizeof(FLOWMQ_TLS_TEST_CERTIFICATE) - 1u), 0);
     check_equal(tt_write_file(key_path, FLOWMQ_TLS_TEST_KEY,
@@ -2036,8 +2040,8 @@ spec("flowmq_socket lifecycle and pattern surface") {
                                  strlen(cert_path)), SALTS_OK);
     check_equal(flowmq_setsockopt(server, FLOWMQ_TLS_KEY_FILE, key_path,
                                  strlen(key_path)), SALTS_OK);
-    check_equal(flowmq_setsockopt(client, FLOWMQ_TLS_CA_FILE, cert_path,
-                                 strlen(cert_path)), SALTS_OK);
+    check_equal(flowmq_setsockopt(client, FLOWMQ_TLS_CA_FILE, ca_path,
+                                 strlen(ca_path)), SALTS_OK);
     check_equal(flowmq_setsockopt(client, FLOWMQ_TLS_SERVER_NAME, "localhost",
                                  strlen("localhost")), SALTS_OK);
     check_equal(flowmq_setsockopt(client, FLOWMQ_RECONNECT_IVL,
@@ -2227,8 +2231,10 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_close(client), SALTS_OK);
     check_equal(flowmq_close(server), SALTS_OK);
     check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+    check_equal(tt_remove_file(ca_path), 0);
     check_equal(tt_remove_file(cert_path), 0);
     check_equal(tt_remove_file(key_path), 0);
+    free(ca_path);
     free(cert_path);
     free(key_path);
   }
@@ -2241,6 +2247,7 @@ spec("flowmq_socket lifecycle and pattern surface") {
         sizeof(binding), fingerprint, identity};
     flowmq_tls_identity_map_config_t policy =
         FLOWMQ_TLS_IDENTITY_MAP_CONFIG_INIT;
+    char *ca_path = tt_make_temp_file("flowmq-policy-ca", ".pem");
     char *cert_path = tt_make_temp_file("flowmq-policy-cert", ".pem");
     char *key_path = tt_make_temp_file("flowmq-policy-key", ".pem");
     flowmq_ctx_t *ctx = flowmq_ctx_new();
@@ -2253,8 +2260,11 @@ spec("flowmq_socket lifecycle and pattern surface") {
 
     policy.bindings = &binding;
     policy.binding_count = 1u;
+    check_not_null(ca_path);
     check_not_null(cert_path);
     check_not_null(key_path);
+    check_equal(tt_write_file(ca_path, FLOWMQ_TLS_TEST_ROOT_CA,
+                              sizeof(FLOWMQ_TLS_TEST_ROOT_CA) - 1u), 0);
     check_equal(tt_write_file(cert_path, FLOWMQ_TLS_TEST_CERTIFICATE,
                               sizeof(FLOWMQ_TLS_TEST_CERTIFICATE) - 1u), 0);
     check_equal(tt_write_file(key_path, FLOWMQ_TLS_TEST_KEY,
@@ -2269,8 +2279,8 @@ spec("flowmq_socket lifecycle and pattern surface") {
                                   strlen(cert_path)), SALTS_OK);
     check_equal(flowmq_setsockopt(tls_router, FLOWMQ_TLS_KEY_FILE, key_path,
                                   strlen(key_path)), SALTS_OK);
-    check_equal(flowmq_setsockopt(tls_router, FLOWMQ_TLS_CA_FILE, cert_path,
-                                  strlen(cert_path)), SALTS_OK);
+    check_equal(flowmq_setsockopt(tls_router, FLOWMQ_TLS_CA_FILE, ca_path,
+                                  strlen(ca_path)), SALTS_OK);
     check_equal(flowmq_setsockopt(tls_router, FLOWMQ_TLS_IDENTITY_POLICY,
                                   &policy, sizeof(policy)), SALTS_OK);
     check_equal(flowmq_bind(tls_router, "tls://127.0.0.1:0"), SALTS_EINVAL);
@@ -2295,8 +2305,10 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_close(tcp_router), SALTS_OK);
     check_equal(flowmq_close(pair), SALTS_OK);
     check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+    check_equal(tt_remove_file(ca_path), 0);
     check_equal(tt_remove_file(cert_path), 0);
     check_equal(tt_remove_file(key_path), 0);
+    free(ca_path);
     free(cert_path);
     free(key_path);
   }
@@ -2315,6 +2327,7 @@ spec("flowmq_socket lifecycle and pattern surface") {
     char received[64] = {0};
     size_t endpoint_size = 0u;
     size_t received_size = 0u;
+    char *ca_path = tt_make_temp_file("flowmq-bound-ca", ".pem");
     char *cert_path = tt_make_temp_file("flowmq-bound-cert", ".pem");
     char *key_path = tt_make_temp_file("flowmq-bound-key", ".pem");
     flowmq_ctx_t *ctx = flowmq_ctx_new();
@@ -2329,14 +2342,17 @@ spec("flowmq_socket lifecycle and pattern surface") {
 
     policy.bindings = &binding;
     policy.binding_count = 1u;
+    check_not_null(ca_path);
     check_not_null(cert_path);
     check_not_null(key_path);
+    check_equal(tt_write_file(ca_path, FLOWMQ_TLS_TEST_ROOT_CA,
+                              sizeof(FLOWMQ_TLS_TEST_ROOT_CA) - 1u), 0);
     check_equal(tt_write_file(cert_path, FLOWMQ_TLS_TEST_CERTIFICATE,
                               sizeof(FLOWMQ_TLS_TEST_CERTIFICATE) - 1u), 0);
     check_equal(tt_write_file(key_path, FLOWMQ_TLS_TEST_KEY,
                               sizeof(FLOWMQ_TLS_TEST_KEY) - 1u), 0);
-    check_equal(flowmq_setsockopt(router, FLOWMQ_TLS_CA_FILE, cert_path,
-                                  strlen(cert_path)), SALTS_OK);
+    check_equal(flowmq_setsockopt(router, FLOWMQ_TLS_CA_FILE, ca_path,
+                                  strlen(ca_path)), SALTS_OK);
     check_equal(flowmq_setsockopt(router, FLOWMQ_TLS_CERT_FILE, cert_path,
                                   strlen(cert_path)), SALTS_OK);
     check_equal(flowmq_setsockopt(router, FLOWMQ_TLS_KEY_FILE, key_path,
@@ -2357,8 +2373,8 @@ spec("flowmq_socket lifecycle and pattern surface") {
 
     check_equal(flowmq_setsockopt(forged, FLOWMQ_IDENTITY, forged_identity,
                                   sizeof(forged_identity) - 1u), SALTS_OK);
-    check_equal(flowmq_setsockopt(forged, FLOWMQ_TLS_CA_FILE, cert_path,
-                                  strlen(cert_path)), SALTS_OK);
+    check_equal(flowmq_setsockopt(forged, FLOWMQ_TLS_CA_FILE, ca_path,
+                                  strlen(ca_path)), SALTS_OK);
     check_equal(flowmq_setsockopt(forged, FLOWMQ_TLS_CERT_FILE, cert_path,
                                   strlen(cert_path)), SALTS_OK);
     check_equal(flowmq_setsockopt(forged, FLOWMQ_TLS_KEY_FILE, key_path,
@@ -2389,8 +2405,8 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_setsockopt(authorized, FLOWMQ_IDENTITY,
                                   authorized_identity,
                                   sizeof(authorized_identity) - 1u), SALTS_OK);
-    check_equal(flowmq_setsockopt(authorized, FLOWMQ_TLS_CA_FILE, cert_path,
-                                  strlen(cert_path)), SALTS_OK);
+    check_equal(flowmq_setsockopt(authorized, FLOWMQ_TLS_CA_FILE, ca_path,
+                                  strlen(ca_path)), SALTS_OK);
     check_equal(flowmq_setsockopt(authorized, FLOWMQ_TLS_CERT_FILE, cert_path,
                                   strlen(cert_path)), SALTS_OK);
     check_equal(flowmq_setsockopt(authorized, FLOWMQ_TLS_KEY_FILE, key_path,
@@ -2430,8 +2446,10 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_close(authorized), SALTS_OK);
     check_equal(flowmq_close(router), SALTS_OK);
     check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+    check_equal(tt_remove_file(ca_path), 0);
     check_equal(tt_remove_file(cert_path), 0);
     check_equal(tt_remove_file(key_path), 0);
+    free(ca_path);
     free(cert_path);
     free(key_path);
   }
@@ -2446,6 +2464,7 @@ spec("flowmq_socket lifecycle and pattern surface") {
         FLOWMQ_TLS_IDENTITY_MAP_CONFIG_INIT;
     char endpoint[128] = {0};
     size_t endpoint_size = 0u;
+    char *ca_path = tt_make_temp_file("flowmq-unlisted-ca", ".pem");
     char *cert_path = tt_make_temp_file("flowmq-unlisted-cert", ".pem");
     char *key_path = tt_make_temp_file("flowmq-unlisted-key", ".pem");
     flowmq_ctx_t *ctx = flowmq_ctx_new();
@@ -2458,14 +2477,17 @@ spec("flowmq_socket lifecycle and pattern surface") {
 
     policy.bindings = &binding;
     policy.binding_count = 1u;
+    check_not_null(ca_path);
     check_not_null(cert_path);
     check_not_null(key_path);
+    check_equal(tt_write_file(ca_path, FLOWMQ_TLS_TEST_ROOT_CA,
+                              sizeof(FLOWMQ_TLS_TEST_ROOT_CA) - 1u), 0);
     check_equal(tt_write_file(cert_path, FLOWMQ_TLS_TEST_CERTIFICATE,
                               sizeof(FLOWMQ_TLS_TEST_CERTIFICATE) - 1u), 0);
     check_equal(tt_write_file(key_path, FLOWMQ_TLS_TEST_KEY,
                               sizeof(FLOWMQ_TLS_TEST_KEY) - 1u), 0);
-    check_equal(flowmq_setsockopt(router, FLOWMQ_TLS_CA_FILE, cert_path,
-                                  strlen(cert_path)), SALTS_OK);
+    check_equal(flowmq_setsockopt(router, FLOWMQ_TLS_CA_FILE, ca_path,
+                                  strlen(ca_path)), SALTS_OK);
     check_equal(flowmq_setsockopt(router, FLOWMQ_TLS_CERT_FILE, cert_path,
                                   strlen(cert_path)), SALTS_OK);
     check_equal(flowmq_setsockopt(router, FLOWMQ_TLS_KEY_FILE, key_path,
@@ -2480,8 +2502,8 @@ spec("flowmq_socket lifecycle and pattern surface") {
 
     check_equal(flowmq_setsockopt(dealer, FLOWMQ_IDENTITY, identity,
                                   sizeof(identity) - 1u), SALTS_OK);
-    check_equal(flowmq_setsockopt(dealer, FLOWMQ_TLS_CA_FILE, cert_path,
-                                  strlen(cert_path)), SALTS_OK);
+    check_equal(flowmq_setsockopt(dealer, FLOWMQ_TLS_CA_FILE, ca_path,
+                                  strlen(ca_path)), SALTS_OK);
     check_equal(flowmq_setsockopt(dealer, FLOWMQ_TLS_CERT_FILE, cert_path,
                                   strlen(cert_path)), SALTS_OK);
     check_equal(flowmq_setsockopt(dealer, FLOWMQ_TLS_KEY_FILE, key_path,
@@ -2507,8 +2529,10 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_close(dealer), SALTS_OK);
     check_equal(flowmq_close(router), SALTS_OK);
     check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+    check_equal(tt_remove_file(ca_path), 0);
     check_equal(tt_remove_file(cert_path), 0);
     check_equal(tt_remove_file(key_path), 0);
+    free(ca_path);
     free(cert_path);
     free(key_path);
   }
