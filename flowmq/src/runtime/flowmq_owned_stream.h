@@ -243,6 +243,209 @@ static inline int flowmq_owned_stream_first_frame_size(
   }
 }
 
+
+typedef struct flowmq_owned_data_projection_s {
+  flowmq_protocol_pattern_t pattern;
+  uint64_t message_id;
+  size_t payload_size;
+  size_t frame_size;
+  mem_slice_t segments[FLOWMQ_OWNED_STREAM_SEGMENT_CAPACITY];
+  size_t segment_count;
+  int more;
+} flowmq_owned_data_projection_t;
+
+#define FLOWMQ_OWNED_DATA_PROJECTION_INIT \
+  { 0u, 0u, 0u, 0u, {0}, 0u, 0 }
+
+static inline void flowmq_owned_data_projection_reset(
+    flowmq_owned_data_projection_t *projection) {
+  if (projection == NULL) return;
+  for (size_t i = 0u; i < projection->segment_count; ++i)
+    mem_slice_release(&projection->segments[i]);
+  memset(projection, 0, sizeof(*projection));
+}
+
+/*
+ * Retain one logical unread stream range as canonical backing sub-slices.
+ * Output capacity is fixed/bounded; failure releases every new retain.
+ */
+static inline int flowmq_owned_stream_retain_range(
+    const flowmq_owned_stream_t *stream, size_t offset, size_t size,
+    mem_slice_t *segments, size_t capacity, size_t *count) {
+  size_t logical = 0u;
+  size_t produced = 0u;
+  size_t retained_bytes = 0u;
+  if (stream == NULL || segments == NULL || count == NULL)
+    return SALTS_EINVAL;
+  *count = 0u;
+  if (offset > stream->bytes || size > stream->bytes - offset)
+    return SALTS_ENOSPC;
+  if (size == 0u) return SALTS_OK;
+
+  for (size_t i = stream->front;
+       i < stream->segment_count && retained_bytes < size; ++i) {
+    const mem_slice_t *source = &stream->segments[i];
+    const char *base = mem_buffer_const_data(source->buffer);
+    size_t begin = i == stream->front ? stream->front_offset : 0u;
+    size_t available = source->length - begin;
+    size_t within;
+    size_t take;
+    uintptr_t base_address;
+    uintptr_t data_address;
+    uintptr_t delta;
+
+    if (offset >= logical + available) {
+      logical += available;
+      continue;
+    }
+    within = offset > logical ? offset - logical : 0u;
+    take = available - within;
+    if (take > size - retained_bytes) take = size - retained_bytes;
+    if (take == 0u) {
+      logical += available;
+      continue;
+    }
+    if (produced == capacity || base == NULL) {
+      for (size_t j = 0u; j < produced; ++j)
+        mem_slice_release(&segments[j]);
+      return produced == capacity ? SALTS_ENOSPC : SALTS_EPROTO;
+    }
+
+    base_address = (uintptr_t)(const void *)base;
+    data_address =
+        (uintptr_t)(const void *)((const unsigned char *)source->data +
+                                  begin + within);
+    if (data_address < base_address ||
+        data_address - base_address > (uintptr_t)SIZE_MAX) {
+      for (size_t j = 0u; j < produced; ++j)
+        mem_slice_release(&segments[j]);
+      return SALTS_EPROTO;
+    }
+    delta = data_address - base_address;
+    if ((size_t)delta > mem_buffer_used(source->buffer) ||
+        take > mem_buffer_used(source->buffer) - (size_t)delta) {
+      for (size_t j = 0u; j < produced; ++j)
+        mem_slice_release(&segments[j]);
+      return SALTS_EPROTO;
+    }
+    segments[produced] =
+        mem_slice(source->buffer, (size_t)delta, take);
+    if (segments[produced].buffer == NULL ||
+        segments[produced].length != take) {
+      mem_slice_release(&segments[produced]);
+      for (size_t j = 0u; j < produced; ++j)
+        mem_slice_release(&segments[j]);
+      return SALTS_EPROTO;
+    }
+    ++produced;
+    retained_bytes += take;
+    offset += take;
+    logical += available;
+  }
+
+  if (retained_bytes != size) {
+    for (size_t j = 0u; j < produced; ++j)
+      mem_slice_release(&segments[j]);
+    return SALTS_EPROTO;
+  }
+  *count = produced;
+  return SALTS_OK;
+}
+
+/*
+ * Validate and project exactly the first complete DATA frame into retained
+ * payload subranges. Packet headers/identity/topic remain in the raw owned
+ * stream and are not retained by the projection.
+ *
+ * SALTS_ENOTSUP means the complete first frame is valid but not a DATA frame;
+ * callers should use the existing copied decoder path.
+ * SALTS_ENOSPC means the bounded payload-vector shape does not fit and should
+ * likewise fall back without claiming zero-copy.
+ */
+static inline int flowmq_owned_stream_project_first_data(
+    const flowmq_owned_stream_t *stream, size_t max_frame_size,
+    flowmq_owned_data_projection_t *projection) {
+  unsigned char header_bytes[FLOWMQ_PROTOCOL_HEADER_SIZE];
+  flowmq_protocol_packet_header_internal_t first = {0};
+  size_t frame_size = 0u;
+  size_t cursor = 0u;
+  size_t payload_seen = 0u;
+  size_t packet_count = 0u;
+  int status;
+
+  if (stream == NULL || projection == NULL || max_frame_size == 0u)
+    return SALTS_EINVAL;
+  if (projection->segment_count != 0u)
+    return SALTS_EBUSY;
+  memset(projection, 0, sizeof(*projection));
+
+  status = flowmq_owned_stream_first_frame_size(
+      stream, max_frame_size, &frame_size);
+  if (status != SALTS_OK) return status;
+
+  status = flowmq_owned_stream_peek(
+      stream, 0u, header_bytes, sizeof(header_bytes));
+  if (status != SALTS_OK) return status;
+  status = flowmq_protocol_decode_packet_header_internal(
+      header_bytes, sizeof(header_bytes), &first);
+  if (status != SALTS_OK) return status;
+  if (first.kind != FLOWMQ_PROTOCOL_FRAME_DATA || first.payload_len == 0u)
+    return SALTS_ENOTSUP;
+
+  projection->pattern = first.pattern;
+  projection->message_id = first.message_id;
+  projection->payload_size = first.payload_len;
+  projection->frame_size = frame_size;
+  projection->more =
+      (first.flags & FLOWMQ_PROTOCOL_MESSAGE_MORE) != 0u;
+
+  while (cursor < frame_size) {
+    flowmq_protocol_packet_header_internal_t packet = {0};
+    size_t payload_offset;
+    size_t added = 0u;
+    if (frame_size - cursor < FLOWMQ_PROTOCOL_HEADER_SIZE) {
+      status = SALTS_EPROTO;
+      goto fail;
+    }
+    status = flowmq_owned_stream_peek(
+        stream, cursor, header_bytes, sizeof(header_bytes));
+    if (status != SALTS_OK) goto fail;
+    status = flowmq_protocol_decode_packet_header_internal(
+        header_bytes, sizeof(header_bytes), &packet);
+    if (status != SALTS_OK) goto fail;
+    if (packet.record_len > frame_size - cursor) {
+      status = SALTS_EPROTO;
+      goto fail;
+    }
+
+    payload_offset = cursor + FLOWMQ_PROTOCOL_HEADER_SIZE +
+                     packet.identity_len + packet.topic_len;
+    if (packet.chunk_len != 0u) {
+      status = flowmq_owned_stream_retain_range(
+          stream, payload_offset, packet.chunk_len,
+          projection->segments + projection->segment_count,
+          FLOWMQ_OWNED_STREAM_SEGMENT_CAPACITY - projection->segment_count,
+          &added);
+      if (status != SALTS_OK) goto fail;
+      projection->segment_count += added;
+    }
+    payload_seen += packet.chunk_len;
+    cursor += packet.record_len;
+    ++packet_count;
+  }
+
+  if (cursor != frame_size || payload_seen != projection->payload_size ||
+      packet_count == 0u || projection->segment_count == 0u) {
+    status = SALTS_EPROTO;
+    goto fail;
+  }
+  return SALTS_OK;
+
+fail:
+  flowmq_owned_data_projection_reset(projection);
+  return status;
+}
+
 /*
  * Replay one unread prefix into the existing copied decoder in order, then
  * consume/release exactly that prefix from owned storage. The capacity
