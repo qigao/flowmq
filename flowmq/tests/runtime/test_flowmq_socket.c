@@ -1,4 +1,5 @@
 #include "flowmq_socket.h"
+#include "flowmq_socket_external_internal.h"
 #include "flowmq_tls_identity_map.h"
 #include "flowmq_tls_test_material.h"
 #include "tinytest.h"
@@ -1351,19 +1352,31 @@ spec("flowmq_socket lifecycle and pattern surface") {
      */
     check_equal(flowmq_setsockopt(second, FLOWMQ_UNSUBSCRIBE, topic,
                                   sizeof(topic) - 1u), SALTS_OK);
-    status = SALTS_EBUSY;
-    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
-                        status == SALTS_EBUSY; ++i) {
-      check_equal(progress_three(xpub, first, second), SALTS_OK);
-      status = flowmq_recv(xpub, event, sizeof(event), &event_size,
-                           FLOWMQ_DONTWAIT);
+    {
+      size_t matching = 2u;
+      for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                          matching != 1u; ++i) {
+        check_equal(progress_three(xpub, first, second), SALTS_OK);
+        check_equal(flowmq_socket_internal_fanout_match_count(
+                        xpub, topic, sizeof(topic) - 1u, &matching),
+                    SALTS_OK);
+      }
+      check_equal(matching, 1u);
     }
-    check_equal(status, SALTS_OK);
-    check_equal(event_size, sizeof(topic));
-    check_equal(event[0], 0u);
 
     check_equal(flowmq_send_slice(xpub, &final_slice, FLOWMQ_DONTWAIT),
                 SALTS_OK);
+
+    /*
+     * The public XPUB subscription event remains queued while the socket is
+     * inside its send-side multipart FSM. Once final send commits, ordinary
+     * receive may dequeue it without weakening the shared pattern contract.
+     */
+    status = flowmq_recv(xpub, event, sizeof(event), &event_size,
+                         FLOWMQ_DONTWAIT);
+    check_equal(status, SALTS_OK);
+    check_equal(event_size, sizeof(topic));
+    check_equal(event[0], 0u);
 
     mem_slice_release(&first_slice);
     mem_slice_release(&final_slice);
