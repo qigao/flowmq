@@ -2,13 +2,119 @@
 #include <cflow/effect.h>
 #include <cflow/function_projection.h>
 #include <cflow/lower.h>
+#include <cflow/meta.h>
 #include <cflow/opt.h>
+#include <cflow/plan.h>
 #include <cflow/verify.h>
 
 #include "tinytest.h"
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
+
+typedef struct flowmq_q_managed_value_s {
+  int *resource;
+} flowmq_q_managed_value;
+
+static size_t flowmq_q_managed_copy_attempts;
+static size_t flowmq_q_managed_copies;
+static size_t flowmq_q_managed_moves;
+static size_t flowmq_q_managed_destroys;
+static size_t flowmq_q_managed_live;
+static size_t flowmq_q_managed_fail_copy_at;
+
+static void flowmq_q_managed_reset(void) {
+  flowmq_q_managed_copy_attempts = 0u;
+  flowmq_q_managed_copies = 0u;
+  flowmq_q_managed_moves = 0u;
+  flowmq_q_managed_destroys = 0u;
+  flowmq_q_managed_live = 0u;
+  flowmq_q_managed_fail_copy_at = SIZE_MAX;
+}
+
+static flowmq_q_managed_value flowmq_q_managed_make(int value) {
+  flowmq_q_managed_value result = {0};
+  result.resource = (int *)malloc(sizeof(*result.resource));
+  if (result.resource != NULL) {
+    *result.resource = value;
+    ++flowmq_q_managed_live;
+  }
+  return result;
+}
+
+static bool flowmq_q_managed_copy(void *destination_,
+                                  const void *source_) {
+  flowmq_q_managed_value *destination =
+      (flowmq_q_managed_value *)destination_;
+  const flowmq_q_managed_value *source =
+      (const flowmq_q_managed_value *)source_;
+  const size_t attempt = flowmq_q_managed_copy_attempts++;
+
+  destination->resource = NULL;
+  if (attempt == flowmq_q_managed_fail_copy_at) return false;
+  if (source->resource != NULL) {
+    destination->resource = (int *)malloc(sizeof(*destination->resource));
+    if (destination->resource == NULL) return false;
+    *destination->resource = *source->resource;
+    ++flowmq_q_managed_live;
+  }
+  ++flowmq_q_managed_copies;
+  return true;
+}
+
+static void flowmq_q_managed_move(void *destination_, void *source_) {
+  flowmq_q_managed_value *destination =
+      (flowmq_q_managed_value *)destination_;
+  flowmq_q_managed_value *source = (flowmq_q_managed_value *)source_;
+
+  destination->resource = source->resource;
+  source->resource = NULL;
+  ++flowmq_q_managed_moves;
+}
+
+static void flowmq_q_managed_destroy(void *value_) {
+  flowmq_q_managed_value *value = (flowmq_q_managed_value *)value_;
+
+  if (value->resource != NULL) {
+    free(value->resource);
+    value->resource = NULL;
+    --flowmq_q_managed_live;
+  }
+  ++flowmq_q_managed_destroys;
+}
+
+static const cmeta_type_traits flowmq_q_managed_traits = {
+    .flags = CMETA_TRAIT_COPY | CMETA_TRAIT_MOVE | CMETA_TRAIT_DESTROY,
+    .copy_construct = flowmq_q_managed_copy,
+    .move_construct = flowmq_q_managed_move,
+    .destroy = flowmq_q_managed_destroy};
+
+static const cmeta_type_desc flowmq_q_managed_type = {
+    .name = "flowmq_q_managed_value",
+    .size = sizeof(flowmq_q_managed_value),
+    .align = _Alignof(flowmq_q_managed_value),
+    .kind = CMETA_T_OBJECT,
+    .pointee = NULL,
+    .traits = &flowmq_q_managed_traits,
+    .identity = NULL};
+
+static void flowmq_q_managed_destroy_local(flowmq_q_managed_value *value) {
+  flowmq_q_managed_destroy(value);
+}
+
+
+typedef struct flowmq_q_borrowed_capture_s {
+  int *increment;
+} flowmq_q_borrowed_capture;
+
+lambda1(map, value, long, flowmq_q_borrowed_add,
+        int, value, flowmq_q_borrowed_capture, capture) {
+  return (long)value + (long)*capture.increment;
+}
 
 enum {
   FLOWMQ_Q_VALIDATED = 1 << 0,
@@ -218,6 +324,134 @@ static bool flowmq_q_graph_accepts(const cflow_graph *graph,
 }
 
 spec("FlowMQ CFlow control-plane qualification") {
+
+  it("delegates managed result ownership to CFlow and canonical CMeta lifecycle") {
+    flowmq_q_managed_value input;
+    flowmq_q_managed_value destination = {0};
+    cflow_stream stream = {0};
+    cflow_plan plan = {0};
+    cflow_result result = {0};
+    const flowmq_q_managed_value *output;
+
+    flowmq_q_managed_reset();
+    input = flowmq_q_managed_make(41);
+    check_not_null(input.resource);
+    check_not_null(cflow_stream_init(&stream, &flowmq_q_managed_type));
+    check_true(cflow_plan_compile_surface(&plan, &stream.graph, NULL));
+    check_true(cflow_plan_eval_array(&plan, &input, 1u, &result));
+    check_equal(result.count, (size_t)1u);
+    check_true(cmeta_type_equal(result.type, &flowmq_q_managed_type));
+    output = (const flowmq_q_managed_value *)result.data;
+    check_not_null(output);
+    check_not_null(output->resource);
+    check_equal(*output->resource, 41);
+    check_true(output->resource != input.resource);
+    check_equal(flowmq_q_managed_live, (size_t)2u);
+
+    check_true(cflow_result_move_value(
+        &result, &flowmq_q_managed_type, &destination));
+    check_null(result.data);
+    check_equal(result.count, (size_t)0u);
+    check_null(result.type);
+    check_not_null(destination.resource);
+    check_equal(*destination.resource, 41);
+    check_equal(flowmq_q_managed_moves, (size_t)1u);
+    check_equal(flowmq_q_managed_live, (size_t)2u);
+
+    cflow_result_destroy(&result);
+    flowmq_q_managed_destroy_local(&destination);
+    flowmq_q_managed_destroy_local(&input);
+    cflow_plan_destroy(&plan);
+    cflow_stream_destroy(&stream);
+
+    check_equal(flowmq_q_managed_live, (size_t)0u);
+    check_true(flowmq_q_managed_copies >= (size_t)1u);
+  }
+
+  it("cleans partially constructed managed plan results without FlowMQ cleanup state") {
+    flowmq_q_managed_value input[2];
+    cflow_stream stream = {0};
+    cflow_plan plan = {0};
+    cflow_result result = {0};
+
+    flowmq_q_managed_reset();
+    input[0] = flowmq_q_managed_make(7);
+    input[1] = flowmq_q_managed_make(14);
+    check_not_null(input[0].resource);
+    check_not_null(input[1].resource);
+    check_not_null(cflow_stream_init(&stream, &flowmq_q_managed_type));
+    check_true(cflow_plan_compile_surface(&plan, &stream.graph, NULL));
+
+    flowmq_q_managed_fail_copy_at = 1u;
+    check_false(cflow_plan_eval_array(&plan, input, 2u, &result));
+    check_null(result.data);
+    check_equal(result.count, (size_t)0u);
+    check_null(result.type);
+    check_equal(flowmq_q_managed_live, (size_t)2u);
+    check_true(flowmq_q_managed_destroys >= (size_t)1u);
+
+    cflow_result_destroy(&result);
+    flowmq_q_managed_destroy_local(&input[0]);
+    flowmq_q_managed_destroy_local(&input[1]);
+    cflow_plan_destroy(&plan);
+    cflow_stream_destroy(&stream);
+    check_equal(flowmq_q_managed_live, (size_t)0u);
+  }
+
+
+  it("owns callable capture bytes while borrowing transitive pointer identity") {
+    cflow_stream stream = {0};
+    cflow_graph clone = {0};
+    cflow_result result = {0};
+    flowmq_q_borrowed_capture original_capture = {0};
+    flowmq_q_borrowed_capture cloned_capture = {0};
+    int external_increment = 10;
+    const int input[] = {1, 2};
+    const long expected[] = {21L, 22L};
+    cflow_map_callable callable =
+        flowmq_q_borrowed_add(
+            (flowmq_q_borrowed_capture){&external_increment});
+    const cflow_node *source_node;
+    const cflow_node *clone_node;
+
+    clone.root = CMETA_INVALID_ID;
+    check_not_null(cflow_stream_init(&stream, &cmeta_type_int));
+    check_not_null(stream.map(&stream, callable));
+    check_true(cflow_graph_clone(&clone, &stream.graph));
+
+    source_node = cflow_subgraph_node(
+        cflow_graph_subgraph(&stream.graph, stream.graph.root), 1u);
+    clone_node = cflow_subgraph_node(
+        cflow_graph_subgraph(&clone, clone.root), 1u);
+    check_not_null(source_node);
+    check_not_null(clone_node);
+    check_equal(source_node->fn.capture_size,
+                sizeof(flowmq_q_borrowed_capture));
+    check_equal(clone_node->fn.capture_size,
+                sizeof(flowmq_q_borrowed_capture));
+    check_true(&source_node->fn.capture != &clone_node->fn.capture);
+
+    memcpy(&original_capture, source_node->fn.capture.bytes,
+           sizeof(original_capture));
+    memcpy(&cloned_capture, clone_node->fn.capture.bytes,
+           sizeof(cloned_capture));
+    check_true(original_capture.increment == &external_increment);
+    check_true(cloned_capture.increment == &external_increment);
+
+    external_increment = 20;
+    cflow_stream_destroy(&stream);
+    check_equal(external_increment, 20);
+
+    check_true(cflow_eval_array(&clone, input, 2u, &result));
+    check_equal(result.count, (size_t)2u);
+    check_true(cmeta_type_equal(result.type, &cmeta_type_long));
+    check_equal(result.data, expected, sizeof(expected));
+
+    cflow_result_destroy(&result);
+    cflow_graph_destroy(&clone);
+    check_equal(external_increment, 20);
+  }
+
   it("projects the canonical send ordering with exact CMeta ABI adapters") {
     cflow_graph graph = {0};
     cflow_verify_report report = {0};

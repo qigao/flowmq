@@ -182,6 +182,60 @@ subscriptions 会从事实源重放。`FLOWMQ_RECONNECT_IVL` 默认 100ms，`-1`
 
 CFlow/CMeta 可服务于控制面配置、类型描述和 executor 组合，不参与逐消息数据热路径。
 
+
+## Ownership authority / Salts #878
+
+FlowMQ follows the ecosystem ownership split from Salts #878 without mapping
+message/session lifetime to lexical RAII.
+
+```text
+CMeta
+  DataDesc / FunctionDesc / ObjectRef
+  = native value/function/object ownership semantics
+
+CFlow
+  managed values/results
+  = canonical CMeta COPY/MOVE/DESTROY lifecycle
+  callable capture
+  = Graph-owned byte snapshot; transitive pointers/providers/code are borrowed
+
+DataBind generator/compiler
+  = decides where generated ownership moves and cleanup executes
+
+FlowMQ runtime
+  = message / peer / session / retained-send / owned-receive / CNet domain lifetime
+
+Plugin, if a future dynamic provider needs it
+  = explicit outer module/provider/code lease
+```
+
+The distinction is intentional. `flowmq_owned_stream_t`, retained multipart
+staging, retained PUB/XPUB publication references, peer generations, queues,
+credit/HWM state, reconnect deadlines, owner lanes, listeners and in-flight
+CNet operations are genuine asynchronous/protocol ownership. Their teardown is
+driven by completion, cancellation, retirement, close and owner quiescence, not
+by C lexical scope.
+
+Conversely, FlowMQ does not define a second native-value
+`OWNED/SHARED/BORROWED` model. Lifecycle-bearing values used by CFlow
+qualification are owned through the released CFlow/CMeta lifecycle surface.
+Generated DataBind request/response cleanup belongs to the DataBind compiler
+and canonical CMeta/provider lifecycle; FlowMQ consumes the generated
+ServicePlan/ChannelPlan boundary rather than interpreting cleanup plans at
+runtime.
+
+`cmeta_callable.capture` is treated as an immutable inline byte snapshot.
+Pointers, descriptors, providers or code reachable through those bytes remain
+borrowed external dependencies and must outlive every Graph/Plan use. Managed
+resources must not be hidden in capture bytes expecting automatic destruction.
+
+The production boundary remains direct C: `FlowMQ::FlowMQ` does not link
+CFlow, production message paths do not perform reflected-function lookup, and
+FlowMQ does not acquire a Plugin dependency merely for lifecycle abstraction.
+If a future Plugin-backed provider is added, its dependent descriptors,
+callables, ObjectRefs and managed values must die before the final explicit
+Plugin lease is released.
+
 ### CFlow ordering qualification
 
 FlowMQ 在 test/control plane 上用 CMeta exact-ABI Function 描述与 CFlow Graph 验证一条抽象
