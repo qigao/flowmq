@@ -2,6 +2,7 @@
 #include <cflow/effect.h>
 #include <cflow/function_projection.h>
 #include <cflow/lower.h>
+#include <cflow/meta.h>
 #include <cflow/opt.h>
 #include <cflow/plan.h>
 #include <cflow/verify.h>
@@ -12,6 +13,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 
 typedef struct flowmq_q_managed_value_s {
@@ -102,6 +104,16 @@ static const cmeta_type_desc flowmq_q_managed_type = {
 
 static void flowmq_q_managed_destroy_local(flowmq_q_managed_value *value) {
   flowmq_q_managed_destroy(value);
+}
+
+
+typedef struct flowmq_q_borrowed_capture_s {
+  int *increment;
+} flowmq_q_borrowed_capture;
+
+lambda1(map, value, long, flowmq_q_borrowed_add,
+        int, value, flowmq_q_borrowed_capture, capture) {
+  return (long)value + (long)*capture.increment;
 }
 
 enum {
@@ -384,6 +396,60 @@ spec("FlowMQ CFlow control-plane qualification") {
     cflow_plan_destroy(&plan);
     cflow_stream_destroy(&stream);
     check_equal(flowmq_q_managed_live, (size_t)0u);
+  }
+
+
+  it("owns callable capture bytes while borrowing transitive pointer identity") {
+    cflow_stream stream = {0};
+    cflow_graph clone = {0};
+    cflow_result result = {0};
+    flowmq_q_borrowed_capture original_capture = {0};
+    flowmq_q_borrowed_capture cloned_capture = {0};
+    int external_increment = 10;
+    const int input[] = {1, 2};
+    const long expected[] = {21L, 22L};
+    cflow_map_callable callable =
+        flowmq_q_borrowed_add(
+            (flowmq_q_borrowed_capture){&external_increment});
+    const cflow_node *source_node;
+    const cflow_node *clone_node;
+
+    clone.root = CMETA_INVALID_ID;
+    check_not_null(cflow_stream_init(&stream, &cmeta_type_int));
+    check_not_null(stream.map(&stream, callable));
+    check_true(cflow_graph_clone(&clone, &stream.graph));
+
+    source_node = cflow_subgraph_node(
+        cflow_graph_subgraph(&stream.graph, stream.graph.root), 1u);
+    clone_node = cflow_subgraph_node(
+        cflow_graph_subgraph(&clone, clone.root), 1u);
+    check_not_null(source_node);
+    check_not_null(clone_node);
+    check_equal(source_node->fn.capture_size,
+                sizeof(flowmq_q_borrowed_capture));
+    check_equal(clone_node->fn.capture_size,
+                sizeof(flowmq_q_borrowed_capture));
+    check_true(&source_node->fn.capture != &clone_node->fn.capture);
+
+    memcpy(&original_capture, source_node->fn.capture.bytes,
+           sizeof(original_capture));
+    memcpy(&cloned_capture, clone_node->fn.capture.bytes,
+           sizeof(cloned_capture));
+    check_true(original_capture.increment == &external_increment);
+    check_true(cloned_capture.increment == &external_increment);
+
+    external_increment = 20;
+    cflow_stream_destroy(&stream);
+    check_equal(external_increment, 20);
+
+    check_true(cflow_eval_array(&clone, input, 2u, &result));
+    check_equal(result.count, (size_t)2u);
+    check_true(cmeta_type_equal(result.type, &cmeta_type_long));
+    check_equal(result.data, expected, sizeof(expected));
+
+    cflow_result_destroy(&result);
+    cflow_graph_destroy(&clone);
+    check_equal(external_increment, 20);
   }
 
   it("projects the canonical send ordering with exact CMeta ABI adapters") {
