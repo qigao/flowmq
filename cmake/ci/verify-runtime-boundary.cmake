@@ -26,7 +26,7 @@ set(FLOWMQ_RUNTIME_FORBIDDEN_TOKENS
     "FunctionAbi"
     "cmeta_function_desc"
     "cmeta_function_abi_desc"
-    "cmeta_callable")
+    "cmeta_callable"\n    "cmeta_data_value_"\n    "cmeta_object_ref"\n    "salts_plugin_lease")
 
 foreach(_flowmq_runtime_file IN LISTS FLOWMQ_RUNTIME_BOUNDARY_FILES)
   file(READ "${_flowmq_runtime_file}" _flowmq_runtime_text)
@@ -41,8 +41,7 @@ foreach(_flowmq_runtime_file IN LISTS FLOWMQ_RUNTIME_BOUNDARY_FILES)
         "FlowMQ runtime boundary violation in ${_flowmq_runtime_rel}: "
         "forbidden execution/reflection token '${_flowmq_forbidden}'. "
         "CMeta Schema/Replay descriptors remain allowed, but CFlow execution "
-        "and reflected FunctionMeta/FunctionAbi/callable machinery are "
-        "control/test-plane only.")
+        "and reflected FunctionMeta/FunctionAbi/callable machinery are "\n        "control/test-plane only. Canonical native value/ObjectRef lifecycle "\n        "and Plugin lease machinery also stay outside the FlowMQ domain runtime; "\n        "message/session/CNet ownership remains FlowMQ-owned.")
     endif()
   endforeach()
 endforeach()
