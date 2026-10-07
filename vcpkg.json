@@ -3,6 +3,8 @@
   "version-semver": "1.0.0",
   "dependencies": [
     "boringssl",
+    "lua",
+    "quickjs-ng",
     {
       "name": "zeromq",
       "default-features": false

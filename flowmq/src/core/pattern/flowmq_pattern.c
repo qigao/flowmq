@@ -1,7 +1,7 @@
 #include "flowmq_pattern.h"
 #include "flowmq_security.h"
 
-#include "salts_error.h"
+#include "cmeta_error.h"
 
 int flowmq_pattern_validate(flowmq_protocol_pattern_t pattern) {
   if (pattern >= FLOWMQ_PROTOCOL_PUB && pattern <= FLOWMQ_PROTOCOL_XSUB) {

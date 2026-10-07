@@ -77,8 +77,8 @@ application message
   -> FMQ/6 encode into socket-owned reusable scratch
   -> multipart parts retained in bounded socket-owned staging until final
   -> complete message transferred to peer-owned fixed descriptor ring
-  -> single-part fast path may use direct cnet_send() when the peer is writable
-  -> coalesce queued frames into one bounded CNet write
+  -> single-part fast path admits a socket-owned buffer via cnet_send_buffer()
+  -> queued frames form bounded retained slices via cnet_send_slicev()
   -> later caller-driven cnet_client_poll()
 ```
 

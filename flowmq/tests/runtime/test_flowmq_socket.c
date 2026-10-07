@@ -1,7 +1,7 @@
 #include "flowmq_socket.h"
 #include "flowmq_tls_test_material.h"
 #include "tinytest.h"
-#include "salts_error.h"
+#include "cmeta_error.h"
 #include <salts/clock.h>
 
 #include <stddef.h>
@@ -12,6 +12,8 @@ enum {
   FLOWMQ_TEST_PROGRESS_LIMIT = 10000u,
   FLOWMQ_TEST_SEGMENTED_PAYLOAD_SIZE = 64u * 1024u + 37u,
   FLOWMQ_TEST_QUEUED_MESSAGES = 8u,
+  FLOWMQ_TEST_RETAINED_PARTS = 64u,
+  FLOWMQ_TEST_RETAINED_PART_SIZE = 16u,
   FLOWMQ_TEST_HEARTBEAT_IVL_MS = 20,
   FLOWMQ_TEST_HEARTBEAT_TIMEOUT_MS = 200,
   FLOWMQ_TEST_HEARTBEAT_ALIVE_OBSERVE_MS = 300,
@@ -30,6 +32,39 @@ static int progress_three(flowmq_socket_t *first, flowmq_socket_t *second,
       {.socket = first}, {.socket = second}, {.socket = third}};
   size_t ready = 0u;
   return flowmq_poll(items, 3u, 0u, &ready);
+}
+
+static void check_retained_multipart(flowmq_socket_t *sender, flowmq_socket_t *receiver) {
+  unsigned char payload[FLOWMQ_TEST_RETAINED_PART_SIZE];
+  unsigned char received[FLOWMQ_TEST_RETAINED_PART_SIZE];
+  size_t received_size = 0u;
+
+  /* One atomic multipart exceeds CNet's retained-vector limit and forces
+   * multiple writes while the caller repeatedly overwrites the same input. */
+  for (size_t part = 0u; part < FLOWMQ_TEST_RETAINED_PARTS; ++part) {
+    int flags = FLOWMQ_DONTWAIT;
+    if (part + 1u < FLOWMQ_TEST_RETAINED_PARTS) flags |= FLOWMQ_SNDMORE;
+    memset(payload, (int)(part + 1u), sizeof(payload));
+    check_equal(flowmq_send(sender, payload, sizeof(payload), flags), SALTS_OK);
+    memset(payload, 0, sizeof(payload));
+  }
+  for (size_t part = 0u; part < FLOWMQ_TEST_RETAINED_PARTS; ++part) {
+    int status = SALTS_EBUSY;
+    int more = 0;
+    size_t option_size = sizeof(more);
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(sender, receiver), SALTS_OK);
+      status = flowmq_recv(receiver, received, sizeof(received), &received_size,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    check_equal(received_size, sizeof(payload));
+    memset(payload, (int)(part + 1u), sizeof(payload));
+    check_equal(received, payload, sizeof(payload));
+    check_equal(flowmq_getsockopt(receiver, FLOWMQ_RCVMORE, &more, &option_size),
+                SALTS_OK);
+    check_equal(more, part + 1u < FLOWMQ_TEST_RETAINED_PARTS ? 1 : 0);
+  }
 }
 
 spec("flowmq_socket lifecycle and pattern surface") {
@@ -183,7 +218,7 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
-  it("preserves queued frame boundaries and order") {
+  it("preserves queued frame boundaries and order across retained multipart writes") {
     char endpoint[128] = {0};
     unsigned char payloads[FLOWMQ_TEST_QUEUED_MESSAGES][16] = {0};
     unsigned char received[16] = {0};
@@ -232,6 +267,8 @@ spec("flowmq_socket lifecycle and pattern surface") {
       check_equal(received_size, sizeof(payloads[message]));
       check_equal(memcmp(received, payloads[message], received_size), 0);
     }
+
+    check_retained_multipart(sender, receiver);
 
     check_equal(flowmq_close(sender), SALTS_OK);
     check_equal(flowmq_close(receiver), SALTS_OK);
@@ -568,11 +605,11 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_pollitem_t items[] = {{.socket = first, .events = FLOWMQ_POLLIN},
                                  {.socket = second, .events = FLOWMQ_POLLIN}};
     size_t ready = 0u;
-    uint64_t started_ms = salts_monotonic_ms();
+    uint64_t started_ms = cmeta_monotonic_ms();
 
     check_equal(flowmq_poll(items, 2u, 20u, &ready), SALTS_OK);
     check_equal(ready, 0u);
-    check_greater_equal(salts_monotonic_ms() - started_ms, UINT64_C(15));
+    check_greater_equal(cmeta_monotonic_ms() - started_ms, UINT64_C(15));
 
     check_equal(flowmq_close(first), SALTS_OK);
     check_equal(flowmq_close(second), SALTS_OK);
@@ -1011,6 +1048,7 @@ spec("flowmq_socket lifecycle and pattern surface") {
     size_t received_size = 0u;
     char *cert_path = tt_make_temp_file("flowmq-socket-cert", ".pem");
     char *key_path = tt_make_temp_file("flowmq-socket-key", ".pem");
+    char *ca_path = tt_make_temp_file("flowmq-socket-ca", ".pem");
     flowmq_ctx_t *ctx = flowmq_ctx_new();
     flowmq_socket_t *server = flowmq_socket(ctx, FLOWMQ_PAIR);
     flowmq_socket_t *client = flowmq_socket(ctx, FLOWMQ_PAIR);
@@ -1019,6 +1057,9 @@ spec("flowmq_socket lifecycle and pattern surface") {
 
     check_not_null(cert_path);
     check_not_null(key_path);
+    check_not_null(ca_path);
+    check_equal(tt_write_file(ca_path, FLOWMQ_TLS_TEST_CA,
+                              sizeof(FLOWMQ_TLS_TEST_CA) - 1u), 0);
     check_equal(tt_write_file(cert_path, FLOWMQ_TLS_TEST_CERTIFICATE,
                               sizeof(FLOWMQ_TLS_TEST_CERTIFICATE) - 1u), 0);
     check_equal(tt_write_file(key_path, FLOWMQ_TLS_TEST_KEY,
@@ -1027,8 +1068,8 @@ spec("flowmq_socket lifecycle and pattern surface") {
                                  strlen(cert_path)), SALTS_OK);
     check_equal(flowmq_setsockopt(server, FLOWMQ_TLS_KEY_FILE, key_path,
                                  strlen(key_path)), SALTS_OK);
-    check_equal(flowmq_setsockopt(client, FLOWMQ_TLS_CA_FILE, cert_path,
-                                 strlen(cert_path)), SALTS_OK);
+    check_equal(flowmq_setsockopt(client, FLOWMQ_TLS_CA_FILE, ca_path,
+                                 strlen(ca_path)), SALTS_OK);
     check_equal(flowmq_setsockopt(client, FLOWMQ_TLS_SERVER_NAME, "localhost",
                                  strlen("localhost")), SALTS_OK);
     check_equal(flowmq_setsockopt(client, FLOWMQ_RECONNECT_IVL,
@@ -1057,6 +1098,8 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(received_size, sizeof(payload) - 1u);
     check_equal(memcmp(received, payload, received_size), 0);
 
+    check_retained_multipart(client, server);
+
     check_equal(flowmq_close(server), SALTS_OK);
     server = flowmq_socket(ctx, FLOWMQ_PAIR);
     check_not_null(server);
@@ -1083,8 +1126,10 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_ctx_term(ctx), SALTS_OK);
     check_equal(tt_remove_file(cert_path), 0);
     check_equal(tt_remove_file(key_path), 0);
+    check_equal(tt_remove_file(ca_path), 0);
     free(cert_path);
     free(key_path);
+    free(ca_path);
   }
 
   it("leaves TLS options mutable after bind rejects missing server credentials") {

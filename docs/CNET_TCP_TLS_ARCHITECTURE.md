@@ -22,6 +22,14 @@ thread，也不把同一个 socket 变成 MPSC consumer。`bind`、`connect`、`
 - CFlow/CMeta 可用于控制面配置、类型描述和 executor 组合，不进入逐消息 TCP/TLS
   热路径。
 
+多核应用可为每个 worker 创建独立 context/socket，由各线程自行推进 CNet。
+可运行的 [REQ/REP 示例](../examples/multicore_reqrep.c) 使用主线程的一组 REQ
+连接独立 worker REP endpoint；主线程必须统一推进全部客户端 socket，不能把
+`send` admission 当作已发到网络。endpoint 在启动锁下发布，消息经 TCP 传递，
+仅停止标志和首个错误通过 atomic 共享。客户端确认收齐全部应答后发出停止信号，
+worker 保持最后一条应答的进度直到该信号，再在各自 owner 上销毁资源。
+因此不改变 socket 单 owner 契约，也不要求为 FlowMQ 增加隐藏 progress thread。
+
 ## ZeroMQ 模式契约
 
 TCP/TLS 第一阶段承载以下经典 socket 模式；bind/connect 方向不决定 pattern：
@@ -62,21 +70,25 @@ readiness/wait-set，可替换该等待策略以降低空闲唤醒延迟，但�
 ## 发送内存与所有权
 
 `flowmq_send` 使用 FMQ/6 分段编码：协议头写入 socket 自有的有界 framing storage，payload
-只在本次普通函数调用期间借用。`cnet_sendv` 校验分段总长，并在成功返回前按顺序复制到
-CNet 已有的固定 command slot；因此调用者可在 `flowmq_send` 返回后立即修改或释放输入。
-一次 frame 最多 16 个 packet、32 个 segment；排队 flush 最多引用 1024 个已持有 frame，
-并受同一个 `max_encoded_size` 总字节上限约束。
+只在本次普通函数调用期间借用。分段数据在返回前复制到 socket 内存池的 `mem_buffer_t`，
+因此调用者可在 `flowmq_send` 返回后立即修改或释放输入。立即发送通过 `cnet_send_buffer`
+提交，排队 flush 使用 `mem_slice` 与 `cnet_send_slicev`，CNet 接受后保留不可变 backing buffer
+的引用，不再把已排队 payload 平铺复制进 command slot。
 
-立即发送的数据路径从 `payload -> FlowMQ 1MiB scratch -> CNet slot` 缩短为
-`payload -> CNet slot`，payload copy 从两次减为一次。需要排队的完整 frame 只平铺一次到
-其 `mem_buffer_t`；flush 时这些 buffer 直接组成一个 CNet vector，所以排队路径从四次
-payload copy 减为两次。原来的每 socket 约 1MiB 连续 scratch allocation 已删除，替换为
-固定 framing 和 descriptor storage。
+一次 frame 最多 16 个 packet、32 个编码 segment。peer FIFO 仍有 1024 个 frame 槽位，
+每次 flush 受 `CNET_RETAINED_VECTOR_MAX`（当前为 32）与 `max_encoded_size` 双重上限约束，
+剩余 frame 在前一批完成后继续提交。批处理只改变内部写入边界，不改变消息顺序或 multipart
+原子性。编码复制的时间复杂度为 O(encoded bytes)，flush 的描述符处理为 O(batch frames)。
 
-这不是跨 poll 的 borrowed-send，也不改变完成语义。CNet command slot 在 TCP NativeIO 写入
-完成前保持有效；TLS 还必须让 OpenSSL 接受连续 plaintext 并刷出 ciphertext。因此 owner、
-NativeIO 与 TLS 状态机仍使用连续内部 storage，且本次改动没有把用户 buffer 生命周期扩展到
-网络完成。admission 失败时 peer credit/HWM 状态不提交，排队 buffer 仍由原 owner 持有。
+缓冲区内容是发送字节的唯一事实源；完成前不可修改。临时 slice 在 admission 后释放，
+成功时 FIFO 释放自身引用，CNet 在完成或取消后释放最终引用；失败时 FIFO、credit/HWM
+保持原状。socket owner 单线程推进，保持每 peer 一次在途逻辑写入。TCP 使用 retained
+scatter/gather，TLS 仍需加密并发送 ciphertext，不承诺 TLS 网络路径零拷贝。
+`flowmq_close` 必须先停止并销毁 CNet client，再销毁 message pool。
+
+此迁移要求重新构建消费者；公开 socket API、FMQ/6 数据格式与错误语义保持不变。
+验证覆盖 TCP/TLS 下 64-part multipart、发送后输入覆写、队列顺序、HWM、重连和关闭；
+批次上限变化的吞吐影响尚需专项 benchmark，不据此宣称性能提升。
 
 ## TLS
 

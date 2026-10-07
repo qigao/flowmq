@@ -1,8 +1,8 @@
 #include "flowmq_protocol.h"
 #include "flowmq_security.h"
 
-#include "salts_error.h"
-#include "salts_str.h"
+#include "cmeta_error.h"
+#include "str.h"
 
 #include <stdio.h>
 #include <string.h>

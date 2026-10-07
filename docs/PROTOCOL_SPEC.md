@@ -48,5 +48,6 @@ transport extension、relaxed ESB decoder 和 `FMS/1` media 旧称均不属于�
   durable broker。
 - reconnect policy 与 receive-side heartbeat deadline 已由 socket facade 配置和调用；
   endpoint 断线后会在后续 caller progress 中创建全新 peer session。socket runtime 使用
-  segmented frame encoder 与 `cnet_sendv()` 提交 framing/payload ranges；descriptor 仅在同步
-  admission 调用期间借用，CNet 在返回成功前按顺序复制进一个有界 command slot。
+  segmented frame encoder 将 framing/payload 复制到 socket 自有 buffer，再通过
+  `cnet_send_buffer()` 或 `cnet_send_slicev()` 提交；CNet 保留 backing buffer 引用直到完成，
+  调用者输入只在 `flowmq_send()` 调用期间借用。

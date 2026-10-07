@@ -48,24 +48,32 @@ foreach(_flowmq_dependency_root IN ITEMS SALTS_ROOT SALTS_UTILS_ROOT)
   endif()
 endforeach()
 
+# Resolve the configured SDK anew after restore, never a previous cached root.
+unset(Salts_DIR CACHE)
+unset(Salts_DIR)
+unset(SaltsUtils_DIR CACHE)
+unset(SaltsUtils_DIR)
 find_package(
   Salts CONFIG REQUIRED
   PATHS "${FLOWMQ_SALTS_ROOT_PATH}"
-  NO_DEFAULT_PATH)
+  NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+# The baseline's vcpkg Lua wrapper only sets LUA_FOUND. Use CMake's module to
+# publish Lua_FOUND as required by the SaltsUtils dependency contract.
+include(FindLua)
 find_package(
   SaltsUtils CONFIG REQUIRED
   PATHS "${FLOWMQ_SALTS_UTILS_ROOT_PATH}"
-  NO_DEFAULT_PATH)
+  NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 find_package(OpenSSL CONFIG REQUIRED)
 
-unset(FLOWMQ_TBE_COMPILER_EXECUTABLE)
-unset(FLOWMQ_TBE_COMPILER_EXECUTABLE CACHE)
-find_program(FLOWMQ_TBE_COMPILER_EXECUTABLE NAMES tbe_compiler
+unset(FLOWMQ_IDLC_EXECUTABLE)
+unset(FLOWMQ_IDLC_EXECUTABLE CACHE)
+find_program(FLOWMQ_IDLC_EXECUTABLE NAMES salts-idlc
              PATHS "${FLOWMQ_SALTS_UTILS_ROOT_PATH}/bin"
-             NO_DEFAULT_PATH)
-if(NOT FLOWMQ_TBE_COMPILER_EXECUTABLE)
+             NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+if(NOT FLOWMQ_IDLC_EXECUTABLE)
   message(FATAL_ERROR
-    "FlowMQ media-provider contract requires the SaltsUtils tbe_compiler")
+    "FlowMQ media-provider contract requires the SaltsUtils salts-idlc")
 endif()
 
 set(FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS
@@ -122,7 +130,7 @@ target_include_directories(
           ${CMAKE_CURRENT_SOURCE_DIR}/flowmq/src/core/session
           ${CMAKE_CURRENT_SOURCE_DIR}/flowmq/src/transport/cnet)
 target_link_libraries(flowmq
-                      PUBLIC Salts::Core Salts::TbeSchema
+                      PUBLIC Salts::Core Salts::Schema
                       PRIVATE Salts::CSTL Salts::CMeta Salts::CNet)
 if(TARGET flowmq_media_provider_codegen)
   add_dependencies(flowmq flowmq_media_provider_codegen)

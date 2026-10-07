@@ -16,10 +16,16 @@ if(NOT DEFINED ENV{SALTS_UTILS_ROOT} OR "$ENV{SALTS_UTILS_ROOT}" STREQUAL "")
 endif()
 file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" FLOWMQ_SALTS_ROOT_PATH)
 file(TO_CMAKE_PATH "$ENV{SALTS_UTILS_ROOT}" FLOWMQ_SALTS_UTILS_ROOT_PATH)
+unset(Salts_DIR CACHE)
+unset(Salts_DIR)
+unset(SaltsUtils_DIR CACHE)
+unset(SaltsUtils_DIR)
 find_dependency(Salts CONFIG REQUIRED PATHS "${FLOWMQ_SALTS_ROOT_PATH}"
-                NO_DEFAULT_PATH)
+                NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+# Publish Lua_FOUND for the baseline vcpkg wrapper used by SaltsUtils.
+include(FindLua)
 find_dependency(SaltsUtils CONFIG REQUIRED PATHS "${FLOWMQ_SALTS_UTILS_ROOT_PATH}"
-                NO_DEFAULT_PATH)
+                NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 
 include("${CMAKE_CURRENT_LIST_DIR}/FlowMQTargets.cmake")
 

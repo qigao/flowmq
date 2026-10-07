@@ -1,6 +1,6 @@
 #include "flowmq_reconnect.h"
 #include "tinytest.h"
-#include "salts_error.h"
+#include "cmeta_error.h"
 
 spec("flowmq_reconnect") {
   it("grows bounded backoff and resets only after success") {
