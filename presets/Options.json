@@ -5,7 +5,9 @@
             "name": "default-options",
             "hidden": true,
             "cacheVariables": {
-                "BUILD_TESTS": true
+                "ENABLE_CLANG_TIDY_DEFAULT": false,
+                "ENABLE_CPPCHECK_DEFAULT": false,
+                "ENABLE_TESTS": true
             }
         },
         {
@@ -18,7 +20,6 @@
         {
             "name": "pkg-vcpkg",
             "hidden": true,
-            "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
             "cacheVariables": {
                 "VCPKG_MANIFEST_MODE": true
             }
@@ -27,14 +28,14 @@
             "name": "cppcheck",
             "hidden": true,
             "cacheVariables": {
-                "CMAKE_C_CPPCHECK": "cppcheck;--inline-suppr"
+                "CMAKE_CXX_CPPCHECK": "cppcheck;--inline-suppr"
             }
         },
         {
             "name": "clang-tidy",
             "hidden": true,
             "cacheVariables": {
-                "CMAKE_C_CLANG_TIDY": "clang-tidy;--header-filter=^${sourceDir}/"
+                "CMAKE_CXX_CLANG_TIDY": "clang-tidy;--header-filter=^${sourceDir}/"
             }
         },
         {
@@ -42,8 +43,8 @@
             "hidden": true,
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug",
-                "ENABLE_ASAN": true,
-                "BUILD_TESTS": true
+                "ENABLE_SANITIZER_ADDRESS": true,
+                "ENABLE_TESTS": true
             },
             "inherits": [
                 "default-options"
@@ -54,7 +55,7 @@
             "hidden": true,
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release",
-                "BUILD_TESTS": true
+                "ENABLE_TESTS": false
             },
             "inherits": [
                 "default-options"

@@ -2,6 +2,7 @@
   "version": 6,
   "include": [
     "ConfigurePresets.json",
+    "AndroidPresets.json",
     "Platforms.json"
   ],
   "buildPresets": [
@@ -34,6 +35,12 @@
       "displayName": "Build (Default, Mac)",
       "inherits": "ISMac",
       "configurePreset": "release-mac-ninja"
+    },
+    {
+      "name": "build-android-arm64-v8a-release",
+      "displayName": "Build (Android arm64-v8a Release)",
+      "inherits": "ISLinux",
+      "configurePreset": "android-arm64-v8a-release"
     }
   ]
 }
