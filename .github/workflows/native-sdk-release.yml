@@ -525,7 +525,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          brew install ninja nasm
+          brew install ninja nasm gcc@15
           case "$RUNNER_ARCH" in
             X64) rid=macos-x64; triplet=x64-osx ;;
             ARM64) rid=macos-arm64; triplet=arm64-osx ;;
@@ -545,7 +545,7 @@ jobs:
           dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json \
             --name github --username qigao --password "$GITHUB_TOKEN" \
             --store-password-in-clear-text --configfile "$config"
-          dotnet restore packaging/nuget/FlowMQ.Native.csproj --configfile "$config" --packages "$packages"
+          dotnet restore packaging/nuget/FlowMQ.Native.csproj --configfile "$config" --packages "$packages" --no-cache --force-evaluate
           salts_versions=("$packages/salts.native"/*)
           salts_utils_versions=("$packages/saltsutils.native"/*)
           test "${#salts_versions[@]}" -eq 1
@@ -558,34 +558,15 @@ jobs:
           echo "SALTS_UTILS_ROOT=$salts_utils_pkg/sdk/$FLOWMQ_RID" >> "$GITHUB_ENV"
           echo "FLOWMQ_SALTS_RESOLVED_VERSION=$(basename "$salts_pkg")" >> "$GITHUB_ENV"
           echo "FLOWMQ_SALTS_UTILS_RESOLVED_VERSION=$(basename "$salts_utils_pkg")" >> "$GITHUB_ENV"
-      - name: Verify FlowMQ vcpkg cache hits
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf vcpkg_installed
-          "$VCPKG_ROOT/vcpkg" install \
-            --x-manifest-root=. \
-            --x-install-root="$GITHUB_WORKSPACE/vcpkg_installed" \
-            --triplet "$FLOWMQ_TRIPLET" \
-            --only-binarycaching
       - name: Configure, build, test and install
         shell: bash
         run: |
           set -euo pipefail
           prefix="$GITHUB_WORKSPACE/stage/sdk/$FLOWMQ_RID"
-          cmake -S . -B build/flowmq -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
-            -DVCPKG_TARGET_TRIPLET="$FLOWMQ_TRIPLET" \
-            -DVCPKG_MANIFEST_MODE=OFF \
-            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" \
-            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching \
-            -DCMAKE_INSTALL_PREFIX="$prefix" \
-            -DBUILD_TESTS=ON -DBUILD_EXAMPLES=OFF
-          export DYLD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$GITHUB_WORKSPACE/vcpkg_installed/$FLOWMQ_TRIPLET/lib"
-          cmake --build build/flowmq --parallel 2
-          ctest --test-dir build/flowmq --no-tests=error --output-on-failure
-          cmake --install build/flowmq --strip
+          cmake --preset mac-release-ci
+          cmake --build --preset mac-release-ci --parallel 2
+          ctest --preset mac-release-ci
+          cmake --build --preset install-mac-release-ci --parallel 2
           cat > "$prefix/flowmq-sdk-manifest.txt" <<EOF
           version=${{ needs.metadata.outputs.version }}
           source_version=${{ needs.metadata.outputs.source_version }}

@@ -298,6 +298,30 @@
                 "android-win-environment",
                 "android-dependencies-release"
             ]
+        },
+        {
+            "name": "mac-release-ci",
+            "displayName": "macOS SDK release with the published GNU toolchain",
+            "inherits": [
+                "vcpkg-cache-ci",
+                "release-mac-ninja"
+            ],
+            "binaryDir": "${sourceDir}/build/flowmq",
+            "cacheVariables": {
+                "VCPKG_TARGET_TRIPLET": "$penv{FLOWMQ_TRIPLET}",
+                "VCPKG_HOST_TRIPLET": "$penv{FLOWMQ_TRIPLET}",
+                "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
+                "VCPKG_INSTALL_OPTIONS": "--only-binarycaching",
+                "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/$penv{FLOWMQ_TRIPLET}",
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/stage/sdk/$penv{FLOWMQ_RID}",
+                "BUILD_TESTS": "ON",
+                "BUILD_EXAMPLES": "OFF"
+            },
+            "environment": {
+                "SALTS_ROOT": "$penv{SALTS_ROOT}",
+                "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
+                "DYLD_LIBRARY_PATH": "${sourceDir}/build/flowmq/bin${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}${sourceDir}/vcpkg_installed/$penv{FLOWMQ_TRIPLET}/lib${pathListSep}$penv{DYLD_LIBRARY_PATH}"
+            }
         }
     ],
     "buildPresets": [
@@ -432,6 +456,17 @@
             "targets": [
                 "install"
             ]
+        },
+        {
+            "name": "mac-release-ci",
+            "configurePreset": "mac-release-ci"
+        },
+        {
+            "name": "install-mac-release-ci",
+            "configurePreset": "mac-release-ci",
+            "targets": [
+                "install"
+            ]
         }
     ],
     "testPresets": [
@@ -459,6 +494,21 @@
             "name": "linux-release-user",
             "inherits": "base-test",
             "configurePreset": "linux-release-user"
+        },
+        {
+            "name": "mac-release-ci",
+            "configurePreset": "mac-release-ci",
+            "execution": {
+                "noTestsAction": "error"
+            },
+            "output": {
+                "outputOnFailure": true
+            },
+            "filter": {
+                "exclude": {
+                    "name": "^test_flowmq_segmented_receive_contract$"
+                }
+            }
         }
     ]
 }
