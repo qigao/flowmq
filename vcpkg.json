@@ -1,6 +1,6 @@
 {
   "name": "flowmq",
-  "version-semver": "1.2.0",
+  "version-semver": "1.2.1",
   "dependencies": [
     {
       "name": "zeromq",
