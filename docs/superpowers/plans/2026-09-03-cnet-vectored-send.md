@@ -8,7 +8,7 @@
 
 **Architecture:** Keep NativeIO, coroutine ownership, TCP/TLS completion, and the one-write-per-connection state machine unchanged. `cnet_sendv()` borrows non-empty segments only during the call, validates their checked total, and copies them in order directly into the existing final command slot. FlowMQ encodes FMQ/6 headers into bounded reusable framing storage, borrows the application payload as protocol segments, and either sends those segments immediately or flattens them once into an already-required outbound `mem_buffer_t`. Queued frames are submitted to CNet as one vector, so the old batch scratch concatenation disappears.
 
-**Tech stack:** C11, Rocida CNet/NativeIO, TurboUtils retained buffers, TinyTest, CMake presets, FMQ/6, OpenSSL-backed CNet TLS.
+**Tech stack:** C11, Rocida CNet/NativeIO, TurboUtils retained buffers, TinyTest, CMake presets, FMQ/6, Salts SDK-managed CNet TLS.
 
 ## Global Constraints
 

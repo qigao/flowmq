@@ -25,6 +25,10 @@ FlowMQ 是 C11 的 pattern-oriented messaging library。它提供 FMQ/6 wire cod
 `Salts::CSTL` 和 `Salts::CMeta` 都是实现私有依赖。FMP/1 保持现有 header-only wire view/builder ABI，
 但生成入口统一使用 DataBind `salts-idlc`，不再依赖已废止的 TBE producer target/tool。
 
+BoringSSL 已退出 FlowMQ 的依赖与链接配置。TLS 提供者由发布的 Salts SDK 管理，
+FlowMQ 通过 `Salts::CNet` 使用 TCP/TLS；manifest 只声明 `zeromq`，证书及主机名
+校验继续由 CNet 负责。
+
 ## Caller-driven transport
 
 旧的 callback endpoint API 已删除。普通 socket 保留 ZeroMQ 风格的
