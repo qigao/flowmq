@@ -35,6 +35,10 @@ void flowmq_stream_decoder_destroy_sensitive(flowmq_stream_decoder_t *stream) {
   flowmq_stream_decoder_destroy(stream);
 }
 
+size_t flowmq_stream_decoder_size(const flowmq_stream_decoder_t *stream) {
+  return stream && stream->initialized ? cmeta_bytes_size(&stream->buffer) : 0u;
+}
+
 size_t flowmq_stream_decoder_available(const flowmq_stream_decoder_t *stream) {
   return stream && stream->initialized ? cmeta_bytes_available(&stream->buffer) : 0u;
 }

@@ -1,3 +1,52 @@
+# DataBind FlowMQ transport plans are generated only for qualification. Reuse
+# the exact host compiler already resolved by the top-level cross-platform
+# build so Android never attempts to execute a target salts-idlc.
+set(SaltsUtils_IDLC_EXECUTABLE
+    "${FLOWMQ_SALTS_IDLC_EXECUTABLE}"
+    CACHE FILEPATH "FlowMQ qualification host salts-idlc" FORCE)
+set(SaltsUtils_IDLC_HOST_SALTS_ROOT
+    "${FLOWMQ_SALTS_HOST_ROOT_PATH}"
+    CACHE PATH "FlowMQ qualification host Salts SDK" FORCE)
+
+salts_idl_target(
+  TARGET flowmq_databind_channel_fixture
+  IDL "${CMAKE_CURRENT_SOURCE_DIR}/databind/channel.schema"
+  ARTIFACT_NAME "flowmq_contract_channel"
+  TRANSPORTS FLOWMQ
+  PROJECTION_CONFIG
+    "${CMAKE_CURRENT_SOURCE_DIR}/databind/channel_config.json")
+
+salts_idl_target(
+  TARGET flowmq_databind_service_fixture
+  IDL "${CMAKE_CURRENT_SOURCE_DIR}/databind/service.schema"
+  ARTIFACT_NAME "flowmq_contract_service"
+  TRANSPORTS FLOWMQ
+  PROJECTION_CONFIG
+    "${CMAKE_CURRENT_SOURCE_DIR}/databind/service_config.json")
+
+add_executable(
+  test_flowmq_databind_projection
+  "${CMAKE_CURRENT_SOURCE_DIR}/databind/test_flowmq_databind_projection.c")
+target_compile_features(test_flowmq_databind_projection PRIVATE c_std_11)
+target_link_libraries(
+  test_flowmq_databind_projection
+  PRIVATE FlowMQ::FlowMQ
+          Salts::DataBind
+          ${flowmq_databind_channel_fixture_NATIVE_TARGET}
+          ${flowmq_databind_service_fixture_NATIVE_TARGET}
+          Salts::TinyTest)
+target_include_directories(
+  test_flowmq_databind_projection
+  PRIVATE "${flowmq_databind_channel_fixture_GENERATED_DIR}"
+          "${flowmq_databind_service_fixture_GENERATED_DIR}")
+add_dependencies(
+  test_flowmq_databind_projection
+  flowmq_databind_channel_fixture_idl_codegen
+  flowmq_databind_service_fixture_idl_codegen)
+add_test(
+  NAME test_flowmq_databind_projection
+  COMMAND test_flowmq_databind_projection)
+
 cmake_add_test(
   test_flowmq_protocol
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/protocol/test_flowmq_protocol.c
@@ -50,6 +99,43 @@ cmake_add_test(
   test_flowmq_socket
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/test_flowmq_socket.c
   LIBS FlowMQ::Transport Salts::TinyTest
+  INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/runtime
+  FOLDER "flowmq/tests/runtime")
+
+cmake_add_test(
+  test_flowmq_owned_stream
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/test_flowmq_owned_stream.c
+  LIBS FlowMQ::Transport Salts::TinyTest
+  INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/runtime
+           ${PROJECT_SOURCE_DIR}/flowmq/src/protocol
+           ${PROJECT_SOURCE_DIR}/flowmq/src/protocol/stream
+  FOLDER "flowmq/tests/runtime")
+
+add_test(
+  NAME test_flowmq_segmented_receive_contract
+  COMMAND ${CMAKE_COMMAND}
+          "-DFLOWMQ_SOCKET_SOURCE=${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_socket.c"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/runtime/flowmq_segmented_receive_contract_test.cmake")
+
+cmake_add_test(
+  test_flowmq_owner
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/test_flowmq_owner.c
+  LIBS FlowMQ::Transport Salts::TinyTest
+  FOLDER "flowmq/tests/runtime")
+
+cmake_add_test(
+  test_flowmq_socket_option
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/test_flowmq_socket_option.c
+  LIBS FlowMQ::Transport Salts::TinyTest
+  INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/runtime
+           ${PROJECT_SOURCE_DIR}/flowmq/src/core/pattern
+  FOLDER "flowmq/tests/runtime")
+
+cmake_add_test(
+  test_flowmq_peer_state
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/test_flowmq_peer_state.c
+  LIBS FlowMQ::Transport Salts::TinyTest
+  INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/runtime
   FOLDER "flowmq/tests/runtime")
 
 cmake_add_test(
@@ -79,7 +165,12 @@ set(FLOWMQ_CORE_TESTS
     test_flowmq_tls_identity_map)
 set(FLOWMQ_TRANSPORT_TESTS
     test_flowmq_transport
-    test_flowmq_socket)
+    test_flowmq_socket
+    test_flowmq_owned_stream
+    test_flowmq_segmented_receive_contract
+    test_flowmq_owner
+    test_flowmq_socket_option
+    test_flowmq_peer_state)
 
 set_tests_properties(test_flowmq_protocol
                      PROPERTIES LABELS "fmq-release;flowmq-protocol")
@@ -93,6 +184,8 @@ set_tests_properties(${FLOWMQ_TRANSPORT_TESTS}
                      PROPERTIES LABELS "flowmq;flowmq-transport")
 set_tests_properties(test_flowmq_media_provider_schema
                      PROPERTIES LABELS "flowmq;flowmq-application")
+set_tests_properties(test_flowmq_databind_projection
+                     PROPERTIES LABELS "flowmq;flowmq-application;flowmq-databind")
 
 if(WIN32)
   set_tests_properties(
@@ -100,6 +193,7 @@ if(WIN32)
     ${FLOWMQ_CORE_TESTS}
     ${FLOWMQ_TRANSPORT_TESTS}
     test_flowmq_media_provider_schema
+    test_flowmq_databind_projection
     PROPERTIES ENVIRONMENT_MODIFICATION
                "${FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS}")
 endif()

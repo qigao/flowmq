@@ -12,6 +12,7 @@ spec("flowmq_stream_decoder") {
     tstr encoded = NULL;
     size_t consumed = 0u;
     size_t split;
+    size_t initial_available;
 
     memset(&stream, 0, sizeof(stream));
     memset(&input, 0, sizeof(input));
@@ -22,9 +23,15 @@ spec("flowmq_stream_decoder") {
     input.payload = vstr_from_cstr("accepted");
     check_equal(flowmq_protocol_encode_frame(&input, 1024u, &encoded), SALTS_OK);
     check_equal(flowmq_stream_decoder_prepare(&stream, 1024u), SALTS_OK);
+    initial_available = flowmq_stream_decoder_available(&stream);
+    check_equal(flowmq_stream_decoder_size(&stream), 0u);
+    check_true(initial_available >= tstr_len(encoded));
 
     split = FLOWMQ_PROTOCOL_HEADER_SIZE - 1u;
     check_equal(flowmq_stream_decoder_append(&stream, encoded, split), SALTS_OK);
+    check_equal(flowmq_stream_decoder_size(&stream), split);
+    check_equal(flowmq_stream_decoder_available(&stream),
+                initial_available - split);
     check_equal(flowmq_stream_decoder_next(&stream, &output, &consumed),
                  FLOWMQ_PROTOCOL_INCOMPLETE);
     check_equal(flowmq_stream_decoder_append(&stream, encoded + split, tstr_len(encoded) - split),
@@ -36,6 +43,8 @@ spec("flowmq_stream_decoder") {
     check_equal(output.payload.len, 8u);
     check_equal(output.payload.data, "accepted", 8u);
     check_equal(flowmq_stream_decoder_consume(&stream, consumed), SALTS_OK);
+    check_equal(flowmq_stream_decoder_size(&stream), 0u);
+    check_equal(flowmq_stream_decoder_available(&stream), initial_available);
 
     flowmq_protocol_frame_cleanup(&output);
     flowmq_stream_decoder_destroy(&stream);

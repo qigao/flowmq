@@ -11,7 +11,7 @@
 - `flowmq/src/security`：TLS principal/identity policy。
 - `flowmq/extensions/media_provider`：FMP/1 schema、header-only wire binding 与 view validator。
 - 唯一安装 target：`FlowMQ::FlowMQ`。
-- 公开链接依赖：`Salts::Core`、`Salts::Schema`。
+- 公开链接依赖：`Salts::Core`、`Salts::DataBind`。
 - 私有实现依赖：`Salts::CSTL`、`Salts::CMeta`、`Salts::CNet` 与 TLS backend。
 
 旧 callback endpoint 已删除。新的公开网络边界是 ZeroMQ 风格 socket facade；CNet 由调用

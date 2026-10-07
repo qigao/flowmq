@@ -52,6 +52,67 @@ cmake_add_benchmark(
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_socket.c
   LIBS FlowMQ::Transport Salts::TinyTest
   FOLDER "flowmq/benchmarks/runtime")
+target_include_directories(
+  bench_flowmq_socket
+  PRIVATE ${PROJECT_SOURCE_DIR}/flowmq/tests/runtime)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  find_package(Threads REQUIRED)
+  cmake_add_benchmark(
+    bench_flowmq_owner_parallel
+    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_owner_parallel.c
+    LIBS FlowMQ::Transport Threads::Threads
+    FOLDER "flowmq/benchmarks/runtime")
+  set_target_properties(
+    bench_flowmq_owner_parallel
+    PROPERTIES
+      C_STANDARD 11
+      C_STANDARD_REQUIRED ON
+      C_EXTENSIONS OFF)
+
+  cmake_add_benchmark(
+    bench_flowmq_owner_shared_wait
+    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_owner_shared_wait.c
+    LIBS FlowMQ::Transport Threads::Threads
+    FOLDER "flowmq/benchmarks/runtime")
+  set_target_properties(
+    bench_flowmq_owner_shared_wait
+    PROPERTIES
+      C_STANDARD 11
+      C_STANDARD_REQUIRED ON
+      C_EXTENSIONS OFF)
+
+  cmake_add_benchmark(
+    bench_flowmq_reuse_port_multicore
+    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_reuse_port_multicore.c
+    LIBS FlowMQ::Transport Threads::Threads
+    FOLDER "flowmq/benchmarks/runtime")
+  set_target_properties(
+    bench_flowmq_reuse_port_multicore
+    PROPERTIES
+      C_STANDARD 11
+      C_STANDARD_REQUIRED ON
+      C_EXTENSIONS OFF)
+endif()
+
+cmake_add_benchmark(
+  bench_flowmq_retained_fanout
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_retained_fanout.c
+  LIBS FlowMQ::Transport
+  FOLDER "flowmq/benchmarks/runtime")
+
+cmake_add_benchmark(
+  bench_flowmq_pattern_dispatch
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_pattern_dispatch.c
+  LIBS FlowMQ::Transport Salts::TinyTest
+  FOLDER "flowmq/benchmarks/runtime")
+
+cmake_add_benchmark(
+  bench_flowmq_dispatch_policy
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_dispatch_policy.c
+  LIBS FlowMQ::Core Salts::TinyTest
+  INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/core/pattern
+  FOLDER "flowmq/benchmarks/runtime")
 
 if(FLOWMQ_BUILD_ZMQ_BENCHMARK)
   find_package(ZeroMQ CONFIG REQUIRED)

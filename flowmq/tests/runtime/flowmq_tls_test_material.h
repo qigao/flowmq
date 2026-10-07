@@ -1,11 +1,7 @@
 #ifndef FLOWMQ_TLS_TEST_MATERIAL_H
 #define FLOWMQ_TLS_TEST_MATERIAL_H
 
-/* Public test-only CA and localhost leaf from Salts cnet/tests/fixtures/ip-test-*.pem.
- * Separate trust and leaf roles satisfy strict certificate-chain validation.
- * Valid 2026-10-03 through 2036-09-30; replace these fixtures before expiry. */
-
-static const char FLOWMQ_TLS_TEST_CA[] =
+static const char FLOWMQ_TLS_TEST_ROOT_CA[] =
     "-----BEGIN CERTIFICATE-----\n"
     "MIIDKTCCAhGgAwIBAgIUbs1diwVI1Gd8OIjlSLWeKPtZ3KEwDQYJKoZIhvcNAQEL\n"
     "BQAwHDEaMBgGA1UEAwwRQ05ldCBJUCBUZXN0IFJvb3QwHhcNMjYxMDAzMDUwNDQ1\n"
@@ -77,5 +73,8 @@ static const char FLOWMQ_TLS_TEST_KEY[] =
     "NuNtjEj4cwvkGN8pYNOUIQGNRWPEtQ4gul04xFq+JyN58E1qqpM6QmfgTONkt40u\n"
     "W9gs2BDdZkU8rOaNaziJxgw=\n"
     "-----END PRIVATE KEY-----\n";
+
+#define FLOWMQ_TLS_TEST_CERTIFICATE_SHA256 \
+  "e5bbec0e499dc100dbc2414e7a09c687e0efbe473816262c16ac85d1d7b671da"
 
 #endif /* FLOWMQ_TLS_TEST_MATERIAL_H */

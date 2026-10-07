@@ -1,5 +1,5 @@
-#include "flowmq_bench_metrics.h"
 #include "flowmq_socket.h"
+#include "flowmq_bench_metrics.h"
 #include "flowmq_tls_test_material.h"
 #include "tinytest.h"
 #include <salts/clock.h>
@@ -379,7 +379,7 @@ spec("FlowMQ independent owners") {
     check_not_null(files.ca);
     check_not_null(files.cert);
     check_not_null(files.key);
-    check_equal(tt_write_file(files.ca, FLOWMQ_TLS_TEST_CA, sizeof(FLOWMQ_TLS_TEST_CA) - 1u), 0);
+    check_equal(tt_write_file(files.ca, FLOWMQ_TLS_TEST_ROOT_CA, sizeof(FLOWMQ_TLS_TEST_ROOT_CA) - 1u), 0);
     check_equal(tt_write_file(files.cert, FLOWMQ_TLS_TEST_CERTIFICATE,
                               sizeof(FLOWMQ_TLS_TEST_CERTIFICATE) - 1u),
                 0);

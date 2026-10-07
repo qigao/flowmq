@@ -499,53 +499,15 @@ void flowmq_protocol_segmented_frame_cleanup(flowmq_protocol_segmented_frame_t *
   *frame = (flowmq_protocol_segmented_frame_t)FLOWMQ_PROTOCOL_SEGMENTED_FRAME_INIT;
 }
 
-typedef struct flowmq_protocol_packet_s {
-  flowmq_protocol_frame_kind_t kind;
-  flowmq_protocol_pattern_t pattern;
-  uint8_t flags;
-  uint16_t identity_len;
-  uint16_t topic_len;
-  uint32_t chunk_len;
-  uint64_t message_id;
-  uint32_t payload_len;
-  uint32_t payload_offset;
-  size_t record_len;
-} flowmq_protocol_packet_t;
+typedef flowmq_protocol_packet_header_internal_t flowmq_protocol_packet_t;
 
 static int flowmq_protocol_decode_packet(const char *data, size_t data_len,
                                          flowmq_protocol_packet_t *packet) {
-  const unsigned char *header = (const unsigned char *)data;
-  size_t body_len;
-  if (!packet || (data_len > 0u && !data)) return SALTS_EINVAL;
-  if (data_len >= sizeof(FLOWMQ_PROTOCOL_MAGIC) &&
-      memcmp(header, FLOWMQ_PROTOCOL_MAGIC, sizeof(FLOWMQ_PROTOCOL_MAGIC)) != 0)
-    return SALTS_EPROTO;
-  if (data_len >= 5u && header[4] != FLOWMQ_PROTOCOL_WIRE_VERSION) return SALTS_EPROTO;
-  if (data_len < FLOWMQ_PROTOCOL_HEADER_SIZE) return FLOWMQ_PROTOCOL_INCOMPLETE;
-  if ((header[7] & ~(FLOWMQ_PROTOCOL_PACKET_FIRST | FLOWMQ_PROTOCOL_PACKET_LAST |
-                     FLOWMQ_PROTOCOL_MESSAGE_MORE)) != 0u)
-    return SALTS_EPROTO;
-  if (!flowmq_protocol_is_core_kind((flowmq_protocol_frame_kind_t)header[5]) ||
-      header[6] < FLOWMQ_PROTOCOL_PUB || header[6] > FLOWMQ_PROTOCOL_XSUB)
-    return SALTS_EPROTO;
-  memset(packet, 0, sizeof(*packet));
-  packet->kind = (flowmq_protocol_frame_kind_t)header[5];
-  packet->pattern = (flowmq_protocol_pattern_t)header[6];
-  packet->flags = header[7];
-  packet->identity_len = flowmq_protocol_read_u16(header + 8);
-  packet->topic_len = flowmq_protocol_read_u16(header + 10);
-  packet->chunk_len = flowmq_protocol_read_u32(header + 12);
-  packet->message_id = flowmq_protocol_read_u64(header + 16);
-  packet->payload_len = flowmq_protocol_read_u32(header + 24);
-  packet->payload_offset = flowmq_protocol_read_u32(header + 28);
-  if (packet->identity_len > FLOWMQ_PROTOCOL_MAX_IDENTITY_SIZE ||
-      packet->topic_len > FLOWMQ_PROTOCOL_MAX_TOPIC_SIZE ||
-      packet->chunk_len > FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE)
-    return SALTS_EMSGSIZE;
-  body_len = (size_t)packet->identity_len + packet->topic_len + packet->chunk_len;
-  if (body_len > SIZE_MAX - FLOWMQ_PROTOCOL_HEADER_SIZE) return SALTS_ERANGE;
-  packet->record_len = FLOWMQ_PROTOCOL_HEADER_SIZE + body_len;
-  return data_len < packet->record_len ? FLOWMQ_PROTOCOL_INCOMPLETE : SALTS_OK;
+  int rc = flowmq_protocol_decode_packet_header_internal(
+      data, data_len, packet);
+  if (rc != SALTS_OK) return rc;
+  return data_len < packet->record_len ? FLOWMQ_PROTOCOL_INCOMPLETE
+                                       : SALTS_OK;
 }
 
 int flowmq_protocol_encoded_topic(const char *data, size_t data_len, size_t max_frame_size,

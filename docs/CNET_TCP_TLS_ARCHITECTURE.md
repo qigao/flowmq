@@ -69,26 +69,105 @@ readiness/wait-set，可替换该等待策略以降低空闲唤醒延迟，但�
 
 ## 发送内存与所有权
 
-`flowmq_send` 使用 FMQ/6 分段编码：协议头写入 socket 自有的有界 framing storage，payload
-只在本次普通函数调用期间借用。分段数据在返回前复制到 socket 内存池的 `mem_buffer_t`，
-因此调用者可在 `flowmq_send` 返回后立即修改或释放输入。立即发送通过 `cnet_send_buffer`
-提交，排队 flush 使用 `mem_slice` 与 `cnet_send_slicev`，CNet 接受后保留不可变 backing buffer
-的引用，不再把已排队 payload 平铺复制进 command slot。
+`flowmq_send` 仍保持 borrowed-input/copy 契约：FMQ/6 协议头写入 socket 自有的
+有界 framing storage，payload 只在本次普通函数调用期间借用。立即发送在返回前
+复制到 socket 池拥有的 buffer，再通过 `cnet_send_buffer` 提交并保留引用，因此调用者可在 `flowmq_send`
+返回后立即修改或释放输入；普通 `flowmq_send(const void *)` 不会偷偷升级成 borrowed
+zero-copy。
 
-一次 frame 最多 16 个 packet、32 个编码 segment。peer FIFO 仍有 1024 个 frame 槽位，
-每次 flush 受 `CNET_RETAINED_VECTOR_MAX`（当前为 32）与 `max_encoded_size` 双重上限约束，
-剩余 frame 在前一批完成后继续提交。批处理只改变内部写入边界，不改变消息顺序或 multipart
-原子性。编码复制的时间复杂度为 O(encoded bytes)，flush 的描述符处理为 O(batch frames)。
+`flowmq_send_slice` 是显式的 owned/retained immediate DATA surface。它只接受
+canonical non-empty `mem_slice_t`，为 FMQ/6 header/identity/topic 单独分配一个
+FlowMQ-owned framing buffer，而 payload ranges 继续引用调用者 slice 的原 backing；
+最终用 `cnet_send_slicev` 一次 admission。成功后调用者可以立即
+`mem_slice_release()` 自己的引用，CNet 在 logical send terminal 前保留 backing；
+这段时间 backing bytes 以及 buffer 的 data/used/capacity 必须保持不可变。
 
-缓冲区内容是发送字节的唯一事实源；完成前不可修改。临时 slice 在 admission 后释放，
-成功时 FIFO 释放自身引用，CNet 在完成或取消后释放最终引用；失败时 FIFO、credit/HWM
-保持原状。socket owner 单线程推进，保持每 peer 一次在途逻辑写入。TCP 使用 retained
-scatter/gather，TLS 仍需加密并发送 ciphertext，不承诺 TLS 网络路径零拷贝。
-`flowmq_close` 必须先停止并销毁 CNet client，再销毁 message pool。
+`flowmq_send_slice` 同时支持有界 retained multipart。每个成功的
+`FLOWMQ_SNDMORE` part 都把其 canonical slice ownership 同步转移到 socket 的独立 retained
+staging；调用者可立即释放自己的引用。retained staging 与 copied `send_staged` 不混用，
+唯一例外是 ROUTER 可先用普通 `flowmq_send(..., FLOWMQ_SNDMORE)` 选择 routing-id envelope，
+随后所有 DATA parts 使用 retained surface。
 
-此迁移要求重新构建消费者；公开 socket API、FMQ/6 数据格式与错误语义保持不变。
-验证覆盖 TCP/TLS 下 64-part multipart、发送后输入覆写、队列顺序、HWM、重连和关闭；
-批次上限变化的吞吐影响尚需专项 benchmark，不据此宣称性能提升。
+final retained part 到来时，FlowMQ 按 FMQ/6 wire 顺序组合 staged ranges 与 final ranges；
+只有 aggregate range count 不超过 `CNET_RETAINED_VECTOR_MAX`（当前 32）且 aggregate encoded
+bytes 在 CNet send bound 内时，才通过一次 `cnet_send_slicev` 提交。因此一个 retained
+multipart message 仍只有一个 CNet logical send terminal。超限返回显式
+`SALTS_EMSGSIZE`，不 split、不 flatten、不 copy；已经成功 staged 的前缀仍由 socket 持有，
+可由调用者重试 final part，或在 disconnect/cancel/close 时精确释放。
+
+PAIR/PUSH/DEALER/REQ/REP 与 ROUTER 的 retained multipart 都保持选定 peer/generation pinning；
+REQ/REP FSM 只在 final aggregate admission 成功后完成本次 send transaction。retained
+multipart PUB/XPUB 暂时 `SALTS_ENOTSUP`，因为 multi-peer atomic retained ownership 需要独立
+设计；final-only retained publication 维持现有 mute/drop 语义。plaintext TCP 支持 retained
+surface；TLS 仍明确返回 `SALTS_ENOTSUP`，不会隐式转成 copy/encryption fallback。
+
+需要排队的完整 frame 只平铺一次到其 canonical `mem_buffer_t`。plaintext TCP flush
+将这些 owner buffers 转成 `mem_slice_t` 并通过 `cnet_send_slicev` retained admission
+提交；FlowMQ 随即释放自己的 slice/queue 引用，CNet 在 logical terminal 前保持 backing
+ownership。一个 FlowMQ queued batch 最多使用 `CNET_RETAINED_VECTOR_MAX`（当前 32）
+个 logical ranges；CNet 再按 `NATIVE_IO_VECTOR_MAX`（当前 16）切成 successive native
+windows，期间不 flatten、不复制 payload，也不发布中间 send terminal。TLS 仍明确使用
+copy/encryption path，不从 rejected retained-SG 隐式 fallback。
+
+立即发送的数据路径从 `payload -> FlowMQ 1MiB scratch -> CNet slot` 缩短为
+`payload -> CNet slot`，payload copy 从两次减为一次。queued TCP 的 frame payload
+在 FlowMQ 排队时仅形成 canonical owned buffer，flush 不再额外 flatten。原来的每 socket
+约 1MiB 连续 scratch allocation 已删除，替换为固定 framing 和 descriptor storage。
+
+普通 `flowmq_send` 仍不是跨 poll 的 borrowed-send，也不改变原有完成语义。
+只有显式 `flowmq_send_slice` 把 canonical owner lifetime 延伸到网络 terminal，而且通过
+Salts Core refcount 表达，不保留裸 caller pointer。TLS 仍必须让加密层接受其明确的
+copy/encryption plaintext path。任何 retained admission 失败都不留下 backing retain，
+也不提交 peer credit/HWM；queued copy path 的 buffer 仍由原 owner 持有。
+
+## 接收内存与所有权
+
+当前 receive decode 之后存在两个明确的 copy boundary：
+
+```text
+flowmq_stream_decoder_next()
+        -> frame.payload borrowed view
+        -> flowmq_socket_stage_bytes()
+             copy -> socket message_pool mem_buffer_t
+        -> inbound ring owns mem_buffer_t
+        -> flowmq_recv()
+             copy -> caller storage
+```
+
+`flowmq_recv_slice` 只消除第二个边界，不伪装成 CNet-ingress zero-copy。成功 dequeue 时，
+inbound ring 的唯一 canonical `mem_buffer_t` reference 直接转移到 caller 的
+`mem_slice_t`；FlowMQ 不执行 retain+release 对，也不把 bytes 复制到新的 detached storage。
+这使 zero-length part 也能保持同样的 ownership-transfer 规则。
+
+receive credit、inbound HWM accounting、`RCVMORE` 与 pattern/REQ/REP FSM 都在 dequeue
+成功时推进，与 `flowmq_recv` 保持一致；应用随后持有 slice 的时间不会占用 transport
+credit 或 socket inbound occupancy。caller 必须提供空的输出 slice；非空 descriptor
+直接返回 `SALTS_EINVAL` 且不修改原 owner，避免覆盖 live reference。对合法的空输出，
+错误、DONTWAIT would-block 与非法 FSM 路径都保持为空且不取得 ownership。
+
+Salts `1.8.3` 是本仓当前 released producer baseline，并已包含 CNet owned-receive #594/#597 的 producer-owned receive contract。本次依赖对齐仍不改变 FlowMQ runtime ownership，因此这里继续描述现有 socket `message_pool` owner；迁移到 CNet producer-owned backing 由 FlowMQ #46 单独实现和验证。
+
+该 surface 的 lifetime 明确受 socket memory pool 约束。Salts 1.8.3 的 `mem_destroy()`
+会直接销毁 pool slab，并不等待 outstanding pooled buffers，所以返回的 slice 可以跨后续
+owner-thread `poll/send/recv` progress 持有，但必须在 `flowmq_close()` 前
+`mem_slice_release()`。FlowMQ 不通过隐藏 copy 来制造 close 后 lifetime。若未来要求 slice
+跨 socket/context destruction 存活，需要 Salts 提供 detachable/refcounted pool owner，
+或另行定义显式 non-pooled receive ownership。
+
+decoder payload -> message_pool 的第一次 copy 仍保留。是否让 stream decoder/CNet 直接产出
+canonical owned receive backing 是独立的后续优化，因为它会改变 decoder consume/lifetime
+边界，不应与 public recv-slice ABI 的第一阶段混合。
+
+## TCP latency policy
+
+FlowMQ plaintext TCP runtime 在 CNet client 启动后显式设置
+`cnet_stream_socket_options.nodelay = 1`。这是 FlowMQ 的 messaging latency policy，
+不是 CNet 的全局默认：Salts 保持 `nodelay=0` 时的 platform/Nagle default。
+
+该策略是 retained-SG 跨 native window 的必要配套。64 KiB logical write 从 16 ranges
+跨到 17/32 ranges 时，Linux 默认 Nagle 与 delayed ACK 可形成约 40 ms 的 latency cliff；
+显式 `TCP_NODELAY` 后恢复到几十微秒，同时仍保持两个 NativeIO vector windows 和一个
+CNet logical terminal。FlowMQ 不用 copy fallback 掩盖这一 transport effect。
 
 ## TLS
 

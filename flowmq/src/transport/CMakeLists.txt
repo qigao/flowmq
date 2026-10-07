@@ -2,10 +2,19 @@ set(FLOWMQ_TRANSPORT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/flowmq_transport.c
     ${CMAKE_CURRENT_SOURCE_DIR}/cnet/flowmq_cnet_transport.c
     ${CMAKE_CURRENT_SOURCE_DIR}/cnet/flowmq_cnet_transport.h
-    ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_socket.c)
+    ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_socket.c
+    ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_owner.c
+    ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_owned_stream.h
+    ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_peer_state.c
+    ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_peer_state.h
+    ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_peer_state_schema.h
+    ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_socket_option.c
+    ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_socket_option.h
+    ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_socket_option_schema.h)
 
 set(FLOWMQ_TRANSPORT_HEADERS
     ${PROJECT_SOURCE_DIR}/flowmq/include/flowmq_socket.h
+    ${PROJECT_SOURCE_DIR}/flowmq/include/flowmq_owner.h
     ${PROJECT_SOURCE_DIR}/flowmq/include/flowmq_transport.h)
 
 add_library(flowmq_transport STATIC
@@ -22,13 +31,14 @@ target_include_directories(
   PUBLIC $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/flowmq/include>
          $<INSTALL_INTERFACE:include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cnet
+          ${PROJECT_SOURCE_DIR}/flowmq/src/runtime
           ${PROJECT_SOURCE_DIR}/flowmq/src/core/pattern
           ${PROJECT_SOURCE_DIR}/flowmq/src/core/session
           ${PROJECT_SOURCE_DIR}/flowmq/src/protocol
           ${PROJECT_SOURCE_DIR}/flowmq/src/protocol/stream)
 target_link_libraries(flowmq_transport
                       PUBLIC FlowMQ::Core Salts::Core
-                      PRIVATE Salts::CNet)
+                      PRIVATE Salts::CNet Salts::CMeta Salts::NativeIO)
 
 set(FLOWMQ_TRANSPORT_SOURCES ${FLOWMQ_TRANSPORT_SOURCES} PARENT_SCOPE)
 set(FLOWMQ_TRANSPORT_HEADERS ${FLOWMQ_TRANSPORT_HEADERS} PARENT_SCOPE)

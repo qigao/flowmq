@@ -2,6 +2,7 @@ set(FLOWMQ_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/flowmq_core.c
     ${CMAKE_CURRENT_SOURCE_DIR}/pattern/flowmq_pattern.c
     ${CMAKE_CURRENT_SOURCE_DIR}/pattern/flowmq_pattern.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/pattern/flowmq_pattern_schema.h
     ${CMAKE_CURRENT_SOURCE_DIR}/pattern/flowmq_pattern_state.c
     ${CMAKE_CURRENT_SOURCE_DIR}/pattern/flowmq_pattern_state.h
     ${CMAKE_CURRENT_SOURCE_DIR}/pattern/flowmq_subscription_set.c
@@ -29,7 +30,7 @@ target_include_directories(
 target_link_libraries(
   flowmq_core
   PUBLIC FlowMQ::Protocol Salts::Core
-  PRIVATE Salts::CSTL)
+  PRIVATE Salts::CSTL Salts::CMeta)
 
 set(FLOWMQ_CORE_SOURCES ${FLOWMQ_CORE_SOURCES} PARENT_SCOPE)
 set(FLOWMQ_CORE_HEADERS ${FLOWMQ_CORE_HEADERS} PARENT_SCOPE)

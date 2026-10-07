@@ -5,11 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum {
-  FLOWMQ_TLS_CERTIFICATE_SHA256_TEXT_SIZE = 71u,
-  FLOWMQ_TLS_CERTIFICATE_SHA256_CAPACITY = 72u
-};
-
 typedef struct flowmq_tls_identity_map_entry_s {
   char certificate_sha256[FLOWMQ_TLS_CERTIFICATE_SHA256_CAPACITY];
   char hello_identity[FLOWMQ_PROTOCOL_MAX_IDENTITY_SIZE + 1u];

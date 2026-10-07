@@ -227,7 +227,7 @@ message ProviderObservationV1 {
   uint32 schema_version;
   ProviderMessageKind message_kind;
   ProviderQueryStatus status;
-  // Logical boolean encoded as 0 or 1. Header-only SaltsUtils TBE contracts
+  // Logical boolean encoded as 0 or 1. Header-only SaltsUtils DataBind contracts
   // intentionally use only standalone fixed-width C types.
   uint8 has_more;
   string message_id;

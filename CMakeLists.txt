@@ -6,7 +6,7 @@ endif()
 
 project(
   FlowMQ
-  VERSION 1.0.0
+  VERSION 1.2.0
   DESCRIPTION "Pattern-oriented messaging library for C"
   HOMEPAGE_URL "https://github.com/qigao/flowmq"
   LANGUAGES C)
@@ -48,7 +48,33 @@ foreach(_flowmq_dependency_root IN ITEMS SALTS_ROOT SALTS_UTILS_ROOT)
   endif()
 endforeach()
 
-# Resolve the configured SDK anew after restore, never a previous cached root.
+if(CMAKE_CROSSCOMPILING)
+  foreach(_flowmq_host_root IN ITEMS SALTS_HOST_ROOT SALTS_UTILS_HOST_ROOT)
+    if(NOT DEFINED ENV{${_flowmq_host_root}} OR
+       "$ENV{${_flowmq_host_root}}" STREQUAL "")
+      message(FATAL_ERROR
+              "${_flowmq_host_root} must name a host SDK profile for cross builds")
+    endif()
+  endforeach()
+endif()
+
+foreach(_flowmq_host_root IN ITEMS SALTS_HOST_ROOT SALTS_UTILS_HOST_ROOT)
+  if(DEFINED ENV{${_flowmq_host_root}} AND
+     NOT "$ENV{${_flowmq_host_root}}" STREQUAL "")
+    file(TO_CMAKE_PATH "$ENV{${_flowmq_host_root}}"
+         FLOWMQ_${_flowmq_host_root}_PATH)
+  elseif(_flowmq_host_root STREQUAL "SALTS_HOST_ROOT")
+    set(FLOWMQ_SALTS_HOST_ROOT_PATH "${FLOWMQ_SALTS_ROOT_PATH}")
+  else()
+    set(FLOWMQ_SALTS_UTILS_HOST_ROOT_PATH "${FLOWMQ_SALTS_UTILS_ROOT_PATH}")
+  endif()
+  if(NOT IS_DIRECTORY "${FLOWMQ_${_flowmq_host_root}_PATH}")
+    message(FATAL_ERROR
+            "${_flowmq_host_root} is not a directory: ${FLOWMQ_${_flowmq_host_root}_PATH}")
+  endif()
+endforeach()
+
+# Resolve the configured SDK anew after restore.
 unset(Salts_DIR CACHE)
 unset(Salts_DIR)
 unset(SaltsUtils_DIR CACHE)
@@ -56,30 +82,28 @@ unset(SaltsUtils_DIR)
 find_package(
   Salts CONFIG REQUIRED
   PATHS "${FLOWMQ_SALTS_ROOT_PATH}"
-  NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+  NO_DEFAULT_PATH
+  NO_CMAKE_FIND_ROOT_PATH)
 find_package(
   SaltsUtils CONFIG REQUIRED
   PATHS "${FLOWMQ_SALTS_UTILS_ROOT_PATH}"
-  NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
-find_package(OpenSSL CONFIG REQUIRED)
-
-unset(FLOWMQ_IDLC_EXECUTABLE)
-unset(FLOWMQ_IDLC_EXECUTABLE CACHE)
-find_program(FLOWMQ_IDLC_EXECUTABLE NAMES salts-idlc
-             PATHS "${FLOWMQ_SALTS_UTILS_ROOT_PATH}/bin"
-             NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
-if(NOT FLOWMQ_IDLC_EXECUTABLE)
+  NO_DEFAULT_PATH
+  NO_CMAKE_FIND_ROOT_PATH)
+unset(FLOWMQ_SALTS_IDLC_EXECUTABLE)
+unset(FLOWMQ_SALTS_IDLC_EXECUTABLE CACHE)
+find_program(FLOWMQ_SALTS_IDLC_EXECUTABLE NAMES salts-idlc
+             PATHS "${FLOWMQ_SALTS_UTILS_HOST_ROOT_PATH}/bin"
+             NO_DEFAULT_PATH
+             NO_CMAKE_FIND_ROOT_PATH)
+if(NOT FLOWMQ_SALTS_IDLC_EXECUTABLE)
   message(FATAL_ERROR
-    "FlowMQ media-provider contract requires the SaltsUtils salts-idlc")
+    "FlowMQ media-provider contract requires the host SaltsUtils salts-idlc")
 endif()
 
 set(FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS
     "PATH=path_list_prepend:$<TARGET_FILE_DIR:Salts::CNet>"
-    "PATH=path_list_prepend:$<TARGET_FILE_DIR:Salts::Core>")
-if(WIN32)
-  list(APPEND FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS
-       "PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenSSL::SSL>")
-endif()
+    "PATH=path_list_prepend:$<TARGET_FILE_DIR:Salts::Core>"
+    "PATH=path_list_prepend:$<TARGET_FILE_DIR:Salts::DataBind>")
 if(MSVC)
   get_filename_component(FLOWMQ_COMPILER_RUNTIME_DIR "${CMAKE_C_COMPILER}" DIRECTORY)
   list(APPEND FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS
@@ -127,8 +151,21 @@ target_include_directories(
           ${CMAKE_CURRENT_SOURCE_DIR}/flowmq/src/core/session
           ${CMAKE_CURRENT_SOURCE_DIR}/flowmq/src/transport/cnet)
 target_link_libraries(flowmq
-                      PUBLIC Salts::Core Salts::Schema
-                      PRIVATE Salts::CSTL Salts::CMeta Salts::CNet)
+                      PUBLIC Salts::Core Salts::DataBind
+                      PRIVATE Salts::CSTL Salts::CMeta Salts::CNet Salts::NativeIO)
+if(BUILD_TESTS)
+  get_target_property(_flowmq_runtime_links flowmq LINK_LIBRARIES)
+  foreach(_flowmq_frontend_target IN ITEMS
+          Salts::IDL
+          Salts::Schema
+          Salts::CFlow)
+    if("${_flowmq_frontend_target}" IN_LIST _flowmq_runtime_links)
+      message(FATAL_ERROR
+              "FlowMQ runtime must not link control-plane target "
+              "${_flowmq_frontend_target}")
+    endif()
+  endforeach()
+endif()
 if(TARGET flowmq_media_provider_codegen)
   add_dependencies(flowmq flowmq_media_provider_codegen)
 endif()
