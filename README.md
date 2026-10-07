@@ -18,7 +18,7 @@ FlowMQ 是 C11 的 pattern-oriented messaging library。它提供 FMQ/6 wire cod
 | `FlowMQ::Transport` | build-tree ZeroMQ-style socket 与 CNet TCP/TLS runtime |
 | `FlowMQ::FlowMQ` | 唯一安装 target；合并上述公开能力 |
 
-> Branch/release boundary: `v1.2.0` 指向 #100 的 exact release head，已经包含 owner-lane、reuse-port、retained TLS、producer-owned/segmented receive 与公开 `flowmq_recv_slicev()`。当前 `main` 更新：#101/#102 增加 atomic retained PUB/XPUB fanout，#104 增加 generated DataBind ChannelPlan/ServicePlan qualification。除非显式标记 release，下面的行为描述以 current `main` 为准。
+> Branch/release boundary: `v1.2.1` 在 `v1.2.0` 的 owner-lane、reuse-port、retained TLS、producer-owned/segmented receive 与公开 `flowmq_recv_slicev()` 基础上，包含 #101/#102 的 atomic retained PUB/XPUB fanout、#104 的 generated DataBind ChannelPlan/ServicePlan qualification，以及 #111/#112 的 CMeta ownership、最新 Salts SDK 适配与显式多 owner 验证。除非显式标记 release，下面的行为描述以 current `main` 为准。
 
 安装包不固定 Salts/SaltsUtils 版本，始终消费 latest published stable SDK；公开链接依赖是
 `Salts::Core` 与 SaltsUtils 提供的 `Salts::DataBind`；`Salts::CNet`、`Salts::NativeIO`、
@@ -164,14 +164,14 @@ socket 在有界 staging 中保存 canonical ranges；final part 把完整 multi
 选择 peer。超出 aggregate SG/send bound 显式失败，不 split、不 flatten、不 copy fallback；
 disconnect/cancel/close 精确释放 staged retains。
 
-current `main` 的 PUB/XPUB retained multipart 已不再 fail-closed。第一 retained part 冻结当时
+自 `v1.2.1` 起，PUB/XPUB retained multipart 已不再 fail-closed。第一 retained part 冻结当时
 ready 且 subscription-matching 的 peer generation snapshot；final part 重新验证 generation、
 完整 message HWM/credit/frame bound 与 peer queue slot，在任何 peer queue 可见前完成所有
 fallible allocation/range clone。commit 后每个仍 eligible peer 只持有同一 shared retained
 publication 的一个 bounded reference，并在自己的 owner progress 中独立提交 exactly one
 `cnet_send_slicev()` logical write。snapshot 后的 subscription change 不改写当前 multipart
 peer set；final commit 时已失效/不可 admission 的 peer 按既有 PUB mute/drop 语义被省略。
-不存在 retained-to-copy fallback。该 atomic fanout 是 #101/#102 之后的 current-main contract，
+不存在 retained-to-copy fallback。该 atomic fanout 来自 #101/#102，随 `v1.2.1` 发布，
 不属于 `v1.2.0` tag。
 
 TCP 与 verified TLS 的 retained send 都沿 CNet retained plaintext cursor 消费 genuinely
