@@ -38,7 +38,7 @@ target_include_directories(
           ${PROJECT_SOURCE_DIR}/flowmq/src/protocol/stream)
 target_link_libraries(flowmq_transport
                       PUBLIC FlowMQ::Core Salts::Core
-                      PRIVATE Salts::CNet Salts::CMeta Salts::NativeIO)
+                      PRIVATE Salts::CNet Salts::CNetManager Salts::CMeta Salts::NativeIO)
 
 set(FLOWMQ_TRANSPORT_SOURCES ${FLOWMQ_TRANSPORT_SOURCES} PARENT_SCOPE)
 set(FLOWMQ_TRANSPORT_HEADERS ${FLOWMQ_TRANSPORT_HEADERS} PARENT_SCOPE)

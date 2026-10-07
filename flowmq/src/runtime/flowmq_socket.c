@@ -18,6 +18,7 @@
 #include "str.h"
 
 #include <cnet/cnet.h>
+#include <cnet/manager.h>
 #include <salts/clock.h>
 #include <salts/thread.h>
 
@@ -129,6 +130,7 @@ struct flowmq_socket_peer_s {
   struct flowmq_socket_s *owner;
   flowmq_peer_state_t state;
   cnet_connection connection;
+  cnet_managed_connection managed;
   flowmq_stream_decoder_t decoder;
   flowmq_owned_stream_t owned_stream;
   flowmq_subscription_set_t subscriptions;
@@ -176,6 +178,7 @@ struct flowmq_socket_s {
   flowmq_ctx_t *ctx;
   flowmq_pattern_state_t pattern;
   cnet_client client;
+  cnet_manager manager;
   cnet_listener listener;
   cnet_tls_client tls_client;
   cnet_tls_server tls_server;
@@ -456,6 +459,13 @@ static void flowmq_socket_peer_storage_release(flowmq_socket_peer_t *peer) {
 static void flowmq_socket_peer_release(flowmq_socket_peer_t *peer) {
   int status;
   if (peer == NULL || !flowmq_peer_state_is_used(&peer->state)) return;
+  if (peer->managed.slot != 0u) {
+    status = cnet_manager_release_context(&peer->owner->manager, peer->managed);
+    if (status != SALTS_OK) {
+      flowmq_socket_fail(peer->owner, status);
+      return;
+    }
+  }
   if (!flowmq_peer_state_is_retired(&peer->state)) {
     flowmq_socket_peer_storage_release(peer);
     if (peer->state.lifecycle != FLOWMQ_PEER_LIFECYCLE_ALLOCATED) {
@@ -2103,8 +2113,8 @@ static int flowmq_socket_rearm_receive(flowmq_socket_peer_t *peer) {
           &peer->state, FLOWMQ_PEER_HANDSHAKE_SETTINGS_RX) &&
       flowmq_stream_decoder_size(&peer->decoder) == 0u &&
       flowmq_owned_stream_size(&peer->owned_stream) == 0u) {
-    status = cnet_set_receive_slice_handler(
-        &socket->client, peer->connection, flowmq_socket_on_receive_slice, peer);
+    status = cnet_manager_set_receive_slice_handler(
+        &socket->manager, peer->managed, flowmq_socket_on_receive_slice, peer);
     if (status != SALTS_OK) return status;
     peer->owned_receive_active = 1u;
   }
@@ -2273,6 +2283,9 @@ static int flowmq_socket_endpoint_connect(flowmq_socket_t *socket,
   endpoint = &socket->endpoints[endpoint_index];
   if (!endpoint->used) return SALTS_ENOENT;
   if (endpoint->active) return SALTS_EALREADY;
+  size_t work;
+  status = cnet_manager_advance(&socket->manager, FLOWMQ_SOCKET_PEER_CAPACITY, &work);
+  if (status != SALTS_OK) return status;
   peer = flowmq_socket_peer_acquire(socket);
   if (peer == NULL) return SALTS_ENOBUFS;
   peer->endpoint_index = endpoint_index;
@@ -2284,7 +2297,10 @@ static int flowmq_socket_endpoint_connect(flowmq_socket_t *socket,
       .tls_client = socket->transport == FLOWMQ_TRANSPORT_TLS
                         ? &socket->tls_client
                         : NULL};
-  status = cnet_connect(&socket->client, &options, &peer->connection);
+  const cnet_manager_attachment attachment = {.observer = observer, .hold_context = true};
+  status = cnet_manager_reserve(&socket->manager, &attachment, &peer->managed);
+  if (status == SALTS_OK)
+    status = cnet_manager_connect(&socket->manager, peer->managed, &options, &peer->connection);
   if (status != SALTS_OK) {
     flowmq_socket_peer_release(peer);
     return status;
@@ -2352,6 +2368,11 @@ static int flowmq_socket_runtime_init(flowmq_socket_t *socket,
     socket_options.nodelay = 1;
     status =
         cnet_client_set_stream_socket_options(&socket->client, &socket_options);
+  }
+  if (status == SALTS_OK) {
+    const cnet_manager_config manager_config = {sizeof(manager_config), CNET_MANAGER_VERSION,
+        &socket->client, FLOWMQ_SOCKET_PEER_CAPACITY, FLOWMQ_SOCKET_PEER_CAPACITY};
+    status = cnet_manager_init(&socket->manager, &manager_config);
   }
   if (status != SALTS_OK) {
     if (socket->client.impl != NULL) {
@@ -2670,6 +2691,17 @@ int flowmq_close(flowmq_socket_t *socket) {
     } else {
       status = cnet_client_stop(&socket->client,
                                 FLOWMQ_SOCKET_SHUTDOWN_TIMEOUT_MS);
+      if (status != SALTS_OK) return status;
+    }
+    if (socket->manager.impl != NULL) {
+      /* All transport callbacks have ended. Discarding this socket also ends
+       * queued-message holds; normal peer retirement keeps them until consumed. */
+      for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i)
+        flowmq_socket_peer_release(&socket->peers[i]);
+      size_t work;
+      status = cnet_manager_advance(&socket->manager, FLOWMQ_SOCKET_PEER_CAPACITY, &work);
+      if (status != SALTS_OK) return status;
+      status = cnet_manager_destroy(&socket->manager);
       if (status != SALTS_OK) return status;
     }
     status = cnet_client_destroy(&socket->client);
@@ -4040,6 +4072,9 @@ static int flowmq_socket_resume_receive(flowmq_socket_peer_t *peer) {
 static int flowmq_socket_listener_progress(flowmq_socket_t *socket) {
   int status;
   if (!socket->listener_initialized) return SALTS_OK;
+  size_t work;
+  status = cnet_manager_advance(&socket->manager, FLOWMQ_SOCKET_PEER_CAPACITY, &work);
+  if (status != SALTS_OK) return status;
   {
     int ready = 0;
     status = cnet_listener_wait(&socket->listener, 0u, &ready);
@@ -4051,12 +4086,18 @@ static int flowmq_socket_listener_progress(flowmq_socket_t *socket) {
     cnet_observer observer;
     if (peer == NULL) return SALTS_ENOBUFS;
     observer = flowmq_socket_observer(peer);
-    status = socket->transport == FLOWMQ_TRANSPORT_TLS
-                 ? cnet_listener_accept_tls(&socket->listener, &socket->client,
-                                            &socket->tls_server, &observer,
-                                            &peer->connection)
-                 : cnet_listener_accept(&socket->listener, &socket->client,
-                                        &observer, &peer->connection);
+    cnet_accepted_stream accepted = CNET_ACCEPTED_STREAM_INIT;
+    status = cnet_listener_accept_detached(&socket->listener, &accepted);
+    if (status == SALTS_OK) {
+      const cnet_manager_attachment attachment = {.observer = observer, .hold_context = true};
+      status = cnet_manager_reserve(&socket->manager, &attachment, &peer->managed);
+      if (status == SALTS_OK)
+        status = cnet_manager_adopt(&socket->manager, peer->managed, &accepted,
+            socket->transport == FLOWMQ_TRANSPORT_TLS ? &socket->tls_server : NULL,
+            &peer->connection);
+      else
+        (void)cnet_accepted_stream_close(&accepted);
+    }
     if (status != SALTS_OK) {
       flowmq_socket_peer_release(peer);
       if (status != SALTS_ETIMEDOUT) return status;
@@ -4066,7 +4107,10 @@ static int flowmq_socket_listener_progress(flowmq_socket_t *socket) {
 }
 
 static int flowmq_socket_progress_local(flowmq_socket_t *socket) {
-  int status = flowmq_socket_reconnect_progress(socket);
+  size_t work;
+  int status = cnet_manager_advance(&socket->manager, FLOWMQ_SOCKET_PEER_CAPACITY, &work);
+  if (status != SALTS_OK) return status;
+  status = flowmq_socket_reconnect_progress(socket);
   if (status != SALTS_OK) return status;
   for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
     flowmq_socket_peer_t *peer = &socket->peers[i];
@@ -4418,23 +4462,16 @@ int flowmq_socket_internal_stop_external(flowmq_socket_t *socket) {
   socket->reconnect_pending = 0u;
   for (size_t i = 0u; i < FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY; ++i)
     socket->endpoints[i].retry_pending = 0u;
-  for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
-    flowmq_socket_peer_t *peer = &socket->peers[i];
-    if (!flowmq_peer_state_is_used(&peer->state) ||
-        flowmq_peer_state_is_retired(&peer->state))
-      continue;
-    status = cnet_close(&socket->client, peer->connection);
-    if (status == SALTS_OK || status == SALTS_EALREADY ||
-        status == SALTS_ENOENT) {
-      pending = 1;
-      continue;
-    }
-    if (status == SALTS_EBUSY || status == SALTS_ENOBUFS) {
-      pending = 1;
-      continue;
-    }
+  status = cnet_manager_request_close(&socket->manager);
+  if (status != SALTS_OK) return status;
+  size_t work;
+  status = cnet_manager_advance(&socket->manager, FLOWMQ_SOCKET_PEER_CAPACITY, &work);
+  if (status != SALTS_OK && status != SALTS_EBUSY && status != SALTS_ENOBUFS)
     return status;
-  }
+  cnet_manager_snapshot snapshot;
+  status = cnet_manager_get_snapshot(&socket->manager, &snapshot);
+  if (status != SALTS_OK) return status;
+  pending = snapshot.reserved != 0u || snapshot.bound != 0u;
 
   status = cnet_client_stop_external(&socket->client);
   if (status == SALTS_OK) {
