@@ -57,13 +57,17 @@ target_include_directories(
   PRIVATE ${PROJECT_SOURCE_DIR}/flowmq/tests/runtime)
 
 if(BUILD_TESTS)
+  add_test(NAME test_flowmq_owned_rx_evidence
+           COMMAND bench_flowmq_socket --filter "receive evidence:")
+  set_tests_properties(test_flowmq_owned_rx_evidence
+                       PROPERTIES LABELS "flowmq;flowmq-transport" TIMEOUT 30)
   add_test(NAME bench_flowmq_socket_tcp
            COMMAND bench_flowmq_socket --filter "caller-driven loopback TCP")
   set_tests_properties(bench_flowmq_socket_tcp
                        PROPERTIES LABELS "flowmq;benchmark" RUN_SERIAL TRUE
                                   TIMEOUT 600 ENVIRONMENT "FLOWMQ_BENCH_CI=1")
   if(WIN32)
-    set_tests_properties(bench_flowmq_socket_tcp
+    set_tests_properties(test_flowmq_owned_rx_evidence bench_flowmq_socket_tcp
                          PROPERTIES ENVIRONMENT_MODIFICATION
                                     "${FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS}")
   endif()
