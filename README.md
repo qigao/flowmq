@@ -39,6 +39,11 @@ peer 协议状态继续归 FlowMQ；没有新增跨线程队列或改变 wire/AP
 部署时需带上候选 SDK 的 `cnet_manager` 共享库。回滚只需撤销内部适配及私有链接依赖，
 无需数据迁移。`test_flowmq_socket` 额外覆盖 64 次断开后消费排队消息、再复用 peer 的循环。
 
+候选 SDK 主机验收通过 `native-sdk-release.yml` 的手动入口运行，同时指定
+`salts_candidate_run_id` 和完整的 `salts_candidate_sha`。生产任务必须是成功完成、
+保留 SDK artifacts 的 Salts CI 手动任务。Linux、Windows、macOS 消费该候选包并运行
+正式 CTest，SaltsUtils 继续解析最新发布包。此入口跳过交叉编译、性能脚本、打包及发布。
+
 ## Caller-driven transport
 
 旧的 callback endpoint API 已删除。普通 socket 保留 ZeroMQ 风格的
