@@ -56,6 +56,19 @@ target_include_directories(
   bench_flowmq_socket
   PRIVATE ${PROJECT_SOURCE_DIR}/flowmq/tests/runtime)
 
+if(BUILD_TESTS)
+  add_test(NAME bench_flowmq_socket_tcp
+           COMMAND bench_flowmq_socket --filter "caller-driven loopback TCP")
+  set_tests_properties(bench_flowmq_socket_tcp
+                       PROPERTIES LABELS "flowmq;benchmark" RUN_SERIAL TRUE
+                                  TIMEOUT 600 ENVIRONMENT "FLOWMQ_BENCH_CI=1")
+  if(WIN32)
+    set_tests_properties(bench_flowmq_socket_tcp
+                         PROPERTIES ENVIRONMENT_MODIFICATION
+                                    "${FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS}")
+  endif()
+endif()
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   find_package(Threads REQUIRED)
   cmake_add_benchmark(

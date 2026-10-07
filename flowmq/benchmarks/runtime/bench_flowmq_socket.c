@@ -864,28 +864,31 @@ static int bench_owned_rx_measure(
     const int zero_copy_vector =
         slicev_mode && base_aligned_hits == 0u &&
         subrange_hits + multi_range_hits == samples;
+    const int copied_fallback =
+        slicev_mode && base_aligned_hits == samples &&
+        subrange_hits == 0u && multi_range_hits == 0u;
+
+    const char *contract_basis = "mixed_or_fallback";
+    if (mode == BENCH_OWNED_RX_COPY)
+      contract_basis = "caller_copy";
+    else if (slice_mode && all_subrange)
+      contract_basis = "owned_subrange";
+    else if (segmented_legacy)
+      contract_basis = "segmented_legacy_coalesce";
+    else if (copied_fallback)
+      contract_basis = "copied_fallback";
+    else if (all_vector)
+      contract_basis = "owned_vector";
+    else if (slicev_mode && all_subrange)
+      contract_basis = "owned_single_range";
+    else if (slicev_mode && multi_range_hits != 0u && base_aligned_hits != 0u)
+      contract_basis = "mixed_vector_or_fallback";
+    else if (zero_copy_vector)
+      contract_basis = "owned_vector_mixed_ranges";
 
     *out = (bench_owned_rx_result_t){
         .mode = bench_owned_rx_mode_name(mode),
-        .contract_basis =
-            mode == BENCH_OWNED_RX_COPY
-                ? "caller_copy"
-                : (slice_mode
-                       ? (all_subrange
-                              ? "owned_subrange"
-                              : (segmented_legacy
-                                     ? "segmented_legacy_coalesce"
-                                     : "mixed_or_fallback"))
-                       : (all_vector
-                              ? "owned_vector"
-                              : (all_subrange
-                                     ? "owned_single_range"
-                                     : (multi_range_hits != 0u &&
-                                                base_aligned_hits != 0u
-                                            ? "mixed_vector_or_fallback"
-                                            : (zero_copy_vector
-                                                   ? "owned_vector_mixed_ranges"
-                                                   : "mixed_or_fallback"))))),
+        .contract_basis = contract_basis,
         .payload_bytes = payload_size,
         .samples = samples,
         .p50_ns = bench_tls_evidence_percentile(latencies, samples, 50u),
@@ -908,7 +911,7 @@ static int bench_owned_rx_measure(
                 ? 1
                 : (slice_mode
                        ? (all_subrange ? 0 : (segmented_legacy ? 1 : -1))
-                       : (zero_copy_vector ? 0 : -1)),
+                       : (zero_copy_vector ? 0 : (copied_fallback ? 1 : -1))),
         .shape_observable = mode == BENCH_OWNED_RX_COPY ? 0 : 1};
   }
 
@@ -966,6 +969,19 @@ static int bench_owned_rx_contract_validate(
                    result->range_count_max == 1u &&
                    result->payload_copy_contract == 0 &&
                    strcmp(result->contract_basis, "owned_single_range") == 0
+               ? SALTS_OK
+               : SALTS_EPROTO;
+  }
+
+  /* TCP fragmentation may exceed the bounded projection for every sample.
+   * Report the existing copied decoder path without claiming zero-copy. */
+  if (result->base_aligned_hits == result->samples) {
+    return result->subrange_hits == 0u &&
+                   result->multi_range_hits == 0u &&
+                   result->range_count_min == 1u &&
+                   result->range_count_max == 1u &&
+                   result->payload_copy_contract == 1 &&
+                   strcmp(result->contract_basis, "copied_fallback") == 0
                ? SALTS_OK
                : SALTS_EPROTO;
   }
