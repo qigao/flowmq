@@ -27,36 +27,47 @@ New-Item -ItemType Directory -Path $restoreRoot -Force | Out-Null
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Salts.Native" Version="*" />
+    <PackageReference Include="SaltsUtils.Native" Version="*" />
   </ItemGroup>
 </Project>
 '@ | Set-Content -LiteralPath $project -Encoding utf8NoBOM
 
 dotnet restore $project --packages $packages --configfile (Join-Path $repositoryRoot 'cmake/native-sdk.nuget.config') --no-cache --force-evaluate
-if ($LASTEXITCODE -ne 0) { throw 'Failed to restore the latest Salts SDK' }
+if ($LASTEXITCODE -ne 0) { throw 'Failed to restore the latest Salts and SaltsUtils SDKs' }
 $assets = Get-Content -LiteralPath (Join-Path $restoreRoot 'obj/project.assets.json') -Raw | ConvertFrom-Json -AsHashtable
 
-$keys = @($assets.libraries.Keys | Where-Object { $_.StartsWith('Salts.Native/', [StringComparison]::OrdinalIgnoreCase) })
-if ($keys.Count -ne 1) { throw 'Expected one resolved Salts.Native package' }
-$packageRoot = Join-Path $packages $assets.libraries[$keys[0]].path
-$target = Join-Path $packageRoot "sdk/$Rid"
-$config = Join-Path $target 'lib/cmake/Salts/SaltsConfig.cmake'
-if (-not (Test-Path -LiteralPath $config -PathType Leaf)) { throw "Missing restored SDK file: $config" }
+$sdks = @(
+  @{ Package = 'Salts.Native'; Name = 'Salts'; Directory = 'salts'; Environment = 'SALTS_ROOT' },
+  @{ Package = 'SaltsUtils.Native'; Name = 'SaltsUtils'; Directory = 'salts-utils'; Environment = 'SALTS_UTILS_ROOT' }
+)
+# Validate both SDKs for the requested RID before changing either stable link.
+foreach ($sdk in $sdks) {
+  $keys = @($assets.libraries.Keys | Where-Object { $_.StartsWith("$($sdk.Package)/", [StringComparison]::OrdinalIgnoreCase) })
+  if ($keys.Count -ne 1) { throw "Expected one resolved $($sdk.Package) package" }
+  $packageRoot = Join-Path $packages $assets.libraries[$keys[0]].path
+  $sdk.Target = Join-Path $packageRoot "sdk/$Rid"
+  $sdk.Resolved = $keys[0]
+  $config = Join-Path $sdk.Target "lib/cmake/$($sdk.Name)/$($sdk.Name)Config.cmake"
+  if (-not (Test-Path -LiteralPath $config -PathType Leaf)) { throw "Missing restored SDK file: $config" }
+}
 
 # Stable links let IDEs use a new SDK without inheriting another shell environment.
 # Never replace a real SDK directory or recursively remove a link target.
-$link = Join-Path $repositoryRoot "stage/dependencies/salts/$Rid"
-New-Item -ItemType Directory -Path (Split-Path $link -Parent) -Force | Out-Null
-$existing = Get-Item -LiteralPath $link -Force -ErrorAction SilentlyContinue
-$linkType = if ($IsWindows) { 'Junction' } else { 'SymbolicLink' }
-if ($existing -and $existing.LinkType -ne $linkType) {
-  throw "Refusing to replace non-$linkType SDK path: $link"
+foreach ($sdk in $sdks) {
+  $link = Join-Path $repositoryRoot "stage/dependencies/$($sdk.Directory)/$Rid"
+  New-Item -ItemType Directory -Path (Split-Path $link -Parent) -Force | Out-Null
+  $existing = Get-Item -LiteralPath $link -Force -ErrorAction SilentlyContinue
+  $linkType = if ($IsWindows) { 'Junction' } else { 'SymbolicLink' }
+  if ($existing -and $existing.LinkType -ne $linkType) {
+    throw "Refusing to replace non-$linkType SDK path: $link"
+  }
+  if ($existing -and $existing.Target -ne $sdk.Target) {
+    Remove-Item -LiteralPath $link -Force
+    $existing = $null
+  }
+  if (-not $existing) {
+    New-Item -ItemType $linkType -Path $link -Target $sdk.Target | Out-Null
+  }
+  Set-Item -LiteralPath "Env:$($sdk.Environment)" -Value $link
+  Write-Host "Restored $($sdk.Resolved) for $Rid at $link"
 }
-if ($existing -and $existing.Target -ne $target) {
-  Remove-Item -LiteralPath $link -Force
-  $existing = $null
-}
-if (-not $existing) {
-  New-Item -ItemType $linkType -Path $link -Target $target | Out-Null
-}
-$env:SALTS_ROOT = $link
-Write-Host "Restored $($keys[0]) for $Rid at $link"

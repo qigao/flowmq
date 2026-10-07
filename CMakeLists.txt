@@ -57,9 +57,6 @@ find_package(
   Salts CONFIG REQUIRED
   PATHS "${FLOWMQ_SALTS_ROOT_PATH}"
   NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
-# The baseline's vcpkg Lua wrapper only sets LUA_FOUND. Use CMake's module to
-# publish Lua_FOUND as required by the SaltsUtils dependency contract.
-include(FindLua)
 find_package(
   SaltsUtils CONFIG REQUIRED
   PATHS "${FLOWMQ_SALTS_UTILS_ROOT_PATH}"

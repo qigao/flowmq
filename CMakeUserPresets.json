@@ -155,7 +155,7 @@
             },
             "environment": {
                 "SALTS_ROOT": "${sourceDir}/stage/dependencies/salts/windows-x64",
-                "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/release",
+                "SALTS_UTILS_ROOT": "${sourceDir}/stage/dependencies/salts-utils/windows-x64",
                 "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/Msvc-Release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
             },
             "inherits": [
@@ -200,7 +200,7 @@
             },
             "environment": {
                 "SALTS_ROOT": "${sourceDir}/stage/dependencies/salts/linux-x64",
-                "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/release",
+                "SALTS_UTILS_ROOT": "${sourceDir}/stage/dependencies/salts-utils/linux-x64",
                 "LD_LIBRARY_PATH": "${sourceDir}/build/linux-gcc-release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
             },
             "inherits": [
@@ -220,7 +220,7 @@
             },
             "environment": {
                 "SALTS_ROOT": "${sourceDir}/stage/dependencies/salts/linux-x64",
-                "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/release"
+                "SALTS_UTILS_ROOT": "${sourceDir}/stage/dependencies/salts-utils/linux-x64"
             },
             "inherits": [
                 "release-linux-ninja",

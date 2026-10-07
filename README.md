@@ -132,7 +132,7 @@ PowerShell 7，并在父环境提供具有 `read:packages` 权限的 `GITHUB_TOK
 
 ```powershell
 ./cmake/ci/restore-native-sdk.ps1 -Rid windows-x64
-cmake --preset win-release-user
+cmake --preset win-release-user -DBUILD_TESTS=ON
 cmake --build --preset win-release-user
 ctest --preset win-release-user --output-on-failure
 ```
@@ -140,16 +140,19 @@ ctest --preset win-release-user --output-on-failure
 Linux 使用 `pwsh -File cmake/ci/restore-native-sdk.ps1 -Rid linux-x64`，随后运行
 `linux-release-user` 的 configure/build/test preset。
 
-Salts.Native 使用 `Version="*"`，每次 restore 通过
+Salts.Native 与 SaltsUtils.Native 均使用 `Version="*"`，每次 restore 通过
 `--no-cache --force-evaluate` 解析最新稳定版；不限制版本、不回退旧包。
 NuGet assets 是版本和路径的事实源，包默认存放于 `stage/nuget`，可通过
 `QIGAO_NUGET_PACKAGES` 指定缓存位置。Release presets 消费
-`stage/dependencies/salts/<RID>` 的稳定链接；configure 本身不下载 SDK，
+`stage/dependencies/salts/<RID>` 与 `stage/dependencies/salts-utils/<RID>` 的稳定链接；configure 本身不下载 SDK，
 且清除旧的包路径缓存。恢复步骤只更新链接，拒绝覆盖已有的普通 SDK 目录。
 
-SaltsUtils 继续由各 preset 的 `SALTS_UTILS_ROOT` 指定，必须针对当前 Salts 重新构建。
-不能混用仍导入旧 `salts_*` 符号的 `salts-idlc` 与新版 Salts runtime。
-其包配置还要求 Lua 与 QuickJS，已通过现有 vcpkg manifest 声明。
+SaltsUtils 由各 preset 的 `SALTS_UTILS_ROOT` 指向恢复的发布 SDK，无需本地重编译。
+[SaltsUtils 4.2.0](https://github.com/qigao/salts-utils/releases/tag/v4.2.0) 已适配
+Salts 2.1；其生成接口有不兼容调整，升级后必须重新生成 IDL 并重新编译消费者。
+包配置通过 `unofficial-lua` 与 `qjs` 查找依赖，现有 manifest 已声明 Lua 和 QuickJS；
+不再需要 FlowMQ 预先调用 `FindLua`。这些版本仅记录验证环境，不是依赖约束。
+首次配置需显式启用 `BUILD_TESTS`；共享 preset 的 `ENABLE_TESTS` 不是本项目的测试开关。
 
 发布 SDK 包含 Release 库。`win-dev-user` / `linux-dev-user` 仍要求在既有
 `PKG_ROOT` 路径安装匹配的 Debug SDK，不能混用旧版或 Release 库。
@@ -208,7 +211,7 @@ owner 成功关闭后才返回成功。在配置了相同 SDK/vcpkg runtime PATH
 
 ```powershell
 $env:FLOWMQ_LOCAL_SALTS_ROOT = (Resolve-Path ../salts/stage/sdk/windows-x64).Path
-cmake --preset win-release-local-sdk
+cmake --preset win-release-local-sdk -DBUILD_TESTS=ON
 cmake --build --preset win-release-local-sdk
 ctest --preset win-release-local-sdk -LE benchmark --output-on-failure
 ctest --preset win-release-local-sdk -R '^bench_flowmq_socket_owners_' -V --output-log build/Msvc-Release-LocalSDK/owner-scaling.log
@@ -257,7 +260,9 @@ TLS 小消息的进程 CPU 秒数中位数也从 1.562 增至 3.234。
 中位数仅用于本机扩展性观察，不能用前后不同运行的绝对值判定补丁加速。
 本机回环结果不能外推为远程网络、单连接或共享逻辑 socket 的性能承诺。
 
-**HIGH｜事实：CNet TLS 接收缓冲区所有权问题已在本地修复，尚未发布。**
+**HIGH｜事实：CNet TLS 接收缓冲区修复已合并上游，尚未发布。**
+修复见 [Salts PR #993](https://github.com/qigao/salts/pull/993)；当前发布的 Salts 2.1.0
+尚不包含该补丁，因此 TLS 完整验证仍使用 `win-release-local-sdk`。
 原 SDK 的 TLS 64 KiB 持续负载曾在单 owner 下返回 `SALTS_EPROTO`。
 `../salts/cnet/src/cnet_owner.c` 将 TLS `read_buffer` 交给异步 NativeIO 接收，
 而 `../salts/cnet/src/cnet_tls.c` 同时用它承载解密结果和未消费的明文后缀，
@@ -271,6 +276,11 @@ TLS 小消息的进程 CPU 秒数中位数也从 1.562 增至 3.234。
 缓冲区隔离用例，覆盖部分明文读取期间的 transport 存储变化。
 修复版 SDK 实测 CNet 35/35、FlowMQ 普通回归 17/17（含三个跨线程 REQ/REP
 示例用例）、性能用例 4/4 通过。
+升级发布版 SaltsUtils 4.2.0 后，在独立 PR 工作树重新生成 FMP/1、全量构建，
+并用相同修复版 Salts 重跑普通回归，17/17 通过。前述吞吐表和性能用例结果来自
+升级前的 SaltsUtils 本地构建环境，本次没有重测吞吐。
+纯发布版组合（Salts 2.1.0 + SaltsUtils 4.2.0）也已全量编译；协议、ESB、流解码和
+FMP/1 schema 四个相关测试 4/4 通过，此结果不覆盖尚待 Salts 发版的 TLS 修复。
 原始 CSV 位于本次构建目录的 `owner-scaling-fixed.log` 与 `owner-tls-fixed.log`；
 这些日志为本地产物，可用上述 CTest 命令重新生成。
 Linux/macOS 与并发 sanitizer 尚未验证。
