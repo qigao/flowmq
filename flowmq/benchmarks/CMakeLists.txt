@@ -12,6 +12,42 @@ target_include_directories(
   PRIVATE ${PROJECT_SOURCE_DIR}/flowmq/src/protocol)
 
 cmake_add_benchmark(
+  bench_flowmq_socket_owners
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_socket_owners.c
+  LIBS FlowMQ::Transport Salts::TinyTest
+  INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/tests/runtime
+  FOLDER "flowmq/benchmarks/runtime")
+if(WIN32)
+  target_link_libraries(bench_flowmq_socket_owners PRIVATE psapi)
+endif()
+if(BUILD_TESTS)
+  add_test(NAME test_flowmq_socket_owners
+           COMMAND bench_flowmq_socket_owners --filter "correctness:")
+  set_tests_properties(test_flowmq_socket_owners
+                       PROPERTIES LABELS "flowmq;flowmq-transport" TIMEOUT 120)
+  if(WIN32)
+    set_tests_properties(test_flowmq_socket_owners
+                         PROPERTIES ENVIRONMENT_MODIFICATION
+                                    "${FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS}")
+  endif()
+  foreach(transport IN ITEMS tcp tls)
+    foreach(payload_bytes IN ITEMS 64 65536)
+      set(benchmark_name bench_flowmq_socket_owners_${transport}_${payload_bytes})
+      add_test(NAME ${benchmark_name}
+               COMMAND bench_flowmq_socket_owners --filter
+                       "scaling: ${transport} ${payload_bytes}-byte")
+      set_tests_properties(${benchmark_name}
+                           PROPERTIES LABELS "flowmq;benchmark" RUN_SERIAL TRUE TIMEOUT 600)
+      if(WIN32)
+        set_tests_properties(${benchmark_name}
+                             PROPERTIES ENVIRONMENT_MODIFICATION
+                                        "${FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS}")
+      endif()
+    endforeach()
+  endforeach()
+endif()
+
+cmake_add_benchmark(
   bench_flowmq_socket
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_socket.c
   LIBS FlowMQ::Transport Salts::TinyTest
@@ -19,6 +55,23 @@ cmake_add_benchmark(
 target_include_directories(
   bench_flowmq_socket
   PRIVATE ${PROJECT_SOURCE_DIR}/flowmq/tests/runtime)
+
+if(BUILD_TESTS)
+  add_test(NAME test_flowmq_owned_rx_evidence
+           COMMAND bench_flowmq_socket --filter "receive evidence:")
+  set_tests_properties(test_flowmq_owned_rx_evidence
+                       PROPERTIES LABELS "flowmq;flowmq-transport" TIMEOUT 30)
+  add_test(NAME bench_flowmq_socket_tcp
+           COMMAND bench_flowmq_socket --filter "caller-driven loopback TCP")
+  set_tests_properties(bench_flowmq_socket_tcp
+                       PROPERTIES LABELS "flowmq;benchmark" RUN_SERIAL TRUE
+                                  TIMEOUT 600 ENVIRONMENT "FLOWMQ_BENCH_CI=1")
+  if(WIN32)
+    set_tests_properties(test_flowmq_owned_rx_evidence bench_flowmq_socket_tcp
+                         PROPERTIES ENVIRONMENT_MODIFICATION
+                                    "${FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS}")
+  endif()
+endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   find_package(Threads REQUIRED)

@@ -74,6 +74,11 @@ foreach(_flowmq_host_root IN ITEMS SALTS_HOST_ROOT SALTS_UTILS_HOST_ROOT)
   endif()
 endforeach()
 
+# Resolve the configured SDK anew after restore.
+unset(Salts_DIR CACHE)
+unset(Salts_DIR)
+unset(SaltsUtils_DIR CACHE)
+unset(SaltsUtils_DIR)
 find_package(
   Salts CONFIG REQUIRED
   PATHS "${FLOWMQ_SALTS_ROOT_PATH}"

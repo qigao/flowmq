@@ -6,40 +6,38 @@
             "hidden": true,
             "cacheVariables": {
                 "CMAKE_C_FLAGS": "/utf-8 /D_WIN32 /D_WINDOWS /diagnostics:caret /W4 /wd4996 /wd4324 /wd4245 /wd4100 /wd4200 /wd4267 /wd4244",
+                "CMAKE_CXX_FLAGS": "/utf-8 /D_WIN32 /D_WINDOWS /diagnostics:caret /W4 /wd4996 /wd4324 /wd4245 /wd4100 /permissive- /volatile:iso /Zc:inline /Zc:preprocessor /Zc:enumTypes /Zc:lambda /Zc:__cplusplus /Zc:externConstexpr /Zc:throwingNew /EHsc",
                 "CMAKE_EXE_LINKER_FLAGS": "/machine:x64 /guard:cf"
             }
         },
         {
             "name": "flags-gnu",
             "hidden": true,
+            "environment": {
+                "SALTS_GNU_BRANCH_PROTECTION": "-fcf-protection=full"
+            },
             "cacheVariables": {
-                "CMAKE_C_FLAGS": "-fstack-protector-strong -fcf-protection=full -fstack-clash-protection -Wall -Wextra -Wpedantic -Wformat=2 -Wundef -Wshadow -Wcast-align -Wunused -Wnull-dereference",
+                "CMAKE_C_FLAGS": "-fstack-protector-strong $env{SALTS_GNU_BRANCH_PROTECTION} -fstack-clash-protection -Wall -Wextra -Wpedantic -Wformat=2 -Wundef -Wshadow -Wcast-align -Wunused -Wnull-dereference",
+                "CMAKE_CXX_FLAGS": "-D_GLIBCXX_ASSERTIONS=1 -fstack-protector-strong $env{SALTS_GNU_BRANCH_PROTECTION} -fstack-clash-protection -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wcast-qual -Wformat=2 -Wundef -Werror=float-equal -Wshadow -Wcast-align -Wunused -Wnull-dereference -Wdouble-promotion -Wimplicit-fallthrough -Wextra-semi -Woverloaded-virtual -Wnon-virtual-dtor -Wold-style-cast -fexceptions",
                 "CMAKE_EXE_LINKER_FLAGS": "-Wl,--allow-shlib-undefined,--as-needed,-z,noexecstack,-z,relro,-z,now",
                 "CMAKE_SHARED_LINKER_FLAGS": "-Wl,--allow-shlib-undefined,--as-needed,-z,noexecstack,-z,relro,-z,now"
             }
         },
         {
-            "name": "flags-gcc-clang",
-            "description": "These flags are supported by both GCC and Clang",
+            "name": "flags-gnu-arm64",
             "hidden": true,
-            "cacheVariables": {
-                "CMAKE_C_FLAGS": "-fstack-protector-strong -fcf-protection=full -fstack-clash-protection -Wall -Wextra -Wpedantic -Wformat=2 -Wundef -Wshadow -Wcast-align -Wunused -Wnull-dereference",
-                "CMAKE_EXE_LINKER_FLAGS": "-Wl,--allow-shlib-undefined,--as-needed,-z,noexecstack,-z,relro,-z,now",
-                "CMAKE_SHARED_LINKER_FLAGS": "-Wl,--allow-shlib-undefined,--as-needed,-z,noexecstack,-z,relro,-z,now"
+            "inherits": "flags-gnu",
+            "description": "AArch64 uses PAC/BTI branch protection instead of x86 CET",
+            "environment": {
+                "SALTS_GNU_BRANCH_PROTECTION": "-mbranch-protection=standard"
             }
         },
         {
-            "name": "flags-appleclang",
+            "name": "flags-darwin",
             "hidden": true,
             "cacheVariables": {
-                "CMAKE_C_FLAGS": "-fstack-protector-strong -Wall -Wextra -Wpedantic -Wformat=2 -Wundef -Wshadow -Wcast-align -Wunused -Wnull-dereference"
-            }
-        },
-        {
-            "name": "flags-clang-windows",
-            "hidden": true,
-            "cacheVariables": {
-                "CMAKE_C_FLAGS": "-fstack-protector-strong -Wall -Wextra -Wpedantic -Wformat=2 -Wundef -Wshadow -Wcast-align -Wunused -Wnull-dereference"
+                "CMAKE_C_FLAGS": "-fstack-protector-strong -Wall -Wextra -Wpedantic -Wformat=2 -Wundef -Wshadow -Wcast-align -Wunused -Wnull-dereference",
+                "CMAKE_CXX_FLAGS": "-fstack-protector-strong -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wcast-qual -Wformat=2 -Wundef -Werror=float-equal -Wshadow -Wcast-align -Wunused -Wnull-dereference -Wdouble-promotion -Wimplicit-fallthrough -Wextra-semi -Woverloaded-virtual -Wnon-virtual-dtor -Wold-style-cast -fexceptions"
             }
         },
         {
@@ -47,6 +45,7 @@
             "hidden": true,
             "cacheVariables": {
                 "CMAKE_C_FLAGS": "-fstack-protector-strong -Wall -Wextra -Wpedantic -Wformat=2 -Wundef -Wshadow -Wcast-align -Wunused -Wnull-dereference",
+                "CMAKE_CXX_FLAGS": "-D_GLIBCXX_ASSERTIONS=1 -fstack-protector-strong -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wcast-qual -Wformat=2 -Wundef -Werror=float-equal -Wshadow -Wcast-align -Wunused -Wnull-dereference -Wdouble-promotion -Wimplicit-fallthrough -Wextra-semi -Woverloaded-virtual -Wnon-virtual-dtor -Wold-style-cast -fexceptions",
                 "CMAKE_EXE_LINKER_FLAGS": "-Wl,--as-needed,-z,noexecstack,-z,relro,-z,now",
                 "CMAKE_SHARED_LINKER_FLAGS": "-Wl,--as-needed,-z,noexecstack,-z,relro,-z,now"
             }

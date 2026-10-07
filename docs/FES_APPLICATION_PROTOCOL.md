@@ -49,7 +49,7 @@ SCATTER_REQUEST 的 expected responses 必须非零，SAGA message 的 saga id �
 
 ```c
 #include "flowmq_esb.h"
-#include "salts_error.h"
+#include "cmeta_error.h"
 
 int main(void) {
   flowmq_esb_message_t message = {

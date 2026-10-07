@@ -212,20 +212,6 @@ function(cmake_add_test target_name)
   cmake_config_target(${target_name} FOLDER "${ARG_FOLDER}")
 endfunction()
 
-function(cmake_target_enable_boringssl_linkage target_name)
-  if(NOT TARGET ${target_name})
-    message(FATAL_ERROR
-            "cmake_target_enable_boringssl_linkage: target '${target_name}' does not exist")
-  endif()
-
-  # vcpkg's BoringSSL archives contain C++ objects.  A pure-C final target
-  # therefore needs the C++ linker driver on non-Windows platforms even though
-  # the public OpenSSL-compatible API remains C.
-  if(NOT WIN32)
-    set_property(TARGET ${target_name} PROPERTY LINKER_LANGUAGE CXX)
-  endif()
-endfunction()
-
 function(cmake_add_benchmark target_name)
   set(options)
   set(oneValueArgs FOLDER)

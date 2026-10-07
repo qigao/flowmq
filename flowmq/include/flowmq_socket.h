@@ -2,7 +2,7 @@
 #define FLOWMQ_SOCKET_H
 
 #include "flowmq_export.h"
-#include "salts_buffer.h"
+#include "cmeta_buffer.h"
 
 #include <stddef.h>
 #include <stdint.h>

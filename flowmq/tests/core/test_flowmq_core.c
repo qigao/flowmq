@@ -1,6 +1,6 @@
 #include "flowmq_core.h"
 #include "tinytest.h"
-#include "salts_error.h"
+#include "cmeta_error.h"
 
 spec("flowmq_core") {
   it("exposes the public pattern contracts") {

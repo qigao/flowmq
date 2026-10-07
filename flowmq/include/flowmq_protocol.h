@@ -5,7 +5,7 @@
 #include "flowmq_protocol_catalog.h"
 
 #include "platform.h"
-#include "salts_error.h"
+#include "cmeta_error.h"
 #include "str.h"
 
 #include <stddef.h>

@@ -1,6 +1,6 @@
 #include "flowmq_peer_state.h"
 
-#include "salts_error.h"
+#include "cmeta_error.h"
 #include "tinytest.h"
 
 spec("flowmq_peer_state") {

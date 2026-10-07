@@ -1,6 +1,6 @@
 #include "flowmq_socket.h"
-#include "salts_error.h"
-#include "salts_buffer.h"
+#include "cmeta_error.h"
+#include "cmeta_buffer.h"
 #include <salts/clock.h>
 
 #include <inttypes.h>
@@ -78,12 +78,12 @@ static int fanout_progress(fanout_fixture_t *fixture) {
 
 static int fanout_progress_until_subscription_count(
     fanout_fixture_t *fixture, size_t expected) {
-  const uint64_t started_ms = salts_monotonic_ms();
+  const uint64_t started_ms = cmeta_monotonic_ms();
   size_t observed = 0u;
   unsigned char event[64] = {0};
   size_t event_size = 0u;
   while (observed < expected &&
-         salts_monotonic_ms() - started_ms < FANOUT_TIMEOUT_MS) {
+         cmeta_monotonic_ms() - started_ms < FANOUT_TIMEOUT_MS) {
     int status = fanout_progress(fixture);
     if (status != SALTS_OK) return status;
     status = flowmq_recv(fixture->publisher, event, sizeof(event),
@@ -178,7 +178,7 @@ static int fanout_open(fanout_fixture_t *fixture, size_t peer_count,
 
 static int fanout_send_retry(fanout_fixture_t *fixture, fanout_mode_t mode,
                              size_t part, int flags) {
-  const uint64_t started_ms = salts_monotonic_ms();
+  const uint64_t started_ms = cmeta_monotonic_ms();
   int status = SALTS_EBUSY;
   for (size_t i = 0u; i < FANOUT_PROGRESS_LIMIT &&
                       (status == SALTS_EBUSY || status == SALTS_ENOBUFS);
@@ -194,7 +194,7 @@ static int fanout_send_retry(fanout_fixture_t *fixture, fanout_mode_t mode,
                                fixture->parts[part].length,
                                flags | FLOWMQ_DONTWAIT);
     if ((status == SALTS_EBUSY || status == SALTS_ENOBUFS) &&
-        salts_monotonic_ms() - started_ms >= FANOUT_TIMEOUT_MS)
+        cmeta_monotonic_ms() - started_ms >= FANOUT_TIMEOUT_MS)
       return SALTS_ETIMEDOUT;
   }
   return status;
@@ -208,7 +208,7 @@ static int fanout_recv_part(fanout_fixture_t *fixture,
   mem_slice_t segments[FANOUT_VECTOR_CAPACITY] = {0};
   const unsigned char *expected =
       (const unsigned char *)fixture->parts[part].data;
-  const uint64_t started_ms = salts_monotonic_ms();
+  const uint64_t started_ms = cmeta_monotonic_ms();
   size_t count = 0u;
   size_t total = 0u;
   size_t offset = 0u;
@@ -225,7 +225,7 @@ static int fanout_recv_part(fanout_fixture_t *fixture,
                                 FANOUT_VECTOR_CAPACITY, &count,
                                 FLOWMQ_DONTWAIT);
     if (status == SALTS_EBUSY &&
-        salts_monotonic_ms() - started_ms >= FANOUT_TIMEOUT_MS)
+        cmeta_monotonic_ms() - started_ms >= FANOUT_TIMEOUT_MS)
       return SALTS_ETIMEDOUT;
   }
   if (status != SALTS_OK) return status;
@@ -345,20 +345,20 @@ static int fanout_run(fanout_mode_t mode, size_t peer_count,
     if (status != SALTS_OK) goto cleanup;
   }
 
-  wall_started = salts_hrtime();
+  wall_started = cmeta_hrtime();
   for (size_t sample = 0u; sample < samples; ++sample) {
-    const uint64_t started = salts_hrtime();
+    const uint64_t started = cmeta_hrtime();
     uint64_t finished;
     status = fanout_cycle(&fixture, mode, 0);
     if (status != SALTS_OK) goto cleanup;
-    finished = salts_hrtime();
+    finished = cmeta_hrtime();
     if (finished <= started) {
       status = SALTS_EIO;
       goto cleanup;
     }
     latencies[sample] = finished - started;
   }
-  wall_ns = salts_hrtime() - wall_started;
+  wall_ns = cmeta_hrtime() - wall_started;
   if (wall_ns == 0u) {
     status = SALTS_EIO;
     goto cleanup;

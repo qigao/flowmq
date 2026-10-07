@@ -22,6 +22,14 @@ thread，也不把同一个 socket 变成 MPSC consumer。`bind`、`connect`、`
 - CFlow/CMeta 可用于控制面配置、类型描述和 executor 组合，不进入逐消息 TCP/TLS
   热路径。
 
+多核应用可为每个 worker 创建独立 context/socket，由各线程自行推进 CNet。
+可运行的 [REQ/REP 示例](../examples/multicore_reqrep.c) 使用主线程的一组 REQ
+连接独立 worker REP endpoint；主线程必须统一推进全部客户端 socket，不能把
+`send` admission 当作已发到网络。endpoint 在启动锁下发布，消息经 TCP 传递，
+仅停止标志和首个错误通过 atomic 共享。客户端确认收齐全部应答后发出停止信号，
+worker 保持最后一条应答的进度直到该信号，再在各自 owner 上销毁资源。
+因此不改变 socket 单 owner 契约，也不要求为 FlowMQ 增加隐藏 progress thread。
+
 ## ZeroMQ 模式契约
 
 TCP/TLS 第一阶段承载以下经典 socket 模式；bind/connect 方向不决定 pattern：
@@ -62,8 +70,8 @@ readiness/wait-set，可替换该等待策略以降低空闲唤醒延迟，但�
 ## 发送内存与所有权
 
 `flowmq_send` 仍保持 borrowed-input/copy 契约：FMQ/6 协议头写入 socket 自有的
-有界 framing storage，payload 只在本次普通函数调用期间借用。立即发送继续通过
-`cnet_sendv` 在成功返回前复制到 CNet-owned storage，因此调用者可在 `flowmq_send`
+有界 framing storage，payload 只在本次普通函数调用期间借用。立即发送在返回前
+复制到 socket 池拥有的 buffer，再通过 `cnet_send_buffer` 提交并保留引用，因此调用者可在 `flowmq_send`
 返回后立即修改或释放输入；普通 `flowmq_send(const void *)` 不会偷偷升级成 borrowed
 zero-copy。
 

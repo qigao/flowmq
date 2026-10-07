@@ -13,8 +13,8 @@
 #include "flowmq_socket_option.h"
 #include "flowmq_socket_external_internal.h"
 #include "flowmq_tls_identity_map.h"
-#include "salts_error.h"
-#include "salts_buffer.h"
+#include "cmeta_error.h"
+#include "cmeta_buffer.h"
 #include "str.h"
 
 #include <cnet/cnet.h>
@@ -538,7 +538,7 @@ static int flowmq_socket_endpoint_schedule(flowmq_socket_t *socket,
   if (socket->reconnect_interval_ms < 0) return SALTS_OK;
   status = flowmq_reconnect_next(&endpoint->reconnect, &delay_ms);
   if (status != SALTS_OK) return status;
-  now_ms = salts_monotonic_ms();
+  now_ms = cmeta_monotonic_ms();
   endpoint->next_attempt_ms =
       delay_ms > UINT64_MAX - now_ms ? UINT64_MAX : now_ms + delay_ms;
   endpoint->retry_pending = 1u;
@@ -1742,7 +1742,7 @@ static int flowmq_socket_peer_flow_update_progress(
   if (!flowmq_socket_peer_ready(peer) ||
       !flowmq_peer_state_write_idle(&peer->state))
     return SALTS_OK;
-  status = flowmq_flow_control_next_update(&peer->flow_control, salts_hrtime(),
+  status = flowmq_flow_control_next_update(&peer->flow_control, cmeta_hrtime(),
                                            &update);
   if (status == FLOWMQ_FLOW_CONTROL_NO_UPDATE) return SALTS_OK;
   if (status != SALTS_OK) return status;
@@ -1770,7 +1770,7 @@ static int flowmq_socket_peer_heartbeat_progress(flowmq_socket_peer_t *peer) {
     peer->pong_pending = 0u;
   }
   if (!peer->heartbeat_active) return SALTS_OK;
-  now_ns = salts_hrtime();
+  now_ns = cmeta_hrtime();
   action = flowmq_protocol_heartbeat_deadlines_next(
       &peer->heartbeat, now_ns, &wait_deadline_ns);
   (void)wait_deadline_ns;
@@ -1863,7 +1863,7 @@ static int flowmq_socket_process_receive(flowmq_socket_peer_t *peer) {
               &peer->state, FLOWMQ_PEER_HANDSHAKE_HELLO_RX);
         if (status == SALTS_OK && peer->heartbeat_active)
           flowmq_protocol_heartbeat_deadlines_on_receive(
-              &peer->heartbeat, salts_hrtime());
+              &peer->heartbeat, cmeta_hrtime());
       }
     } else if (!flowmq_peer_state_handshake_has(
                    &peer->state, FLOWMQ_PEER_HANDSHAKE_SETTINGS_RX)) {
@@ -1883,7 +1883,7 @@ static int flowmq_socket_process_receive(flowmq_socket_peer_t *peer) {
             &peer->state, FLOWMQ_PEER_HANDSHAKE_SETTINGS_RX);
       if (status == SALTS_OK && peer->heartbeat_active)
         flowmq_protocol_heartbeat_deadlines_on_receive(
-            &peer->heartbeat, salts_hrtime());
+            &peer->heartbeat, cmeta_hrtime());
     } else {
       status = frame.pattern == peer->remote_pattern
                    ? flowmq_pattern_data_direction_validate(
@@ -1893,7 +1893,7 @@ static int flowmq_socket_process_receive(flowmq_socket_peer_t *peer) {
         status = SALTS_EPROTO;
       if (status == SALTS_OK && peer->heartbeat_active)
         flowmq_protocol_heartbeat_deadlines_on_receive(&peer->heartbeat,
-                                                       salts_hrtime());
+                                                       cmeta_hrtime());
       if (status == SALTS_OK && frame.kind == FLOWMQ_PROTOCOL_FRAME_FLOW_UPDATE) {
         flowmq_protocol_flow_update_t update;
         status = flowmq_protocol_flow_update_decode(frame.payload, &update);
@@ -1956,7 +1956,7 @@ static int flowmq_socket_process_owned_stream(
                    : SALTS_EPROTO;
       if (status == SALTS_OK && peer->heartbeat_active)
         flowmq_protocol_heartbeat_deadlines_on_receive(
-            &peer->heartbeat, salts_hrtime());
+            &peer->heartbeat, cmeta_hrtime());
       if (status == SALTS_OK)
         status = flowmq_socket_process_data_frame(
             peer, &frame, NULL, &projection, pause_receive);
@@ -2057,7 +2057,7 @@ static void flowmq_socket_on_state(void *user, cnet_connection connection,
                            ? socket->heartbeat_timeout_ms
                            : socket->heartbeat_interval_ms;
       flowmq_protocol_heartbeat_deadlines_init(
-          &peer->heartbeat, salts_hrtime(),
+          &peer->heartbeat, cmeta_hrtime(),
           (uint64_t)socket->heartbeat_interval_ms, (uint64_t)timeout_ms, 0u);
       peer->heartbeat_active = 1u;
     }
@@ -2154,7 +2154,7 @@ static void flowmq_socket_on_receive_slice(
                    : SALTS_EPROTO;
       if (status == SALTS_OK && peer->heartbeat_active)
         flowmq_protocol_heartbeat_deadlines_on_receive(
-            &peer->heartbeat, salts_hrtime());
+            &peer->heartbeat, cmeta_hrtime());
       if (status == SALTS_OK)
         status = flowmq_socket_process_data_frame(
             peer, &frame, &slice, NULL, &pause_receive);
@@ -2295,7 +2295,7 @@ static int flowmq_socket_endpoint_connect(flowmq_socket_t *socket,
 }
 
 static int flowmq_socket_reconnect_progress(flowmq_socket_t *socket) {
-  const uint64_t now_ms = salts_monotonic_ms();
+  const uint64_t now_ms = cmeta_monotonic_ms();
   /* Keep established-connection progress at one predictable branch. */
   if (!socket->reconnect_pending) return SALTS_OK;
   socket->reconnect_pending = 0u;
@@ -2793,7 +2793,7 @@ int flowmq_connect(flowmq_socket_t *socket, const char *endpoint) {
       socket->reconnect_interval_ms >= 0
           ? (uint64_t)socket->reconnect_interval_ms
           : 0u,
-      reconnect_max_ms, salts_hrtime() ^ (uint64_t)(endpoint_index + 1u));
+      reconnect_max_ms, cmeta_hrtime() ^ (uint64_t)(endpoint_index + 1u));
   if (status == SALTS_OK)
     status = flowmq_socket_endpoint_connect(socket, endpoint_index);
   if (status != SALTS_OK) {
@@ -3822,7 +3822,7 @@ static int flowmq_socket_receive_consume_credit(
       !flowmq_peer_state_is_retired(&peer->state)) {
     uint64_t consumed_at_ns = peer->flow_control.update_pending
                                   ? 0u
-                                  : salts_hrtime();
+                                  : cmeta_hrtime();
     return flowmq_flow_control_consume(
         &peer->flow_control, message->credit_size, consumed_at_ns);
   }
@@ -3937,7 +3937,7 @@ static int flowmq_socket_try_recv_slice(flowmq_socket_t *socket,
 
   if (message->buffer != NULL) {
     out->data =
-        (unsigned char *)mem_buffer_data(message->buffer) + message->offset;
+        mem_buffer_data(message->buffer) + message->offset;
     out->length = message->size;
     out->buffer = message->buffer;
     message->buffer = NULL;
@@ -3997,7 +3997,7 @@ static int flowmq_socket_try_recv_slicev(
 
   if (message->buffer != NULL) {
     segments[0].data =
-        (unsigned char *)mem_buffer_data(message->buffer) + message->offset;
+        mem_buffer_data(message->buffer) + message->offset;
     segments[0].length = message->size;
     segments[0].buffer = message->buffer;
     message->buffer = NULL;
@@ -4293,8 +4293,8 @@ static int flowmq_socket_subscription_sync_pending(
 static uint32_t flowmq_socket_local_external_timeout(
     const flowmq_socket_t *socket, uint32_t max_wait_ms) {
   uint32_t wait_ms = max_wait_ms;
-  const uint64_t now_ms = salts_monotonic_ms();
-  const uint64_t now_ns = salts_hrtime();
+  const uint64_t now_ms = cmeta_monotonic_ms();
+  const uint64_t now_ns = cmeta_hrtime();
   if (socket->async_error != SALTS_OK ||
       socket->send_cancel_error != SALTS_OK ||
       socket->recv_cancel_error != SALTS_OK)
@@ -4629,7 +4629,7 @@ int flowmq_socket_internal_fanout_match_count(
 
 int flowmq_poll(flowmq_pollitem_t *items, size_t item_count,
                 uint32_t timeout_ms, size_t *ready) {
-  const uint64_t started_ms = salts_monotonic_ms();
+  const uint64_t started_ms = cmeta_monotonic_ms();
   if (ready != NULL) *ready = 0u;
   if (items == NULL || item_count == 0u || ready == NULL) return SALTS_EINVAL;
   for (;;) {
@@ -4657,11 +4657,11 @@ int flowmq_poll(flowmq_pollitem_t *items, size_t item_count,
     }
     if (*ready != 0u || timeout_ms == 0u) return SALTS_OK;
     {
-      const uint64_t elapsed_ms = salts_monotonic_ms() - started_ms;
+      const uint64_t elapsed_ms = cmeta_monotonic_ms() - started_ms;
       const uint64_t remaining_ms =
           elapsed_ms >= timeout_ms ? 0u : (uint64_t)timeout_ms - elapsed_ms;
       if (remaining_ms == 0u) return SALTS_OK;
-      salts_sleep_ms(remaining_ms > 1u ? 1u : (uint32_t)remaining_ms);
+      cmeta_sleep_ms(remaining_ms > 1u ? 1u : (uint32_t)remaining_ms);
     }
   }
 }

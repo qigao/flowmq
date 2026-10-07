@@ -9,6 +9,7 @@ vcpkg_installed/
 conan-cache/
 coverage.xml
 .codegraph/
+stage/
 /.worktrees/
 
 # IDE files

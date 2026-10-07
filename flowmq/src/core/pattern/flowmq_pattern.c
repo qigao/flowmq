@@ -2,7 +2,7 @@
 #include "flowmq_pattern_schema.h"
 #include "flowmq_security.h"
 
-#include "salts_error.h"
+#include "cmeta_error.h"
 
 #define FLOWMQ_PATTERN_DESC_ROW(pattern_value, capabilities_value, compatible_value,              \
                                 route_value, subscription_value, mute_value, fsm_value)            \

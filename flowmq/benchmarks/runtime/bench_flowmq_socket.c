@@ -2,7 +2,7 @@
 #include "flowmq_protocol.h"
 #include "flowmq_tls_test_material.h"
 #include "tinytest.h"
-#include "salts_error.h"
+#include "cmeta_error.h"
 #include <salts/clock.h>
 
 #include <stdlib.h>
@@ -61,7 +61,7 @@ static int bench_progress(bench_pair_t *pair) {
 }
 
 static uint64_t bench_progress_deadline_ms(void) {
-  const uint64_t now = salts_monotonic_ms();
+  const uint64_t now = cmeta_monotonic_ms();
   return now > UINT64_MAX - BENCH_PROGRESS_TIMEOUT_MS
              ? UINT64_MAX
              : now + BENCH_PROGRESS_TIMEOUT_MS;
@@ -76,7 +76,7 @@ static int bench_progress_wait(bench_pair_t *pair, uint64_t deadline_ms,
       {.socket = pair->receiver,
        .events = (short)(FLOWMQ_POLLERR |
                          (waiting_for_send ? 0 : FLOWMQ_POLLIN))}};
-  const uint64_t now = salts_monotonic_ms();
+  const uint64_t now = cmeta_monotonic_ms();
   uint64_t remaining_ms;
   uint32_t wait_ms;
   size_t ready = 0u;
@@ -567,7 +567,7 @@ static int bench_tls_evidence_measure(
   }
 
   for (size_t sample = 0u; sample < workload->samples; ++sample) {
-    const uint64_t started = salts_hrtime();
+    const uint64_t started = cmeta_hrtime();
     uint64_t elapsed;
     status = bench_tls_evidence_exchange(&pair, workload);
     if (status != SALTS_OK) {
@@ -576,7 +576,7 @@ static int bench_tls_evidence_measure(
               workload->name, sample, status);
       goto cleanup;
     }
-    elapsed = salts_hrtime() - started;
+    elapsed = cmeta_hrtime() - started;
     if (elapsed == 0u || elapsed > UINT64_MAX - elapsed_total) {
       status = SALTS_ERANGE;
       goto cleanup;
@@ -620,6 +620,10 @@ typedef enum bench_owned_rx_mode_e {
   BENCH_OWNED_RX_SLICE = 1,
   BENCH_OWNED_RX_SLICEV = 2
 } bench_owned_rx_mode_t;
+
+static const char BENCH_RX_COPIED_FALLBACK[] = "copied_fallback";
+
+static const char BENCH_RX_MIXED_FALLBACK[] = "mixed_or_fallback";
 
 typedef struct bench_owned_rx_result_s {
   const char *mode;
@@ -810,7 +814,7 @@ static int bench_owned_rx_measure(
   }
 
   for (size_t sample = 0u; sample < samples; ++sample) {
-    const uint64_t started = salts_hrtime();
+    const uint64_t started = cmeta_hrtime();
     uint64_t elapsed;
     int direct = 0;
     size_t range_count = 0u;
@@ -823,7 +827,7 @@ static int bench_owned_rx_measure(
               bench_owned_rx_mode_name(mode), payload_size, sample, status);
       goto cleanup;
     }
-    elapsed = salts_hrtime() - started;
+    elapsed = cmeta_hrtime() - started;
     if (elapsed == 0u || elapsed > UINT64_MAX - elapsed_total) {
       status = SALTS_ERANGE;
       goto cleanup;
@@ -864,28 +868,31 @@ static int bench_owned_rx_measure(
     const int zero_copy_vector =
         slicev_mode && base_aligned_hits == 0u &&
         subrange_hits + multi_range_hits == samples;
+    const int copied_fallback =
+        (slice_mode || slicev_mode) && base_aligned_hits == samples &&
+        subrange_hits == 0u && multi_range_hits == 0u;
+
+    const char *contract_basis = BENCH_RX_MIXED_FALLBACK;
+    if (mode == BENCH_OWNED_RX_COPY)
+      contract_basis = "caller_copy";
+    else if (slice_mode && all_subrange)
+      contract_basis = "owned_subrange";
+    else if (segmented_legacy)
+      contract_basis = "segmented_legacy_coalesce";
+    else if (copied_fallback)
+      contract_basis = BENCH_RX_COPIED_FALLBACK;
+    else if (all_vector)
+      contract_basis = "owned_vector";
+    else if (slicev_mode && all_subrange)
+      contract_basis = "owned_single_range";
+    else if (slicev_mode && multi_range_hits != 0u && base_aligned_hits != 0u)
+      contract_basis = "mixed_vector_or_fallback";
+    else if (zero_copy_vector)
+      contract_basis = "owned_vector_mixed_ranges";
 
     *out = (bench_owned_rx_result_t){
         .mode = bench_owned_rx_mode_name(mode),
-        .contract_basis =
-            mode == BENCH_OWNED_RX_COPY
-                ? "caller_copy"
-                : (slice_mode
-                       ? (all_subrange
-                              ? "owned_subrange"
-                              : (segmented_legacy
-                                     ? "segmented_legacy_coalesce"
-                                     : "mixed_or_fallback"))
-                       : (all_vector
-                              ? "owned_vector"
-                              : (all_subrange
-                                     ? "owned_single_range"
-                                     : (multi_range_hits != 0u &&
-                                                base_aligned_hits != 0u
-                                            ? "mixed_vector_or_fallback"
-                                            : (zero_copy_vector
-                                                   ? "owned_vector_mixed_ranges"
-                                                   : "mixed_or_fallback"))))),
+        .contract_basis = contract_basis,
         .payload_bytes = payload_size,
         .samples = samples,
         .p50_ns = bench_tls_evidence_percentile(latencies, samples, 50u),
@@ -907,8 +914,8 @@ static int bench_owned_rx_measure(
             mode == BENCH_OWNED_RX_COPY
                 ? 1
                 : (slice_mode
-                       ? (all_subrange ? 0 : (segmented_legacy ? 1 : -1))
-                       : (zero_copy_vector ? 0 : -1)),
+                       ? (all_subrange ? 0 : (copied_fallback ? 1 : -1))
+                       : (zero_copy_vector ? 0 : (copied_fallback ? 1 : -1))),
         .shape_observable = mode == BENCH_OWNED_RX_COPY ? 0 : 1};
   }
 
@@ -922,7 +929,10 @@ cleanup:
 
 static int bench_owned_rx_contract_validate(
     const bench_owned_rx_result_t *result) {
-  if (result == NULL || result->mode == NULL || result->contract_basis == NULL)
+  const char *expected_basis;
+  int expected_copy;
+  if (result == NULL || result->mode == NULL || result->contract_basis == NULL ||
+      result->samples == 0u)
     return SALTS_EINVAL;
 
   if (strcmp(result->mode, "copy") == 0)
@@ -933,62 +943,59 @@ static int bench_owned_rx_contract_validate(
                ? SALTS_OK
                : SALTS_EPROTO;
 
-  if (strcmp(result->mode, "slice") == 0) {
-    if (result->range_count_min != 1u || result->range_count_max != 1u)
-      return SALTS_EPROTO;
-    if (result->payload_bytes <= FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE) {
-      return result->subrange_hits == result->samples &&
-                     result->base_aligned_hits == 0u &&
-                     result->multi_range_hits == 0u &&
-                     result->payload_copy_contract == 0 &&
-                     strcmp(result->contract_basis, "owned_subrange") == 0
-                 ? SALTS_OK
-                 : SALTS_EPROTO;
-    }
-
-    return result->subrange_hits == 0u &&
-                   result->base_aligned_hits == result->samples &&
-                   result->multi_range_hits == 0u &&
-                   result->payload_copy_contract == 1 &&
-                   strcmp(result->contract_basis,
-                          "segmented_legacy_coalesce") == 0
-               ? SALTS_OK
-               : SALTS_EPROTO;
-  }
-
-  if (strcmp(result->mode, "slicev") != 0) return SALTS_EPROTO;
-
-  if (result->payload_bytes <= FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE) {
-    return result->subrange_hits == result->samples &&
-                   result->base_aligned_hits == 0u &&
-                   result->multi_range_hits == 0u &&
-                   result->range_count_min == 1u &&
-                   result->range_count_max == 1u &&
-                   result->payload_copy_contract == 0 &&
-                   strcmp(result->contract_basis, "owned_single_range") == 0
-               ? SALTS_OK
-               : SALTS_EPROTO;
-  }
-
-  if (result->subrange_hits != 0u ||
-      result->multi_range_hits == 0u ||
-      result->base_aligned_hits + result->multi_range_hits != result->samples ||
-      result->range_count_max <= 1u)
+  if (result->range_count_min == 0u ||
+      result->range_count_max < result->range_count_min ||
+      result->subrange_hits > result->samples ||
+      result->base_aligned_hits > result->samples - result->subrange_hits ||
+      result->multi_range_hits !=
+          result->samples - result->subrange_hits - result->base_aligned_hits)
     return SALTS_EPROTO;
 
-  if (result->base_aligned_hits == 0u) {
-    return result->multi_range_hits == result->samples &&
-                   result->range_count_min > 1u &&
-                   result->payload_copy_contract == 0 &&
-                   strcmp(result->contract_basis, "owned_vector") == 0
-               ? SALTS_OK
-               : SALTS_EPROTO;
+  expected_copy = result->base_aligned_hits == 0u
+                      ? 0
+                      : (result->base_aligned_hits == result->samples ? 1 : -1);
+  /* TCP fragmentation determines storage shape at every payload size. Validate
+   * the observed ownership accounting, never require a particular hit rate. */
+  if (strcmp(result->mode, "slice") == 0) {
+    if (result->range_count_min != 1u || result->range_count_max != 1u ||
+        result->multi_range_hits != 0u)
+      return SALTS_EPROTO;
+    if (result->subrange_hits == result->samples)
+      expected_basis = "owned_subrange";
+    else if (result->base_aligned_hits == result->samples)
+      expected_basis = result->payload_bytes > FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE
+                           ? "segmented_legacy_coalesce"
+                           : BENCH_RX_COPIED_FALLBACK;
+    else
+      expected_basis = BENCH_RX_MIXED_FALLBACK;
+  } else if (strcmp(result->mode, "slicev") == 0) {
+    if (result->multi_range_hits == 0u) {
+      if (result->range_count_min != 1u || result->range_count_max != 1u)
+        return SALTS_EPROTO;
+    } else if (result->multi_range_hits == result->samples) {
+      if (result->range_count_min <= 1u) return SALTS_EPROTO;
+    } else if (result->range_count_min != 1u || result->range_count_max <= 1u) {
+      return SALTS_EPROTO;
+    }
+
+    if (result->base_aligned_hits == result->samples)
+      expected_basis = BENCH_RX_COPIED_FALLBACK;
+    else if (result->multi_range_hits == result->samples)
+      expected_basis = "owned_vector";
+    else if (result->subrange_hits == result->samples)
+      expected_basis = "owned_single_range";
+    else if (result->base_aligned_hits == 0u)
+      expected_basis = "owned_vector_mixed_ranges";
+    else if (result->multi_range_hits != 0u)
+      expected_basis = "mixed_vector_or_fallback";
+    else
+      expected_basis = BENCH_RX_MIXED_FALLBACK;
+  } else {
+    return SALTS_EPROTO;
   }
 
-  return result->range_count_min == 1u &&
-                 result->payload_copy_contract == -1 &&
-                 strcmp(result->contract_basis,
-                        "mixed_vector_or_fallback") == 0
+  return result->payload_copy_contract == expected_copy &&
+                 strcmp(result->contract_basis, expected_basis) == 0
              ? SALTS_OK
              : SALTS_EPROTO;
 }
@@ -1077,6 +1084,28 @@ static void bench_zmq_close(bench_zmq_pair_t *pair) {
 #endif
 
 spec("FlowMQ direct socket benchmark") {
+  it("receive evidence: accepts fragmentation without claiming zero-copy") {
+    enum { EVIDENCE_SAMPLES = 31u, EVIDENCE_DIRECT_SAMPLES = 30u };
+    bench_owned_rx_result_t observed[] = {
+        {.mode = bench_owned_rx_mode_name(BENCH_OWNED_RX_SLICE),
+         .contract_basis = BENCH_RX_MIXED_FALLBACK,
+         .payload_bytes = BENCH_LARGE_PAYLOAD_BYTES,
+         .samples = EVIDENCE_SAMPLES, .subrange_hits = EVIDENCE_DIRECT_SAMPLES,
+         .base_aligned_hits = 1u, .range_count_min = 1u, .range_count_max = 1u,
+         .payload_copy_contract = -1},
+        {.mode = bench_owned_rx_mode_name(BENCH_OWNED_RX_SLICEV),
+         .contract_basis = BENCH_RX_COPIED_FALLBACK,
+         .payload_bytes = BENCH_RETAINED_LARGE_PAYLOAD_BYTES,
+         .samples = EVIDENCE_SAMPLES, .base_aligned_hits = EVIDENCE_SAMPLES,
+         .range_count_min = 1u, .range_count_max = 1u,
+         .payload_copy_contract = 1}};
+    for (size_t i = 0u; i < sizeof(observed) / sizeof(observed[0]); ++i) {
+      check_equal(bench_owned_rx_contract_validate(&observed[i]), SALTS_OK);
+      observed[i].payload_copy_contract = 0;
+      check_equal(bench_owned_rx_contract_validate(&observed[i]), SALTS_EPROTO);
+    }
+  }
+
   bench("caller-driven loopback TCP") {
     static unsigned char payload[BENCH_PAYLOAD_BYTES];
     static unsigned char large_payload[BENCH_LARGE_PAYLOAD_BYTES];

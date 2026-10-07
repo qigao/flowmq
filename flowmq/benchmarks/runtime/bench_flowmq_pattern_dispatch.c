@@ -1,6 +1,6 @@
 #include "flowmq_socket.h"
 #include "tinytest.h"
-#include "salts_error.h"
+#include "cmeta_error.h"
 #include <salts/clock.h>
 
 #include <stddef.h>
@@ -63,7 +63,7 @@ static int bench_recv_exact(bench_socket_group_t *group,
                             size_t expected_size) {
   unsigned char buffer[BENCH_PATTERN_PAYLOAD_BYTES + 32u];
   size_t received = 0u;
-  const uint64_t started_ms = salts_monotonic_ms();
+  const uint64_t started_ms = cmeta_monotonic_ms();
   int status = SALTS_EBUSY;
   for (size_t i = 0u;
        i < BENCH_PATTERN_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
@@ -72,7 +72,7 @@ static int bench_recv_exact(bench_socket_group_t *group,
       status = flowmq_recv(receiver, buffer, sizeof(buffer), &received,
                            FLOWMQ_DONTWAIT);
     if (status == SALTS_EBUSY &&
-        salts_monotonic_ms() - started_ms >=
+        cmeta_monotonic_ms() - started_ms >=
             BENCH_PATTERN_PROGRESS_TIMEOUT_MS)
       break;
   }
@@ -96,7 +96,7 @@ static int bench_send_retry(bench_socket_group_t *group,
                             const void *payload,
                             size_t payload_size,
                             int flags) {
-  const uint64_t started_ms = salts_monotonic_ms();
+  const uint64_t started_ms = cmeta_monotonic_ms();
   int status = SALTS_EBUSY;
   for (size_t i = 0u;
        i < BENCH_PATTERN_PROGRESS_LIMIT &&
@@ -106,7 +106,7 @@ static int bench_send_retry(bench_socket_group_t *group,
       status = flowmq_send(sender, payload, payload_size,
                            flags | FLOWMQ_DONTWAIT);
     if ((status == SALTS_EBUSY || status == SALTS_ENOBUFS) &&
-        salts_monotonic_ms() - started_ms >=
+        cmeta_monotonic_ms() - started_ms >=
             BENCH_PATTERN_PROGRESS_TIMEOUT_MS)
       break;
   }

@@ -2,7 +2,7 @@
 #include "flowmq_protocol_internal.h"
 
 #include "tinytest.h"
-#include "salts_error.h"
+#include "cmeta_error.h"
 #include "str.h"
 
 #include <string.h>

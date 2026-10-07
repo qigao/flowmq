@@ -5,6 +5,49 @@
     ],
     "configurePresets": [
         {
+            "name": "vcpkg-cache-ci",
+            "hidden": true,
+            "inherits": "vcpkg-cache",
+            "environment": {
+                "VCPKG_CACHE_REPOSITORY_ROOT": "$penv{VCPKG_CACHE_REPOSITORY_ROOT}",
+                "VCPKG_BINARY_SOURCES": "$penv{VCPKG_BINARY_SOURCES}"
+            }
+        },
+        {
+            "name": "vcpkg-cache-linux",
+            "hidden": true,
+            "inherits": "vcpkg-cache",
+            "cacheVariables": {
+                "VCPKG_HOST_TRIPLET": "x64-linux"
+            },
+            "environment": {
+                "VCPKG_CACHE_REPOSITORY_ROOT": "$penv{HOME}/.cache/qigao/vcpkg-cache"
+            }
+        },
+        {
+            "name": "vcpkg-cache-windows",
+            "hidden": true,
+            "inherits": "vcpkg-cache",
+            "cacheVariables": {
+                "VCPKG_HOST_TRIPLET": "x64-windows"
+            },
+            "environment": {
+                "VCPKG_CACHE_REPOSITORY_ROOT": "$penv{LOCALAPPDATA}/qigao/vcpkg-cache",
+                "RE2C_ROOT": "$env{PKG_ROOT}/re2c/windows-x64"
+            }
+        },
+        {
+            "name": "vcpkg-cache",
+            "hidden": true,
+            "toolchainFile": "$env{VCPKG_CACHE_REPOSITORY_ROOT}/cmake/QigaoVcpkgToolchain.cmake",
+            "environment": {
+                "VCPKG_BINARY_SOURCES": "clear;default,readwrite;nugettimeout,1800;nugetconfig,${sourceDir}/cmake/vcpkg-cache.nuget.config,read",
+                "VCPKG_OVERLAY_PORTS": "$env{VCPKG_CACHE_REPOSITORY_ROOT}/ports",
+                "RE2C_ROOT": "$penv{RE2C_ROOT}",
+                "PATH": "$env{RE2C_ROOT}/bin${pathListSep}$penv{PATH}"
+            }
+        },
+        {
             "name": "win-toolchain",
             "hidden": true,
             "environment": {
@@ -15,25 +58,32 @@
                 "USER_ROOT": "C:/Users/lockg",
                 "PROGRAM_FILES_X86_ROOT": "C:/Program Files (x86)",
                 "WINDOWS_ROOT": "C:/Windows"
-            }
+            },
+            "inherits": [
+                "vcpkg-cache-windows"
+            ]
         },
         {
             "name": "win-paths",
             "hidden": true,
             "inherits": "win-toolchain",
-            "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
-            "cacheVariables": { 
+            "cacheVariables": {
                 "VCPKG_INSTALLED_DIR": "$env{VCPKG_INSTALLED_DIR}",
                 "VCPKG_TARGET_TRIPLET": "x64-windows",
                 "VCPKG_MANIFEST_MODE": "ON"
             },
-            "architecture": { "value": "x64", "strategy": "external" },
-            "toolset": { "value": "host=x64", "strategy": "external" }
+            "architecture": {
+                "value": "x64",
+                "strategy": "external"
+            },
+            "toolset": {
+                "value": "host=x64",
+                "strategy": "external"
+            }
         },
         {
             "name": "linux-paths",
             "hidden": true,
-            "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
             "cacheVariables": {
                 "VCPKG_INSTALLED_DIR": "$env{VCPKG_INSTALLED_DIR}",
                 "VCPKG_TARGET_TRIPLET": "x64-linux",
@@ -43,7 +93,10 @@
                 "PKG_ROOT": "/opt",
                 "VCPKG_ROOT": "/opt/vcpkg",
                 "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed"
-            }
+            },
+            "inherits": [
+                "vcpkg-cache-linux"
+            ]
         },
         {
             "name": "android-win-environment",
@@ -87,9 +140,12 @@
             "environment": {
                 "SALTS_ROOT": "$env{PKG_ROOT}/salts/debug",
                 "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/debug",
-                "PATH": "${sourceDir}/build/Msvc/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
+                "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/Msvc/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
             },
-            "inherits": ["base-win-dev-user", "win-paths"]
+            "inherits": [
+                "base-win-dev-user",
+                "win-paths"
+            ]
         },
         {
             "name": "win-release-user",
@@ -98,11 +154,26 @@
                 "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/flowmq/release"
             },
             "environment": {
-                "SALTS_ROOT": "$env{PKG_ROOT}/salts/release",
-                "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/release",
-                "PATH": "${sourceDir}/build/Msvc-Release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
+                "SALTS_ROOT": "${sourceDir}/stage/dependencies/salts/windows-x64",
+                "SALTS_UTILS_ROOT": "${sourceDir}/stage/dependencies/salts-utils/windows-x64",
+                "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/Msvc-Release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
             },
-            "inherits": ["base-win-release-user", "win-paths"]
+            "inherits": [
+                "base-win-release-user",
+                "win-paths"
+            ]
+        },
+        {
+            "name": "win-release-local-sdk",
+            "inherits": "win-release-user",
+            "binaryDir": "${sourceDir}/build/Msvc-Release-LocalSDK",
+            "cacheVariables": {
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/stage/local-sdk/flowmq/windows-x64"
+            },
+            "environment": {
+                "SALTS_ROOT": "$penv{FLOWMQ_LOCAL_SALTS_ROOT}",
+                "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/Msvc-Release-LocalSDK/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
+            }
         },
         {
             "name": "linux-dev-user",
@@ -116,7 +187,10 @@
                 "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/debug",
                 "LD_LIBRARY_PATH": "${sourceDir}/build/linux-gcc-debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
             },
-            "inherits": ["base-linux-dev-user", "linux-paths"]
+            "inherits": [
+                "base-linux-dev-user",
+                "linux-paths"
+            ]
         },
         {
             "name": "linux-release-user",
@@ -125,11 +199,14 @@
                 "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/flowmq/release"
             },
             "environment": {
-                "SALTS_ROOT": "$env{PKG_ROOT}/salts/release",
-                "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/release",
+                "SALTS_ROOT": "${sourceDir}/stage/dependencies/salts/linux-x64",
+                "SALTS_UTILS_ROOT": "${sourceDir}/stage/dependencies/salts-utils/linux-x64",
                 "LD_LIBRARY_PATH": "${sourceDir}/build/linux-gcc-release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
             },
-            "inherits": ["release-linux-ninja", "linux-paths"]
+            "inherits": [
+                "release-linux-ninja",
+                "linux-paths"
+            ]
         },
         {
             "name": "linux-sdk-package",
@@ -142,46 +219,296 @@
                 "BUILD_EXAMPLES": "OFF"
             },
             "environment": {
-                "SALTS_ROOT": "$env{PKG_ROOT}/salts/release",
-                "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/release"
+                "SALTS_ROOT": "${sourceDir}/stage/dependencies/salts/linux-x64",
+                "SALTS_UTILS_ROOT": "${sourceDir}/stage/dependencies/salts-utils/linux-x64"
             },
-            "inherits": ["release-linux-ninja", "linux-paths"]
+            "inherits": [
+                "release-linux-ninja",
+                "linux-paths"
+            ]
         },
-        { "name": "android-arm64-v8a-debug-win", "environment": { "ANDROID_BUILD_VARIANT": "android-arm64-v8a-debug" }, "inherits": ["android-arm64-v8a-debug", "android-win-paths", "android-win-environment", "android-dependencies-debug"] },
-        { "name": "android-arm64-v8a-release-win", "environment": { "ANDROID_BUILD_VARIANT": "android-arm64-v8a-release" }, "inherits": ["android-arm64-v8a-release", "android-win-paths", "android-win-environment", "android-dependencies-release"] },
-        { "name": "android-x86_64-debug-win", "environment": { "ANDROID_BUILD_VARIANT": "android-x86_64-debug" }, "inherits": ["android-x86_64-debug", "android-win-paths", "android-win-environment", "android-dependencies-debug"] },
-        { "name": "android-x86_64-release-win", "environment": { "ANDROID_BUILD_VARIANT": "android-x86_64-release" }, "inherits": ["android-x86_64-release", "android-win-paths", "android-win-environment", "android-dependencies-release"] },
-        { "name": "android-x86-debug-win", "environment": { "ANDROID_BUILD_VARIANT": "android-x86-debug" }, "inherits": ["android-x86-debug", "android-win-paths", "android-win-environment", "android-dependencies-debug"] },
-        { "name": "android-x86-release-win", "environment": { "ANDROID_BUILD_VARIANT": "android-x86-release" }, "inherits": ["android-x86-release", "android-win-paths", "android-win-environment", "android-dependencies-release"] }
+        {
+            "name": "android-arm64-v8a-debug-win",
+            "environment": {
+                "ANDROID_BUILD_VARIANT": "android-arm64-v8a-debug"
+            },
+            "inherits": [
+                "android-arm64-v8a-debug",
+                "android-win-paths",
+                "android-win-environment",
+                "android-dependencies-debug"
+            ]
+        },
+        {
+            "name": "android-arm64-v8a-release-win",
+            "environment": {
+                "ANDROID_BUILD_VARIANT": "android-arm64-v8a-release"
+            },
+            "inherits": [
+                "android-arm64-v8a-release",
+                "android-win-paths",
+                "android-win-environment",
+                "android-dependencies-release"
+            ]
+        },
+        {
+            "name": "android-x86_64-debug-win",
+            "environment": {
+                "ANDROID_BUILD_VARIANT": "android-x86_64-debug"
+            },
+            "inherits": [
+                "android-x86_64-debug",
+                "android-win-paths",
+                "android-win-environment",
+                "android-dependencies-debug"
+            ]
+        },
+        {
+            "name": "android-x86_64-release-win",
+            "environment": {
+                "ANDROID_BUILD_VARIANT": "android-x86_64-release"
+            },
+            "inherits": [
+                "android-x86_64-release",
+                "android-win-paths",
+                "android-win-environment",
+                "android-dependencies-release"
+            ]
+        },
+        {
+            "name": "android-x86-debug-win",
+            "environment": {
+                "ANDROID_BUILD_VARIANT": "android-x86-debug"
+            },
+            "inherits": [
+                "android-x86-debug",
+                "android-win-paths",
+                "android-win-environment",
+                "android-dependencies-debug"
+            ]
+        },
+        {
+            "name": "android-x86-release-win",
+            "environment": {
+                "ANDROID_BUILD_VARIANT": "android-x86-release"
+            },
+            "inherits": [
+                "android-x86-release",
+                "android-win-paths",
+                "android-win-environment",
+                "android-dependencies-release"
+            ]
+        },
+        {
+            "name": "mac-release-ci",
+            "displayName": "macOS SDK release with the published GNU toolchain",
+            "inherits": [
+                "vcpkg-cache-ci",
+                "release-mac-ninja"
+            ],
+            "binaryDir": "${sourceDir}/build/flowmq",
+            "cacheVariables": {
+                "VCPKG_TARGET_TRIPLET": "$penv{FLOWMQ_TRIPLET}",
+                "VCPKG_HOST_TRIPLET": "$penv{FLOWMQ_TRIPLET}",
+                "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
+                "VCPKG_INSTALL_OPTIONS": "--only-binarycaching",
+                "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/$penv{FLOWMQ_TRIPLET}",
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/stage/sdk/$penv{FLOWMQ_RID}",
+                "BUILD_TESTS": "ON",
+                "BUILD_EXAMPLES": "OFF"
+            },
+            "environment": {
+                "SALTS_ROOT": "$penv{SALTS_ROOT}",
+                "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
+                "DYLD_LIBRARY_PATH": "${sourceDir}/build/flowmq/bin${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}${sourceDir}/vcpkg_installed/$penv{FLOWMQ_TRIPLET}/lib${pathListSep}$penv{DYLD_LIBRARY_PATH}"
+            }
+        }
     ],
     "buildPresets": [
-        { "name": "win-dev-user", "configurePreset": "win-dev-user" },
-        { "name": "win-release-user", "configurePreset": "win-release-user" },
-        { "name": "linux-dev-user", "configurePreset": "linux-dev-user" },
-        { "name": "linux-release-user", "configurePreset": "linux-release-user" },
-        { "name": "linux-sdk-package", "configurePreset": "linux-sdk-package" },
-        { "name": "install-win-dev-user", "configurePreset": "win-dev-user", "targets": ["install"] },
-        { "name": "install-win-release-user", "configurePreset": "win-release-user", "targets": ["install"] },
-        { "name": "install-linux-dev-user", "configurePreset": "linux-dev-user", "targets": ["install"] },
-        { "name": "install-linux-release-user", "configurePreset": "linux-release-user", "targets": ["install"] },
-        { "name": "install-linux-sdk-package", "configurePreset": "linux-sdk-package", "targets": ["install"] },
-        { "name": "android-arm64-v8a-debug-win", "configurePreset": "android-arm64-v8a-debug-win" },
-        { "name": "android-arm64-v8a-release-win", "configurePreset": "android-arm64-v8a-release-win" },
-        { "name": "android-x86_64-debug-win", "configurePreset": "android-x86_64-debug-win" },
-        { "name": "android-x86_64-release-win", "configurePreset": "android-x86_64-release-win" },
-        { "name": "android-x86-debug-win", "configurePreset": "android-x86-debug-win" },
-        { "name": "android-x86-release-win", "configurePreset": "android-x86-release-win" },
-        { "name": "install-android-arm64-v8a-debug-win", "configurePreset": "android-arm64-v8a-debug-win", "targets": ["install"] },
-        { "name": "install-android-arm64-v8a-release-win", "configurePreset": "android-arm64-v8a-release-win", "targets": ["install"] },
-        { "name": "install-android-x86_64-debug-win", "configurePreset": "android-x86_64-debug-win", "targets": ["install"] },
-        { "name": "install-android-x86_64-release-win", "configurePreset": "android-x86_64-release-win", "targets": ["install"] },
-        { "name": "install-android-x86-debug-win", "configurePreset": "android-x86-debug-win", "targets": ["install"] },
-        { "name": "install-android-x86-release-win", "configurePreset": "android-x86-release-win", "targets": ["install"] }
+        {
+            "name": "win-dev-user",
+            "configurePreset": "win-dev-user"
+        },
+        {
+            "name": "win-release-user",
+            "configurePreset": "win-release-user"
+        },
+        {
+            "name": "win-release-local-sdk",
+            "configurePreset": "win-release-local-sdk"
+        },
+        {
+            "name": "linux-dev-user",
+            "configurePreset": "linux-dev-user"
+        },
+        {
+            "name": "linux-release-user",
+            "configurePreset": "linux-release-user"
+        },
+        {
+            "name": "linux-sdk-package",
+            "configurePreset": "linux-sdk-package"
+        },
+        {
+            "name": "install-win-dev-user",
+            "configurePreset": "win-dev-user",
+            "targets": [
+                "install"
+            ]
+        },
+        {
+            "name": "install-win-release-user",
+            "configurePreset": "win-release-user",
+            "targets": [
+                "install"
+            ]
+        },
+        {
+            "name": "install-win-release-local-sdk",
+            "configurePreset": "win-release-local-sdk",
+            "targets": [
+                "install"
+            ]
+        },
+        {
+            "name": "install-linux-dev-user",
+            "configurePreset": "linux-dev-user",
+            "targets": [
+                "install"
+            ]
+        },
+        {
+            "name": "install-linux-release-user",
+            "configurePreset": "linux-release-user",
+            "targets": [
+                "install"
+            ]
+        },
+        {
+            "name": "install-linux-sdk-package",
+            "configurePreset": "linux-sdk-package",
+            "targets": [
+                "install"
+            ]
+        },
+        {
+            "name": "android-arm64-v8a-debug-win",
+            "configurePreset": "android-arm64-v8a-debug-win"
+        },
+        {
+            "name": "android-arm64-v8a-release-win",
+            "configurePreset": "android-arm64-v8a-release-win"
+        },
+        {
+            "name": "android-x86_64-debug-win",
+            "configurePreset": "android-x86_64-debug-win"
+        },
+        {
+            "name": "android-x86_64-release-win",
+            "configurePreset": "android-x86_64-release-win"
+        },
+        {
+            "name": "android-x86-debug-win",
+            "configurePreset": "android-x86-debug-win"
+        },
+        {
+            "name": "android-x86-release-win",
+            "configurePreset": "android-x86-release-win"
+        },
+        {
+            "name": "install-android-arm64-v8a-debug-win",
+            "configurePreset": "android-arm64-v8a-debug-win",
+            "targets": [
+                "install"
+            ]
+        },
+        {
+            "name": "install-android-arm64-v8a-release-win",
+            "configurePreset": "android-arm64-v8a-release-win",
+            "targets": [
+                "install"
+            ]
+        },
+        {
+            "name": "install-android-x86_64-debug-win",
+            "configurePreset": "android-x86_64-debug-win",
+            "targets": [
+                "install"
+            ]
+        },
+        {
+            "name": "install-android-x86_64-release-win",
+            "configurePreset": "android-x86_64-release-win",
+            "targets": [
+                "install"
+            ]
+        },
+        {
+            "name": "install-android-x86-debug-win",
+            "configurePreset": "android-x86-debug-win",
+            "targets": [
+                "install"
+            ]
+        },
+        {
+            "name": "install-android-x86-release-win",
+            "configurePreset": "android-x86-release-win",
+            "targets": [
+                "install"
+            ]
+        },
+        {
+            "name": "mac-release-ci",
+            "configurePreset": "mac-release-ci"
+        },
+        {
+            "name": "install-mac-release-ci",
+            "configurePreset": "mac-release-ci",
+            "targets": [
+                "install"
+            ]
+        }
     ],
     "testPresets": [
-        { "name": "win-dev-user", "inherits": "base-test", "configurePreset": "win-dev-user" },
-        { "name": "win-release-user", "inherits": "base-test", "configurePreset": "win-release-user" },
-        { "name": "linux-dev-user", "inherits": "base-test", "configurePreset": "linux-dev-user" },
-        { "name": "linux-release-user", "inherits": "base-test", "configurePreset": "linux-release-user" }
+        {
+            "name": "win-dev-user",
+            "inherits": "base-test",
+            "configurePreset": "win-dev-user"
+        },
+        {
+            "name": "win-release-user",
+            "inherits": "base-test",
+            "configurePreset": "win-release-user"
+        },
+        {
+            "name": "win-release-local-sdk",
+            "inherits": "base-test",
+            "configurePreset": "win-release-local-sdk"
+        },
+        {
+            "name": "linux-dev-user",
+            "inherits": "base-test",
+            "configurePreset": "linux-dev-user"
+        },
+        {
+            "name": "linux-release-user",
+            "inherits": "base-test",
+            "configurePreset": "linux-release-user"
+        },
+        {
+            "name": "mac-release-ci",
+            "configurePreset": "mac-release-ci",
+            "execution": {
+                "noTestsAction": "error"
+            },
+            "output": {
+                "outputOnFailure": true
+            },
+            "filter": {
+                "exclude": {
+                    "name": "^test_flowmq_segmented_receive_contract$"
+                }
+            }
+        }
     ]
 }

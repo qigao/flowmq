@@ -1,6 +1,6 @@
 #include "flowmq_pattern_state.h"
 #include "tinytest.h"
-#include "salts_error.h"
+#include "cmeta_error.h"
 
 spec("flowmq_pattern_state") {
   it("enforces the REQ send then receive FSM across multipart messages") {

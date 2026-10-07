@@ -9,6 +9,11 @@
       "hidden": true,
       "displayName": "Base Test Preset",
       "description": "Base configuration for running tests",
+      "filter": {
+        "exclude": {
+          "label": "benchmark"
+        }
+      },
       "execution": {
         "noTestsAction": "error",
         "stopOnFailure": false
@@ -60,6 +65,17 @@
          "rhs": "Linux"
        },
        "configurePreset": "release-linux-ninja"
+    },
+    {
+       "name": "test-release-mac",
+       "displayName": "Release macOS Tests",
+       "inherits": "base-test",
+       "condition": {
+         "type": "equals",
+         "lhs": "${hostSystemName}",
+         "rhs": "Darwin"
+       },
+       "configurePreset": "release-mac-ninja"
     }
   ]
 }

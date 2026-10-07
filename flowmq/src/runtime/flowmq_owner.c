@@ -100,7 +100,7 @@ static int flowmq_owner_progress_once(flowmq_owner_t *owner,
   }
 
   if (active_count == 0u) {
-    if (max_wait_ms != 0u) salts_sleep_ms(max_wait_ms);
+    if (max_wait_ms != 0u) cmeta_sleep_ms(max_wait_ms);
     return SALTS_OK;
   }
 
@@ -240,7 +240,7 @@ int flowmq_owner_poll(flowmq_owner_t *owner,
                       size_t item_count,
                       uint32_t timeout_ms,
                       size_t *ready) {
-  const uint64_t started_ms = salts_monotonic_ms();
+  const uint64_t started_ms = cmeta_monotonic_ms();
   int first = 1;
   int status;
 
@@ -252,7 +252,7 @@ int flowmq_owner_poll(flowmq_owner_t *owner,
   for (;;) {
     uint32_t wait_ms = 0u;
     if (!first) {
-      const uint64_t elapsed_ms = salts_monotonic_ms() - started_ms;
+      const uint64_t elapsed_ms = cmeta_monotonic_ms() - started_ms;
       if (elapsed_ms >= timeout_ms) return SALTS_OK;
       wait_ms = (uint32_t)((uint64_t)timeout_ms - elapsed_ms);
     }
@@ -278,13 +278,13 @@ int flowmq_owner_close_socket(flowmq_owner_t *owner,
 
   if (flowmq_socket_internal_runtime_active(socket)) {
     const uint64_t deadline =
-        salts_monotonic_ms() + FLOWMQ_OWNER_CLOSE_TIMEOUT_MS;
+        cmeta_monotonic_ms() + FLOWMQ_OWNER_CLOSE_TIMEOUT_MS;
     for (;;) {
       status = flowmq_socket_internal_stop_external(socket);
       if (status == SALTS_OK) break;
       if (status != SALTS_EBUSY) return status;
       {
-        const uint64_t now_ms = salts_monotonic_ms();
+        const uint64_t now_ms = cmeta_monotonic_ms();
         uint32_t wait_ms;
         if (now_ms >= deadline) return SALTS_ETIMEDOUT;
         wait_ms = (uint32_t)(deadline - now_ms);
