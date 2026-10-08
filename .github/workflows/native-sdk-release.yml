@@ -558,9 +558,9 @@ jobs:
           call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
           if errorlevel 1 exit /b 1
           set "VCPKG_ROOT=%FLOWMQ_VCPKG_ROOT%"
-          set "PATH=%SALTS_UTILS_ROOT%\bin;%SALTS_ROOT%\bin;%GITHUB_WORKSPACE%\vcpkg_installed\x64-windows\bin;%PATH%"
+          set "PATH=%SALTS_UTILS_ROOT%\bin;%SALTS_ROOT%\bin;%GITHUB_WORKSPACE%\vcpkg_installed\%QIGAO_VCPKG_WINDOWS_TRIPLET%\bin;%PATH%"
           set "FLOWMQ_RID=windows-x64"
-          set "FLOWMQ_TRIPLET=x64-windows"
+          set "FLOWMQ_TRIPLET=%QIGAO_VCPKG_WINDOWS_TRIPLET%"
           cmake --preset host-release-ci
           if errorlevel 1 exit /b 1
           cmake --build --preset host-release-ci --parallel 2
@@ -1074,7 +1074,7 @@ jobs:
           call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
           if errorlevel 1 exit /b 1
           set "FLOWMQ_ROOT=%FLOWMQ_PREFIX%"
-          set "PATH=%FLOWMQ_PREFIX%\bin;%SALTS_UTILS_ROOT%\bin;%SALTS_ROOT%\bin;%GITHUB_WORKSPACE%\vcpkg_installed\x64-windows\bin;%PATH%"
+          set "PATH=%FLOWMQ_PREFIX%\bin;%SALTS_UTILS_ROOT%\bin;%SALTS_ROOT%\bin;%GITHUB_WORKSPACE%\vcpkg_installed\%QIGAO_VCPKG_WINDOWS_TRIPLET%\bin;%PATH%"
           cmake -S tests/package -B build/package-smoke -G Ninja ^
             -DCMAKE_BUILD_TYPE=Release ^
             -DCMAKE_PREFIX_PATH="%FLOWMQ_PREFIX%;%SALTS_UTILS_ROOT%;%SALTS_ROOT%" ^
