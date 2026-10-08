@@ -21,13 +21,28 @@ FlowMQ 是 C11 的 pattern-oriented messaging library。它提供 FMQ/6 wire cod
 > Branch/release boundary: `v1.2.1` 在 `v1.2.0` 的 owner-lane、reuse-port、retained TLS、producer-owned/segmented receive 与公开 `flowmq_recv_slicev()` 基础上，包含 #101/#102 的 atomic retained PUB/XPUB fanout、#104 的 generated DataBind ChannelPlan/ServicePlan qualification，以及 #111/#112 的 CMeta ownership、最新 Salts SDK 适配与显式多 owner 验证。除非显式标记 release，下面的行为描述以 current `main` 为准。
 
 安装包不固定 Salts/SaltsUtils 版本，始终消费 latest published stable SDK；公开链接依赖是
-`Salts::Core` 与 SaltsUtils 提供的 `Salts::DataBind`；`Salts::CNet`、`Salts::NativeIO`、
+`Salts::Core` 与 SaltsUtils 提供的 `Salts::DataBind`；`Salts::CNet`、`Salts::CNetManager`、`Salts::NativeIO`、
 `Salts::CSTL` 和 `Salts::CMeta` 都是实现私有依赖。FMP/1 保持现有 header-only wire view/builder ABI，
 但生成入口统一使用 DataBind `salts-idlc`，不再依赖已废止的 TBE producer target/tool。
 
 BoringSSL 已退出 FlowMQ 的依赖与链接配置。TLS 提供者由发布的 Salts SDK 管理，
-FlowMQ 通过 `Salts::CNet` 使用 TCP/TLS；manifest 只声明 `zeromq`，证书及主机名
+FlowMQ 通过 `Salts::CNet` 使用 TCP/TLS；manifest 声明 `zeromq` 以及已安装 SaltsUtils
+导出配置所需的 `lua`、`quickjs-ng`，证书及主机名
 校验继续由 CNet 负责。
+
+本集成分支要求 Salts #1001 候选 SDK 提供 `Salts::CNetManager` 和
+`<cnet/manager.h>`，尚不能仅用 latest published stable 构建。每个 socket
+client 使用固定容量的 owner-local manager，接管 connect/adopt 的绑定与终态记录，
+queued parts 消费结束后才释放额外 context hold。外部 owner 通过有界 `advance`
+提交关闭，仍由既有 NativeIO/CNet 路径观察真实终态。消息、路由、重连、TLS 策略和
+peer 协议状态继续归 FlowMQ；没有新增跨线程队列或改变 wire/API。
+部署时需带上候选 SDK 的 `cnet_manager` 共享库。回滚只需撤销内部适配及私有链接依赖，
+无需数据迁移。`test_flowmq_socket` 额外覆盖 64 次断开后消费排队消息、再复用 peer 的循环。
+
+候选 SDK 主机验收通过 `native-sdk-release.yml` 的手动入口运行，同时指定
+`salts_candidate_run_id` 和完整的 `salts_candidate_sha`。生产任务必须是成功完成、
+保留 SDK artifacts 的 Salts CI 手动任务。Linux、Windows、macOS 消费该候选包并运行
+正式 CTest，SaltsUtils 继续解析最新发布包。此入口跳过交叉编译、性能脚本、打包及发布。
 
 ## Caller-driven transport
 
@@ -536,3 +551,16 @@ Linux/macOS 与并发 sanitizer 尚未验证。
 
 详细所有权和关闭顺序见 [架构说明](docs/ARCHITECTURE.md)，wire 契约见
 [FMQ/6 协议](docs/FMQ_WIRE_PROTOCOL.md)。
+
+### #1001 candidate CI
+
+Until CNetManager is published, `cmake/ci/salts-candidate.json` pins the Salts commit used by branch/PR host qualification. CI resolves a
+successful producer run for that exact SHA; dispatch accepts a SHA override.
+The selected run must retain all three host SDK artifacts. Missing successful
+SDK runs fail explicitly; prepare them using Salts CI with `prepare_release=true`
+(which retains packages without publishing). The restore action validates run
+provenance and the SDK manifest before use. Linux, Windows
+and macOS build the full configured graph, run CTest and install the SDK.
+Candidate runs skip cross packaging and publication; tags cannot select a
+candidate. Remove the temporary pin after the required SDK is published and
+validate the ordinary released dependency graph before releasing this project.

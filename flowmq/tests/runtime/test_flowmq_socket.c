@@ -17,6 +17,7 @@ enum {
   FLOWMQ_TEST_RETAINED_PART_SIZE = 16u,
   FLOWMQ_TEST_SEGMENTED_PAYLOAD_SIZE = 64u * 1024u + 37u,
   FLOWMQ_TEST_QUEUED_MESSAGES = 8u,
+  FLOWMQ_TEST_CONTEXT_GENERATIONS = 64u,
   FLOWMQ_TEST_HEARTBEAT_IVL_MS = 20,
   FLOWMQ_TEST_HEARTBEAT_TIMEOUT_MS = 200,
   FLOWMQ_TEST_HEARTBEAT_ALIVE_OBSERVE_MS = 300,
@@ -2265,6 +2266,59 @@ spec("flowmq_socket lifecycle and pattern surface") {
 
     check_equal(flowmq_close(client), SALTS_OK);
     check_equal(flowmq_close(server), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+  }
+
+  it("recycles terminal peer contexts after their last queued message is consumed") {
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *receiver = flowmq_socket(ctx, FLOWMQ_ROUTER);
+    char endpoint[128] = {0};
+    size_t endpoint_size = 0u;
+    check_not_null(ctx);
+    check_not_null(receiver);
+    check_equal(flowmq_bind(receiver, "tcp://127.0.0.1:0"), SALTS_OK);
+    check_equal(flowmq_last_endpoint(receiver, endpoint, sizeof(endpoint), &endpoint_size), SALTS_OK);
+    /* More generations than the bounded peer table, with data still queued
+     * when each transport closes. Record reuse must preserve every payload. */
+    for (unsigned char generation = 1u; generation <= FLOWMQ_TEST_CONTEXT_GENERATIONS; ++generation) {
+      flowmq_socket_t *sender = flowmq_socket(ctx, FLOWMQ_DEALER);
+      const unsigned char payload = generation + FLOWMQ_TEST_CONTEXT_GENERATIONS;
+      flowmq_router_peer_status_t peer_status = FLOWMQ_ROUTER_PEER_STATUS_INIT;
+      int status = SALTS_EBUSY;
+      size_t ready = 0u;
+      flowmq_pollitem_t item = {.socket = receiver, .events = FLOWMQ_POLLIN};
+      check_not_null(sender);
+      check_equal(flowmq_setsockopt(sender, FLOWMQ_IDENTITY, &generation, sizeof(generation)), SALTS_OK);
+      check_equal(flowmq_connect(sender, endpoint), SALTS_OK);
+      for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+        check_equal(progress_pair(sender, receiver), SALTS_OK);
+        status = flowmq_send(sender, &payload, sizeof(payload), FLOWMQ_DONTWAIT);
+      }
+      check_equal(status, SALTS_OK);
+      for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && ready == 0u; ++i) {
+        check_equal(progress_pair(sender, receiver), SALTS_OK);
+        check_equal(flowmq_poll(&item, 1u, 0u, &ready), SALTS_OK);
+      }
+      check_equal(ready, (size_t)1u);
+      check_equal(flowmq_router_peer_status(receiver, &generation, sizeof(generation), &peer_status), SALTS_OK);
+      check_equal(flowmq_close(sender), SALTS_OK);
+      for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_OK; ++i) {
+        check_equal(flowmq_poll(&item, 1u, 1u, &ready), SALTS_OK);
+        status = flowmq_router_peer_status(receiver, &generation, sizeof(generation), &peer_status);
+      }
+      check_equal(status, SALTS_ENOENT);
+      unsigned char received = 0u;
+      size_t received_size = 0u;
+      check_equal(flowmq_recv(receiver, &received, sizeof(received), &received_size,
+                              FLOWMQ_DONTWAIT), SALTS_OK);
+      check_equal(received_size, sizeof(generation));
+      check_equal(received, generation);
+      check_equal(flowmq_recv(receiver, &received, sizeof(received), &received_size,
+                              FLOWMQ_DONTWAIT), SALTS_OK);
+      check_equal(received_size, sizeof(payload));
+      check_equal(received, payload);
+    }
+    check_equal(flowmq_close(receiver), SALTS_OK);
     check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 

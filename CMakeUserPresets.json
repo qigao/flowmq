@@ -322,9 +322,40 @@
                 "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
                 "DYLD_LIBRARY_PATH": "${sourceDir}/build/flowmq/bin${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}${sourceDir}/vcpkg_installed/$penv{FLOWMQ_TRIPLET}/lib${pathListSep}$penv{DYLD_LIBRARY_PATH}"
             }
+        },
+        {
+            "name": "host-release-ci",
+            "inherits": ["vcpkg-cache-ci", "pkg-vcpkg", "release-mode"],
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/flowmq",
+            "cacheVariables": {
+                "VCPKG_TARGET_TRIPLET": "$penv{FLOWMQ_TRIPLET}",
+                "VCPKG_HOST_TRIPLET": "$penv{FLOWMQ_TRIPLET}",
+                "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
+                "VCPKG_INSTALL_OPTIONS": "--only-binarycaching",
+                "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/$penv{FLOWMQ_TRIPLET}",
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/stage/sdk/$penv{FLOWMQ_RID}",
+                "BUILD_TESTS": true,
+                "BUILD_EXAMPLES": false
+            },
+            "environment": {
+                "SALTS_ROOT": "$penv{SALTS_ROOT}",
+                "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
+                "PATH": "${sourceDir}/build/flowmq/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}${sourceDir}/vcpkg_installed/$penv{FLOWMQ_TRIPLET}/bin${pathListSep}$penv{PATH}",
+                "LD_LIBRARY_PATH": "${sourceDir}/build/flowmq/bin${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}${sourceDir}/vcpkg_installed/$penv{FLOWMQ_TRIPLET}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
+            }
         }
     ],
     "buildPresets": [
+        {
+            "name": "host-release-ci",
+            "configurePreset": "host-release-ci"
+        },
+        {
+            "name": "install-host-release-ci",
+            "configurePreset": "host-release-ci",
+            "targets": ["install"]
+        },
         {
             "name": "win-dev-user",
             "configurePreset": "win-dev-user"
@@ -470,6 +501,11 @@
         }
     ],
     "testPresets": [
+        {
+            "name": "host-release-ci",
+            "configurePreset": "host-release-ci",
+            "inherits": "base-test"
+        },
         {
             "name": "win-dev-user",
             "inherits": "base-test",

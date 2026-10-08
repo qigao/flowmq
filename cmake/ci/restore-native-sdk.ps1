@@ -1,6 +1,6 @@
 param(
   [Parameter(Mandatory=$true)]
-  [ValidateSet('windows-x64', 'linux-x64', 'linux-arm64', 'macos-arm64', 'android-arm64-v8a', 'ios-arm64', 'ios-simulator-arm64')]
+  [ValidateSet('windows-x64', 'linux-x64', 'linux-arm64', 'macos-x64', 'macos-arm64', 'android-arm64-v8a', 'ios-arm64', 'ios-simulator-arm64')]
   [string]$Rid
 )
 $ErrorActionPreference = 'Stop'
@@ -26,13 +26,14 @@ New-Item -ItemType Directory -Path $restoreRoot -Force | Out-Null
     <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Salts.Native" Version="*" />
+    <PackageReference Include="Salts.Native" Version="*" Condition="'$(UseSaltsCandidate)' != 'true'" />
     <PackageReference Include="SaltsUtils.Native" Version="*" />
   </ItemGroup>
 </Project>
 '@ | Set-Content -LiteralPath $project -Encoding utf8NoBOM
 
-dotnet restore $project --packages $packages --configfile (Join-Path $repositoryRoot 'cmake/native-sdk.nuget.config') --no-cache --force-evaluate
+$useCandidate = -not [string]::IsNullOrWhiteSpace($env:SALTS_CANDIDATE_ROOT)
+dotnet restore $project --packages $packages --configfile (Join-Path $repositoryRoot 'cmake/native-sdk.nuget.config') --no-cache --force-evaluate "-p:UseSaltsCandidate=$($useCandidate.ToString().ToLowerInvariant())"
 if ($LASTEXITCODE -ne 0) { throw 'Failed to restore the latest Salts and SaltsUtils SDKs' }
 $assets = Get-Content -LiteralPath (Join-Path $restoreRoot 'obj/project.assets.json') -Raw | ConvertFrom-Json -AsHashtable
 
@@ -42,11 +43,16 @@ $sdks = @(
 )
 # Validate both SDKs for the requested RID before changing either stable link.
 foreach ($sdk in $sdks) {
-  $keys = @($assets.libraries.Keys | Where-Object { $_.StartsWith("$($sdk.Package)/", [StringComparison]::OrdinalIgnoreCase) })
-  if ($keys.Count -ne 1) { throw "Expected one resolved $($sdk.Package) package" }
-  $packageRoot = Join-Path $packages $assets.libraries[$keys[0]].path
-  $sdk.Target = Join-Path $packageRoot "sdk/$Rid"
-  $sdk.Resolved = $keys[0]
+  if ($useCandidate -and $sdk.Package -eq 'Salts.Native') {
+    $sdk.Target = $env:SALTS_CANDIDATE_ROOT
+    $sdk.Resolved = "Salts.Native/candidate-$env:SALTS_CANDIDATE_SHA"
+  } else {
+    $keys = @($assets.libraries.Keys | Where-Object { $_.StartsWith("$($sdk.Package)/", [StringComparison]::OrdinalIgnoreCase) })
+    if ($keys.Count -ne 1) { throw "Expected one resolved $($sdk.Package) package" }
+    $packageRoot = Join-Path $packages $assets.libraries[$keys[0]].path
+    $sdk.Target = Join-Path $packageRoot "sdk/$Rid"
+    $sdk.Resolved = $keys[0]
+  }
   $config = Join-Path $sdk.Target "lib/cmake/$($sdk.Name)/$($sdk.Name)Config.cmake"
   if (-not (Test-Path -LiteralPath $config -PathType Leaf)) { throw "Missing restored SDK file: $config" }
 }
@@ -69,5 +75,10 @@ foreach ($sdk in $sdks) {
     New-Item -ItemType $linkType -Path $link -Target $sdk.Target | Out-Null
   }
   Set-Item -LiteralPath "Env:$($sdk.Environment)" -Value $link
+  if ($env:GITHUB_ENV) {
+    "$($sdk.Environment)=$link" >> $env:GITHUB_ENV
+    $versionVariable = if ($sdk.Package -eq 'Salts.Native') { 'FLOWMQ_SALTS_RESOLVED_VERSION' } else { 'FLOWMQ_SALTS_UTILS_RESOLVED_VERSION' }
+    "$versionVariable=$($sdk.Resolved)" >> $env:GITHUB_ENV
+  }
   Write-Host "Restored $($sdk.Resolved) for $Rid at $link"
 }
