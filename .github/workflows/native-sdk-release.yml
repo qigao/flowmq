@@ -18,6 +18,8 @@ on:
       - "flowmq/**"
       - "tests/package/**"
       - "vcpkg.json"
+      - "CMakeUserPresets.json"
+      - "presets/**"
       - "packaging/nuget/**"
       - ".github/workflows/native-sdk-release.yml"
   push:
@@ -29,6 +31,8 @@ on:
       - "flowmq/**"
       - "tests/package/**"
       - "vcpkg.json"
+      - "CMakeUserPresets.json"
+      - "presets/**"
       - "packaging/nuget/**"
       - ".github/workflows/native-sdk-release.yml"
 
@@ -47,6 +51,8 @@ jobs:
   metadata:
     runs-on: ubuntu-24.04
     outputs:
+      candidate_run_id: ${{ steps.candidate.outputs.run_id }}
+      candidate_sha: ${{ steps.candidate.outputs.commit }}
       version: ${{ steps.meta.outputs.version }}
       source_version: ${{ steps.meta.outputs.source_version }}
       source_commit: ${{ steps.meta.outputs.source_commit }}
@@ -54,6 +60,29 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Resolve candidate SDK
+        id: candidate
+        shell: pwsh
+        env:
+          CANDIDATE_RUN: ${{ inputs.salts_candidate_run_id }}
+          CANDIDATE_SHA: ${{ inputs.salts_candidate_sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $run = $env:CANDIDATE_RUN
+          $sha = $env:CANDIDATE_SHA
+          if (-not $run -and -not $sha -and $env:GITHUB_REF_TYPE -ne 'tag') {
+            $pin = Get-Content cmake/ci/salts-candidate.json -Raw | ConvertFrom-Json
+            $run = $pin.run_id
+            $sha = $pin.commit
+          }
+          if ($run -or $sha) {
+            if ($run -notmatch '^[1-9][0-9]*$' -or $sha -notmatch '^[0-9a-f]{40}$') {
+              throw 'Specify both a candidate run ID and full commit SHA'
+            }
+            if ($env:GITHUB_REF_TYPE -eq 'tag') { throw 'Release tags cannot consume candidate SDKs' }
+          }
+          "run_id=$run" >> $env:GITHUB_OUTPUT
+          "commit=$sha" >> $env:GITHUB_OUTPUT
       - name: Verify TLS provider ownership boundary
         shell: bash
         run: cmake -P cmake/ci/verify-provider-boundary.cmake
@@ -98,17 +127,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm
       - name: Select candidate Salts SDK
-        if: github.event_name == 'workflow_dispatch'
+        if: needs.metadata.outputs.candidate_run_id != ''
         uses: qigao/salts/.github/actions/restore-candidate-sdk@e56b5778aad10b37d0a2ed86a953f366eb3a30d8
         with:
-          run-id: ${{ inputs.salts_candidate_run_id }}
-          commit: ${{ inputs.salts_candidate_sha }}
+          run-id: ${{ needs.metadata.outputs.candidate_run_id }}
+          commit: ${{ needs.metadata.outputs.candidate_sha }}
           rid: linux-x64
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Restore native SDK dependencies
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SALTS_CANDIDATE_SHA: ${{ inputs.salts_candidate_sha }}
+          SALTS_CANDIDATE_SHA: ${{ needs.metadata.outputs.candidate_sha }}
         shell: pwsh
         run: ./cmake/ci/restore-native-sdk.ps1 -Rid "linux-x64"
       - name: Configure, build, test and install
@@ -134,7 +163,7 @@ jobs:
           qualification=runtime
           EOF
       - name: Run FlowMQ owner-affine multicore benchmark
-        if: github.event_name != 'workflow_dispatch'
+        if: needs.metadata.outputs.candidate_run_id == ''
         shell: bash
         run: |
           set -euo pipefail
@@ -230,7 +259,7 @@ jobs:
             echo "No distinct physical core is available; distinct-core case skipped." | tee -a "$GITHUB_STEP_SUMMARY"
           fi
       - name: Run FlowMQ shared owner-wait benchmark
-        if: github.event_name != 'workflow_dispatch'
+        if: needs.metadata.outputs.candidate_run_id == ''
         shell: bash
         run: |
           set -euo pipefail
@@ -253,7 +282,7 @@ jobs:
             cat "$result_dir/flowmq-shared-wait.md"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Run FlowMQ reuse-port multicore service benchmark
-        if: github.event_name != 'workflow_dispatch'
+        if: needs.metadata.outputs.candidate_run_id == ''
         shell: bash
         run: |
           set -euo pipefail
@@ -283,7 +312,7 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Run FlowMQ retained TLS natural framing benchmark
-        if: github.event_name != 'workflow_dispatch'
+        if: needs.metadata.outputs.candidate_run_id == ''
         shell: bash
         env:
           FLOWMQ_BENCH_CI: "1"
@@ -330,7 +359,7 @@ jobs:
             sed -n '/^TLS_EVIDENCE_BEGIN /,/^TLS_EVIDENCE_END /p' "$log"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Run FlowMQ retained fanout benchmark
-        if: github.event_name != 'workflow_dispatch'
+        if: needs.metadata.outputs.candidate_run_id == ''
         shell: bash
         env:
           FLOWMQ_BENCH_CI: "1"
@@ -353,42 +382,42 @@ jobs:
             cat "$result_dir/flowmq-retained-fanout.md"
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
-        if: github.event_name != 'workflow_dispatch'
+        if: needs.metadata.outputs.candidate_run_id == ''
         with:
           name: flowmq-retained-fanout-linux-x64
           path: flowmq-fanout-results
           if-no-files-found: error
           compression-level: 6
       - uses: actions/upload-artifact@v4
-        if: github.event_name != 'workflow_dispatch'
+        if: needs.metadata.outputs.candidate_run_id == ''
         with:
           name: flowmq-owned-receive-linux-x64
           path: flowmq-retained-tls-results/flowmq-owned-receive.md
           if-no-files-found: error
           compression-level: 6
       - uses: actions/upload-artifact@v4
-        if: github.event_name != 'workflow_dispatch'
+        if: needs.metadata.outputs.candidate_run_id == ''
         with:
           name: flowmq-retained-tls-linux-x64
           path: flowmq-retained-tls-results
           if-no-files-found: error
           compression-level: 6
       - uses: actions/upload-artifact@v4
-        if: github.event_name != 'workflow_dispatch'
+        if: needs.metadata.outputs.candidate_run_id == ''
         with:
           name: flowmq-reuse-port-linux-x64
           path: flowmq-reuse-port-results
           if-no-files-found: error
           compression-level: 6
       - uses: actions/upload-artifact@v4
-        if: github.event_name != 'workflow_dispatch'
+        if: needs.metadata.outputs.candidate_run_id == ''
         with:
           name: flowmq-shared-wait-linux-x64
           path: flowmq-shared-wait-results
           if-no-files-found: error
           compression-level: 6
       - uses: actions/upload-artifact@v4
-        if: github.event_name != 'workflow_dispatch'
+        if: needs.metadata.outputs.candidate_run_id == ''
         with:
           name: flowmq-owner-parallel-linux-x64
           path: flowmq-benchmark-results
@@ -424,17 +453,17 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($vsInstall)) { throw "Visual Studio x64 C++ toolchain was not found" }
           "VSINSTALL=$vsInstall" >> $env:GITHUB_ENV
       - name: Select candidate Salts SDK
-        if: github.event_name == 'workflow_dispatch'
+        if: needs.metadata.outputs.candidate_run_id != ''
         uses: qigao/salts/.github/actions/restore-candidate-sdk@e56b5778aad10b37d0a2ed86a953f366eb3a30d8
         with:
-          run-id: ${{ inputs.salts_candidate_run_id }}
-          commit: ${{ inputs.salts_candidate_sha }}
+          run-id: ${{ needs.metadata.outputs.candidate_run_id }}
+          commit: ${{ needs.metadata.outputs.candidate_sha }}
           rid: windows-x64
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Restore native SDK dependencies
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SALTS_CANDIDATE_SHA: ${{ inputs.salts_candidate_sha }}
+          SALTS_CANDIDATE_SHA: ${{ needs.metadata.outputs.candidate_sha }}
         shell: pwsh
         run: ./cmake/ci/restore-native-sdk.ps1 -Rid "windows-x64"
       - name: Configure, build, test and install
@@ -503,17 +532,17 @@ jobs:
           echo "FLOWMQ_RID=$rid" >> "$GITHUB_ENV"
           echo "FLOWMQ_TRIPLET=$triplet" >> "$GITHUB_ENV"
       - name: Select candidate Salts SDK
-        if: github.event_name == 'workflow_dispatch'
+        if: needs.metadata.outputs.candidate_run_id != ''
         uses: qigao/salts/.github/actions/restore-candidate-sdk@e56b5778aad10b37d0a2ed86a953f366eb3a30d8
         with:
-          run-id: ${{ inputs.salts_candidate_run_id }}
-          commit: ${{ inputs.salts_candidate_sha }}
+          run-id: ${{ needs.metadata.outputs.candidate_run_id }}
+          commit: ${{ needs.metadata.outputs.candidate_sha }}
           rid: ${{ env.FLOWMQ_RID }}
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Restore native SDK dependencies
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SALTS_CANDIDATE_SHA: ${{ inputs.salts_candidate_sha }}
+          SALTS_CANDIDATE_SHA: ${{ needs.metadata.outputs.candidate_sha }}
         shell: pwsh
         run: ./cmake/ci/restore-native-sdk.ps1 -Rid "${{ env.FLOWMQ_RID }}"
       - name: Configure, build, test and install
@@ -545,7 +574,7 @@ jobs:
           compression-level: 9
 
   android:
-    if: github.event_name != 'workflow_dispatch'
+    if: needs.metadata.outputs.candidate_run_id == ''
     name: Android arm64-v8a SDK
     needs: metadata
     runs-on: ubuntu-24.04
@@ -646,7 +675,7 @@ jobs:
           compression-level: 9
 
   pack:
-    if: github.event_name != 'workflow_dispatch'
+    if: needs.metadata.outputs.candidate_run_id == ''
     name: Pack FlowMQ.Native
     needs: [metadata, linux, windows, macos, android]
     runs-on: ubuntu-24.04
@@ -712,7 +741,7 @@ jobs:
           if-no-files-found: error
 
   qualify:
-    if: github.event_name != 'workflow_dispatch'
+    if: needs.metadata.outputs.candidate_run_id == ''
     name: Qualify ${{ matrix.name }}
     needs: [metadata, pack]
     strategy:
