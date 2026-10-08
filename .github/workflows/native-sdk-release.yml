@@ -75,13 +75,24 @@ jobs:
           if ($sha) {
             if ($sha -notmatch '^[0-9a-f]{40}$') { throw 'Specify a full lowercase Salts commit SHA' }
             if ($env:GITHUB_REF_TYPE -eq 'tag') { throw 'Release tags cannot consume candidate SDKs' }
-            $result = gh api --method GET repos/qigao/salts/actions/workflows/ci.yml/runs -f head_sha=$sha -f event=workflow_dispatch -f status=success -f per_page=1
+            $result = gh api --method GET repos/qigao/salts/actions/workflows/ci.yml/runs -f head_sha=$sha -f event=workflow_dispatch -f status=success -f per_page=100
             if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve Salts CI for the requested SHA' }
             $runs = @(($result | ConvertFrom-Json).workflow_runs)
-            if ($runs.Count -ne 1 -or $runs[0].head_sha -ne $sha) {
-              throw "No successful Salts producer CI for $sha; complete its CI first"
+            foreach ($candidate in $runs) {
+              if ($candidate.head_sha -ne $sha) { throw 'Producer SHA filter mismatch' }
+              $artifactsJson = gh api "repos/qigao/salts/actions/runs/$($candidate.id)/artifacts?per_page=100"
+              if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect candidate SDK artifacts' }
+              $names = @(($artifactsJson | ConvertFrom-Json).artifacts | Where-Object { -not $_.expired } | ForEach-Object name)
+              if ($names -contains 'salts-sdk-linux-x64' -and
+                  $names -contains 'salts-sdk-windows-x64' -and
+                  $names -contains 'salts-sdk-macos') {
+                $run = $candidate.id
+                break
+              }
             }
-            $run = $runs[0].id
+            if (-not $run) {
+              throw "No successful SDK producer for $sha; run Salts CI with prepare_release=true"
+            }
             Write-Output "Salts $sha -> successful producer run $run"
           }
           "run_id=$run" >> $env:GITHUB_OUTPUT

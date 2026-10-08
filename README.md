@@ -556,7 +556,9 @@ Linux/macOS 与并发 sanitizer 尚未验证。
 
 Until CNetManager is published, `cmake/ci/salts-candidate.json` pins the Salts commit used by branch/PR host qualification. CI resolves a
 successful producer run for that exact SHA; dispatch accepts a SHA override.
-Missing successful runs fail explicitly. The restore action validates run
+The selected run must retain all three host SDK artifacts. Missing successful
+SDK runs fail explicitly; prepare them using Salts CI with `prepare_release=true`
+(which retains packages without publishing). The restore action validates run
 provenance and the SDK manifest before use. Linux, Windows
 and macOS build the full configured graph, run CTest and install the SDK.
 Candidate runs skip cross packaging and publication; tags cannot select a
