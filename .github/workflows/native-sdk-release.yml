@@ -483,7 +483,7 @@ jobs:
   windows:
     name: Windows x64 SDK
     needs: metadata
-    runs-on: windows-2022
+    runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
         with:
@@ -648,9 +648,9 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          QIGAO_SDK_RID: $FLOWMQ_RID
-          QIGAO_TARGET_TRIPLET: $FLOWMQ_TRIPLET
-          QIGAO_HOST_TRIPLET: $FLOWMQ_TRIPLET
+          QIGAO_SDK_RID: ${{ env.FLOWMQ_RID }}
+          QIGAO_TARGET_TRIPLET: ${{ env.FLOWMQ_TRIPLET }}
+          QIGAO_HOST_TRIPLET: ${{ env.FLOWMQ_TRIPLET }}
         working-directory: _deps/salts-utils
         run: |
           set -euo pipefail
