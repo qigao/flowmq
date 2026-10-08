@@ -564,3 +564,9 @@ and macOS build the full configured graph, run CTest and install the SDK.
 Candidate runs skip cross packaging and publication; tags cannot select a
 candidate. Remove the temporary pin after the required SDK is published and
 validate the ordinary released dependency graph before releasing this project.
+
+## Salts 3 development integration
+
+Source and installed consumers require Salts 3. Native host acceptance selects the SDK producer for the released Salts commit and rebuilds the pinned unfinished Utils source before the complete configured FlowMQ build and CTest graph. CI records SDK identities. The CNet manager policy is already part of the main branch and retains its existing transport contract.
+
+Utils is not ready for release. This integration stays in a draft PR, assigns no new product version and rejects tag publication. The current workflow qualifies Linux, Windows and macOS host profiles; Android/iOS and ARM acceptance remain separate work. Rebuild the dependency graph for the Salts 3 ABI and roll back matching SDKs together.

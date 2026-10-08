@@ -80,7 +80,7 @@ unset(Salts_DIR)
 unset(SaltsUtils_DIR CACHE)
 unset(SaltsUtils_DIR)
 find_package(
-  Salts CONFIG REQUIRED
+  Salts 3 CONFIG REQUIRED
   PATHS "${FLOWMQ_SALTS_ROOT_PATH}"
   NO_DEFAULT_PATH
   NO_CMAKE_FIND_ROOT_PATH)
