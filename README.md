@@ -554,9 +554,10 @@ Linux/macOS 与并发 sanitizer 尚未验证。
 
 ### #1001 candidate CI
 
-Until CNetManager is published, `cmake/ci/salts-candidate.json` pins the successful
-Salts producer run and commit used by branch/PR host qualification. The restore
-action validates run provenance and the SDK manifest before use. Linux, Windows
+Until CNetManager is published, `cmake/ci/salts-candidate.json` pins the Salts commit used by branch/PR host qualification. CI resolves a
+successful producer run for that exact SHA; dispatch accepts a SHA override.
+Missing successful runs fail explicitly. The restore action validates run
+provenance and the SDK manifest before use. Linux, Windows
 and macOS build the full configured graph, run CTest and install the SDK.
 Candidate runs skip cross packaging and publication; tags cannot select a
 candidate. Remove the temporary pin after the required SDK is published and
