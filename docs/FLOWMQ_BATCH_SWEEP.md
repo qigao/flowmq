@@ -4,7 +4,8 @@
 1/8/16 时吞吐中位数更高，约在 32 条附近被 libzmq 超过；到 64–128 条时
 FlowMQ 的提升趋缓。后续受控实验确认：分散小 buffer 与 32-entry flush 上限导致
 重复的有序写入/progress 成本，是该负载慢于 libzmq 的重要原因。
-仅诊断构建包含实验策略，生产发送策略和发布库运行时行为保持不变。
+下文原始扫描及干预数据对应 `954f87e` 诊断阶段，当时尚未修改生产策略。
+后续有界生产策略的设计与验证单列在文末，不与历史采样混合比较。
 
 ## 方法与边界
 
@@ -202,3 +203,142 @@ ctest --preset bench-win-release-user -R "^bench_flowmq_batch_ablation$" -V --ou
 最终 Release 构建成功，`ctest --preset win-release-user -L flowmq-transport`
 的 23 项回归全部通过（128.11 秒），包含普通、计数、阶段计时三个构建的 burst correctness。
 本次没有跨进程、TLS、64 KiB 或 Linux/macOS 的批量扫描。
+
+## 有界生产合批（诊断之后）
+
+### 选择与兼容边界
+
+在 `954f87e` 的诊断基础上，把已排队的小 copy 帧合并为一次 CNet retained-buffer
+提交。选择以下内部上限，不增加公开选项、协议字段或延迟等待：
+
+- 至少 **17 条相邻小 copy entry**，且每条 **encoded frame ≤256 B**；PAIR 的 32 B
+  header 下对应 payload ≤224 B。身份/topic 等编码开销也计入判断。
+- 每次最多 **128 帧、16 KiB encoded bytes**，同时保留已有 `max_encoded_size` 上限。
+  128 帧来自诊断有效区间；17 帧下限避开已能装入单个 native 16-span 窗口的小批次。
+  256 B 和 16 KiB 是保守的复制工作预算，并非全局最优阈值。
+- 首条 idle send 仍立即提交。单条排队、大帧及 retained publication 使用原有 SG 路径。
+  遇到 retained entry 或大帧时结束小帧前缀，不重排数据，不改变 multipart 边界。
+- 每个 peer 每轮至多提交一次 flush，继续由原有 owner/progress 循环驱动 TCP/TLS。
+  未增加线程、后台定时器或无界队列。
+
+候选方案包括保持 SG/32、诊断阶段的任意大小 coalesce/128，以及有界小帧复制。
+选择最后一种，是为了减少已测得的小帧 progress 成本，同时限制新增复制与存储需求；
+大 payload 没有资格进入复制分支。时间复杂度为 O(选中帧数 + encoded bytes)，
+新增一个 aggregate buffer 的有效数据最多 16 KiB/在途 peer。它来自现有 message pool，
+实际容量受 pool 分配级别及缓存复用影响，不能把 16 KiB 当作进程 RSS 的严格增量。
+
+最初候选允许两条小帧合批，其
+[六轮原始数据](flowmq-bounded-policy-min2-windows-20261010.csv) 中，64 B / batch=8
+吞吐中位数为 SG 319,454、新策略 290,161 条/s，没有支持额外复制的稳定收益。
+batch=1 这个不经过 queue flush 的对照同样出现约 10% 差异，说明不能把上述全部差值
+归因于复制成本。最终仍采取保守选择：未跨过已验证的 16-span native 窗口时不复制，
+把触发下限提高到 17 个相邻小帧；下方正式结果使用这个最终策略，单独重新测量。
+
+### 所有权、错误与回滚
+
+队列在单一 socket owner 上持有原始 canonical buffers。临时 slices 保活至提交结束；
+aggregate buffer 由现有 pool 分配。CNet 成功接纳后持有发送引用，FlowMQ 释放其本地
+aggregate 引用，再移除已选队列项。只有原有 send terminal 才结算在途消息/字节；
+credit 在 enqueue 时已提交，flush 不重复扣减。
+
+分配或 CNet admission 失败时，释放临时引用、取消 write-begin，队列内容和计数保持
+原样。EBUSY/ENOBUFS 按现有 progress 规则重试；ENOMEM 等终态错误仍由现有 peer
+失败处理关闭并释放资源，不改走另一条路径掩盖错误。retained publication 的逻辑
+vector 和完成生命周期保持原样。回滚仅需恢复内部 SG 策略，不涉及数据/配置迁移。
+
+### 验证方法
+
+私有 probe mode 0 保留历史 SG/32；新增 mode 3 执行与生产完全相同的策略选择。
+mode 1/2 继续保留历史干预语义。新旧路径使用同一可执行文件、相同计数器、关闭阶段
+计时，每个场景六轮且先后顺序各三次；新增 `policy:` CTest case。
+
+测试覆盖 64 B 下 batch=1/8/32/128，以及 batch=128 下的 224 B、225 B、1 KiB；
+64 KiB 使用 batch=16。≤1 KiB 的场景每组 262,144 条；64 KiB 每组 16,384 条（1 GiB），
+每条验证长度、内容及 FIFO。试跑发现小组 CPU 时间量化误差较大，因此增大消息数；
+正式结果单独保存，不与试跑混合。每批计两次 wall clock，记录完整发送/接收/验证/
+credit progress 的耗时，报告 nearest-rank P95/P99；这是**每批端到端延迟**，不是
+单条网络时延，也没有用平均值推导分位数。setup、预热、分位排序和关闭不计入测量。
+进程 peak RSS 是进程生命周期高水位，不能当作独立场景的内存增量。
+
+正式 socket 测试覆盖 0/1 B、单个 queued frame、17/128 帧边界、16 KiB 边界、224/225 B
+分支边界、混合 copy/SG、消息 HWM 满及恢复、超过 1,024 entries 的环形队列回绕、
+multipart 和经证书验证的 TLS burst。普通 socket 与 opt-in peer pool 运行同一套测试。
+生命周期测试分别使用 64 B 合批和 1 KiB SG，在 CNet 接纳后释放原队列引用，再从
+同一 pool 发送下一条，验证在途数据不会被复用覆盖。
+
+### 最终策略 A/B 结果（事实，MED）
+
+[最终策略 CSV](flowmq-bounded-policy-windows-20261010.csv) 共 96 组，全部完成内容及
+FIFO 校验，无 send admission 重试。下表为六轮中位数；P99 列是六个独立组的每批
+P99 的中位数，没有合并样本或换算成单条延迟。计数器开启、阶段计时关闭。
+
+| payload / batch | SG 条/s | 新策略 条/s | SG CPU µs/条 | 新策略 CPU µs/条 | SG 每批 P99 µs | 新策略每批 P99 µs |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 64 B / 1 | 71,050 | 67,771 | 14.037 | 14.812 | 23.65 | 24.60 |
+| 64 B / 8 | 268,126 | 280,317 | 3.695 | 3.576 | 51.30 | 48.25 |
+| 64 B / 32 | 780,496 | 931,773 | 1.282 | 1.073 | 65.50 | 54.70 |
+| 64 B / 128 | 1,065,101 | 1,953,931 | 0.954 | 0.507 | 206.10 | 113.75 |
+| 224 B / 128 | 988,570 | 1,561,851 | 1.013 | 0.656 | 201.85 | 121.40 |
+| 225 B / 128 | 889,264 | 903,003 | 1.103 | 1.103 | 253.90 | 262.05 |
+| 1 KiB / 128 | 894,705 | 821,484 | 1.132 | 1.222 | 219.60 | 294.40 |
+| 64 KiB / 16 | 26,145 | 28,037 | 37.193 | 36.240 | 2,709.25 | 2,401.60 |
+
+**计算：**64 B / batch=128 吞吐中位数提高 **83.45%**，CPU/条降低 **46.88%**，每批
+P99 降低 **44.81%**。同一 repetition 配对的吞吐比为 **1.318–2.587×**，中位数
+**1.911×**，六轮均为正。64 B / batch=32 吞吐提高 19.38%；224 B / batch=128
+提高 57.99%，这两组同样六轮配对均为正。
+
+64 B / 128 的 DATA 逻辑写每批从 **5 → 2**，submitted ranges 从 **128 → 2**，
+poll 从 **11 → 4**；224 B / 128 因 16 KiB 上限拆成两次 queued flush，分别为
+**5 → 3** 次逻辑写、**11 → 5** 次 poll。batch=8 两边均为 2 次逻辑写、8 ranges、
+4 次 poll，确认短批次没有启用额外复制。这些仍然不是 NativeIO syscall 计数。
+
+**限制（MED）：**1 KiB 对照虽然保持相同 SG 提交形状，吞吐中位数仍低 8.18%，每批
+P99 高 34.06%；batch=1 完全没有 queued flush，也出现 4.61% 吞吐差异。重复组的
+变化以及控制路径一致表明存在主机/测量波动，但不足以排除所有额外成本。因此只确认
+已测小帧大批次收益，不宣称所有消息大小都提高或整体性能无回归。1 KiB 尾延迟需要在
+更稳定的环境下进一步复测。64 KiB 也没有启用合批，其结果不能算作合批收益。
+
+进程 peak RSS 在本轮从 11,128,832 到 12,206,080 bytes（约 10.61–11.64 MiB）；
+这是跨案例累积高水位，不能证明每个策略独立的峰值或无泄漏。有限 burst、单 peer
+结果不能外推为饱和流、多 peer 公平性、TLS 性能或跨平台结论。
+
+### 最终生产库与 libzmq 对照
+
+[生产对照 CSV](flowmq-bounded-vs-zmq-windows-20261010.csv) 为另外一轮 72 组扫描，
+链接普通生产库，未编入 probe 计数、阶段计时或每批分位数采集。双方每组 262,144 条
+64 B 消息，六轮且平衡执行顺序，全部校验通过；FlowMQ admission 重试为零。
+本轮绝对吞吐不能与上面的 probe A/B 数据跨时间直接相减。
+
+| batch | FlowMQ 条/s | libzmq 条/s | FMQ/ZMQ | FlowMQ CPU µs/条 | libzmq CPU µs/条 |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 63,659 | 27,932 | 2.279 | 15.616 | 39.697 |
+| 8 | 227,956 | 213,008 | 1.070 | 4.321 | 5.245 |
+| 16 | 397,797 | 412,099 | 0.965 | 2.503 | 2.682 |
+| 32 | 849,858 | 840,980 | 1.011 | 1.132 | 1.431 |
+| 64 | 1,349,373 | 1,234,613 | 1.093 | 0.745 | 1.103 |
+| 128 | 1,566,602 | 1,695,212 | 0.924 | 0.656 | 0.775 |
+
+batch=128 下生产库仍比 libzmq 的吞吐中位数低 **7.59%**。这不是“全面超过 ZMQ”
+的证据；本轮只覆盖相同应用 burst 策略下的单进程 TCP PAIR，线程模型差异仍然存在。
+正常库与探针库结果分开呈现，也不把新旧两个生产扫描的差值当作严格配对收益。
+
+复测入口（MSVC 开发环境）：
+
+```powershell
+cmake --build --preset win-release-user
+ctest --preset win-release-user -L flowmq-transport --output-on-failure
+ctest --preset bench-win-release-user -R "^bench_flowmq_batch_policy$" -V --output-log build/bounded-min17-policy.log
+ctest --preset bench-win-release-user -R "^bench_flowmq_batch_sweep$" -V --output-log build/bounded-min17-sweep.log
+```
+
+最终 Release 构建成功；三个 burst correctness CTest 均通过。最终策略 A/B 的 96 组
+通过（84.12 秒），普通生产库与 libzmq 的 72 组通过（116.56 秒）。最终
+`flowmq-transport` 的 **23/23 项全部通过**（198.26 秒），包含 TCP/TLS、peer pool、
+owner fault、multipart、HWM、在途 buffer 生命周期及公开 C11/C++17 consumer。
+本地完整日志分别在 `build/bounded-min17-build.log`、`build/bounded-min17-policy.log`、
+`build/bounded-min17-sweep.log` 和 `build/bounded-min17-regression.log`。
+
+本次没有新增分配失败注入、CNet busy 注入或 sanitizer 配置；对应 flush 失败回滚
+依据代码审查，不能标为故障注入测试已通过。TLS 与多 peer 的功能回归不等同于 TLS
+吞吐或多 peer 尾延迟/公平性测量；Linux/macOS、跨进程及长期稳态负载仍未验证。

@@ -34,15 +34,18 @@ typedef struct flowmq_socket_batch_probe_s {
   uint64_t receive_stream_slices;
   uint64_t receive_decoder_slices;
   uint64_t coalesced_writes;
+  uint64_t coalesced_ranges;
+  uint64_t coalesced_bytes_peak;
   uint64_t submitted_ranges;
 } flowmq_socket_batch_probe_t;
 
 #if defined(FLOWMQ_BATCH_PROBE)
 int flowmq_socket_batch_probe_read(const flowmq_socket_t *socket,
                                  flowmq_socket_batch_probe_t *out);
-/* Private interventions, startup-only: 0 = ordinary SG/32; 1 = coalesce/32;
- * 2 = coalesce/128. Queued copy-lane frames become one retained buffer per
- * flush. Retained application payloads and production builds are unchanged. */
+/* Private interventions, startup-only: 0 = historical SG/32; 1 = coalesce/32;
+ * 2 = coalesce/128; 3 = production bounded-copy policy. Modes 1/2 keep the
+ * historical interventions without the production small-frame/byte limits.
+ * Retained application payloads are unchanged in every mode. */
 int flowmq_socket_batch_probe_coalesce(flowmq_socket_t *socket, int mode);
 #endif
 

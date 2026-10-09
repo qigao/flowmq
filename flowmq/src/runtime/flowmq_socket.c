@@ -38,6 +38,12 @@ enum {
   FLOWMQ_SOCKET_ENDPOINT_NONE = FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY,
   FLOWMQ_SOCKET_INBOUND_CAPACITY = 1024u,
   FLOWMQ_SOCKET_OUTBOUND_CAPACITY = FLOWMQ_SOCKET_OPTION_MESSAGE_HWM_MAX,
+  /* Bound extra copy work per peer/progress turn. Larger canonical frames
+   * retain the SG path; the idle first send never waits for a batch. */
+  FLOWMQ_SOCKET_COPY_BATCH_FRAMES = 128u,
+  FLOWMQ_SOCKET_COPY_BATCH_MIN_FRAMES = 17u,
+  FLOWMQ_SOCKET_COPY_BATCH_BYTES = 16u * 1024u,
+  FLOWMQ_SOCKET_COPY_BATCH_FRAME_BYTES = 256u,
   FLOWMQ_SOCKET_MULTIPART_CAPACITY = 64u,
   FLOWMQ_SOCKET_DEFAULT_HWM = 1000u,
   FLOWMQ_SOCKET_DEFAULT_HWM_BYTES = 16u * 1024u * 1024u,
@@ -79,6 +85,16 @@ _Static_assert(CNET_RETAINED_VECTOR_MAX >= 32u,
                "FlowMQ 1 MiB retained batching requires 32 logical CNet ranges");
 _Static_assert(CNET_RETAINED_VECTOR_MAX <= FLOWMQ_SOCKET_OUTBOUND_CAPACITY,
                "CNet retained-vector bound must fit FlowMQ outbound storage");
+_Static_assert((size_t)CNET_RETAINED_VECTOR_MAX <= FLOWMQ_SOCKET_COPY_BATCH_FRAMES,
+               "flush slice storage must also fit the SG path");
+_Static_assert(FLOWMQ_SOCKET_COPY_BATCH_MIN_FRAMES <= FLOWMQ_SOCKET_COPY_BATCH_FRAMES &&
+                   FLOWMQ_SOCKET_COPY_BATCH_MIN_FRAMES <=
+                       FLOWMQ_SOCKET_COPY_BATCH_BYTES / FLOWMQ_SOCKET_COPY_BATCH_FRAME_BYTES,
+               "minimum copy prefix must fit both batch bounds");
+#if defined(FLOWMQ_BATCH_PROBE)
+_Static_assert((size_t)FLOWMQ_BATCH_PROBE_MAX_FRAMES == FLOWMQ_SOCKET_COPY_BATCH_FRAMES,
+               "probe histogram must cover every production batch");
+#endif
 _Static_assert(FLOWMQ_SOCKET_FRAME_SEGMENT_CAPACITY <= CNET_RETAINED_VECTOR_MAX,
                "one retained FMQ frame must fit one logical CNet vector");
 
@@ -295,7 +311,7 @@ int flowmq_socket_batch_probe_read(const flowmq_socket_t *socket,
 }
 
 int flowmq_socket_batch_probe_coalesce(flowmq_socket_t *socket, int mode) {
-  if (socket == NULL || mode < 0 || mode > 2) return SALTS_EINVAL;
+  if (socket == NULL || mode < 0 || mode > 3) return SALTS_EINVAL;
   if (socket->runtime_initialized) return SALTS_EBUSY;
   socket->batch_probe_coalesce = mode;
   return SALTS_OK;
@@ -1494,22 +1510,36 @@ static void flowmq_socket_release_send_slices(mem_slice_t *slices,
     mem_slice_release(&slices[i]);
 }
 
+static int flowmq_socket_peer_can_coalesce(const flowmq_socket_peer_t *peer) {
+  size_t bytes = 0u;
+  if (peer->outbound_count < FLOWMQ_SOCKET_COPY_BATCH_MIN_FRAMES) return 0;
+  /* The qualified NativeIO window holds 16 spans. Copy only a prefix large
+   * enough to reduce windows; short/mixed prefixes keep the existing SG path. */
+  for (size_t i = 0u; i < FLOWMQ_SOCKET_COPY_BATCH_MIN_FRAMES; ++i) {
+    const flowmq_socket_outbound_t *entry =
+        &peer->outbound[(peer->outbound_read + i) % FLOWMQ_SOCKET_OUTBOUND_CAPACITY];
+    if (entry->retained != NULL || entry->buffer == NULL ||
+        entry->encoded_size > FLOWMQ_SOCKET_COPY_BATCH_FRAME_BYTES ||
+        entry->encoded_size > peer->owner->max_encoded_size - bytes)
+      return 0;
+    bytes += entry->encoded_size;
+  }
+  return 1;
+}
+
 static int flowmq_socket_peer_flush(flowmq_socket_peer_t *peer) {
   /*
-   * Copied queue entries are batched as retained canonical buffers. A retained
+   * Small copied queue entries share a bounded retained buffer. A retained
    * publication entry already owns the exact logical vector and therefore
    * flushes alone as one CNet logical write.
    */
   flowmq_socket_t *socket = peer->owner;
   flowmq_socket_outbound_t *outbound;
-#if defined(FLOWMQ_BATCH_PROBE)
-  const size_t batch_capacity = socket->batch_probe_coalesce == 2
-      ? FLOWMQ_BATCH_PROBE_MAX_FRAMES : CNET_RETAINED_VECTOR_MAX;
-  mem_slice_t slices[FLOWMQ_BATCH_PROBE_MAX_FRAMES] = {0};
-#else
-  const size_t batch_capacity = CNET_RETAINED_VECTOR_MAX;
-  mem_slice_t slices[CNET_RETAINED_VECTOR_MAX] = {0};
-#endif
+  size_t batch_capacity = CNET_RETAINED_VECTOR_MAX;
+  size_t batch_byte_limit = socket->max_encoded_size;
+  int coalesce = 0;
+  int bounded_copy = 1;
+  mem_slice_t slices[FLOWMQ_SOCKET_COPY_BATCH_FRAMES] = {0};
   size_t batch_count = 0u;
   size_t batch_encoded_size = 0u;
   size_t batch_payload_size = 0u;
@@ -1554,6 +1584,20 @@ static int flowmq_socket_peer_flush(flowmq_socket_peer_t *peer) {
     return SALTS_OK;
   }
 
+#if defined(FLOWMQ_BATCH_PROBE)
+  /* Keep the historical SG and unbounded-by-policy interventions reproducible.
+   * Mode 3 takes exactly the production selection below. */
+  bounded_copy = socket->batch_probe_coalesce == 3;
+  coalesce = socket->batch_probe_coalesce == 1 || socket->batch_probe_coalesce == 2;
+  if (socket->batch_probe_coalesce == 2)
+    batch_capacity = FLOWMQ_SOCKET_COPY_BATCH_FRAMES;
+#endif
+  if (bounded_copy && flowmq_socket_peer_can_coalesce(peer)) {
+    coalesce = 1;
+    batch_capacity = FLOWMQ_SOCKET_COPY_BATCH_FRAMES;
+    if (batch_byte_limit > FLOWMQ_SOCKET_COPY_BATCH_BYTES)
+      batch_byte_limit = FLOWMQ_SOCKET_COPY_BATCH_BYTES;
+  }
   while (batch_count < peer->outbound_count &&
          batch_count < batch_capacity) {
     size_t index =
@@ -1562,8 +1606,9 @@ static int flowmq_socket_peer_flush(flowmq_socket_peer_t *peer) {
     outbound = &peer->outbound[index];
     if (outbound->retained != NULL) break;
     if (outbound->buffer == NULL ||
-        outbound->encoded_size >
-            socket->max_encoded_size - batch_encoded_size)
+        (bounded_copy && coalesce &&
+         outbound->encoded_size > FLOWMQ_SOCKET_COPY_BATCH_FRAME_BYTES) ||
+        outbound->encoded_size > batch_byte_limit - batch_encoded_size)
       break;
     slices[batch_count] =
         mem_slice(outbound->buffer, 0u, outbound->encoded_size);
@@ -1585,8 +1630,7 @@ static int flowmq_socket_peer_flush(flowmq_socket_peer_t *peer) {
     flowmq_socket_release_send_slices(slices, batch_count);
     return status;
   }
-#if defined(FLOWMQ_BATCH_PROBE)
-  if (socket->batch_probe_coalesce) {
+  if (coalesce) {
     mem_buffer_t *buffer = mem_get_buffer(&socket->message_pool, batch_encoded_size);
     if (buffer == NULL) {
       status = SALTS_ENOMEM;
@@ -1601,9 +1645,7 @@ static int flowmq_socket_peer_flush(flowmq_socket_peer_t *peer) {
       status = cnet_send_buffer(&socket->client, peer->connection, buffer);
       mem_buffer_release(buffer);
     }
-  } else
-#endif
-  {
+  } else {
     status = cnet_send_slicev(&socket->client, peer->connection, slices,
                             batch_count);
   }
@@ -1621,8 +1663,13 @@ static int flowmq_socket_peer_flush(flowmq_socket_peer_t *peer) {
   socket->batch_probe.payload_bytes += batch_payload_size;
   socket->batch_probe.queued_ranges += batch_count;
   ++socket->batch_probe.queued_range_histogram[batch_count];
-  socket->batch_probe.coalesced_writes += socket->batch_probe_coalesce != 0;
-  socket->batch_probe.submitted_ranges += socket->batch_probe_coalesce ? 1u : batch_count;
+  socket->batch_probe.coalesced_writes += coalesce != 0;
+  if (coalesce) {
+    socket->batch_probe.coalesced_ranges += batch_count;
+    if (batch_encoded_size > socket->batch_probe.coalesced_bytes_peak)
+      socket->batch_probe.coalesced_bytes_peak = batch_encoded_size;
+  }
+  socket->batch_probe.submitted_ranges += coalesce ? 1u : batch_count;
 #endif
   for (size_t i = 0u; i < batch_count; ++i) {
     outbound = &peer->outbound[peer->outbound_read];

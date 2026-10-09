@@ -9,11 +9,12 @@
 #endif
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 enum {
   BATCH_PAYLOAD_BYTES = 64,
-  BATCH_MAX_MESSAGES = 128,
+  BATCH_MAX_MESSAGES = 130,
   BATCH_MEASURE_MESSAGES = 262144,
   BATCH_PROBE_MESSAGES = BATCH_MEASURE_MESSAGES,
   BATCH_REPEATS = 6,
@@ -32,6 +33,9 @@ typedef struct batch_pair_s {
   uint64_t sequence;
   uint64_t poll_calls;
   uint64_t send_retries;
+  size_t payload_bytes;
+  unsigned char *payload;
+  unsigned char *received;
 #if defined(FLOWMQ_BATCH_PROBE)
   uint64_t send_ns;
   uint64_t recv_ns;
@@ -61,16 +65,25 @@ static int batch_pair_close(batch_pair_t *pair) {
     first = SALTS_EIO;
   if (pair->zmq_ctx != NULL && zmq_ctx_term(pair->zmq_ctx) != 0)
     first = SALTS_EIO;
+  free(pair->payload);
+  free(pair->received);
   memset(pair, 0, sizeof(*pair));
   return first;
 }
 
-static int batch_pair_open(batch_pair_t *pair, int use_zmq, int coalesce) {
+static int batch_pair_open(batch_pair_t *pair, int use_zmq, int coalesce,
+                           size_t payload_bytes) {
   char endpoint[256];
   size_t endpoint_size = sizeof(endpoint);
   int status;
   memset(pair, 0, sizeof(*pair));
   pair->use_zmq = use_zmq;
+  if (payload_bytes < sizeof(uint64_t) || payload_bytes > 65536u)
+    return SALTS_EINVAL;
+  pair->payload_bytes = payload_bytes;
+  pair->payload = malloc(BATCH_MAX_MESSAGES * payload_bytes);
+  pair->received = malloc(payload_bytes);
+  if (pair->payload == NULL || pair->received == NULL) return SALTS_ENOMEM;
 #if !defined(FLOWMQ_BATCH_PROBE)
   (void)coalesce;
 #endif
@@ -134,13 +147,14 @@ static int batch_progress(batch_pair_t *pair, uint64_t deadline) {
 }
 
 /* Identical FIFO payload validation for both engines. Reusing these buffers is
- * permitted by their copy admission contracts. At most 128 messages are in
- * one application burst, below both libraries' default message/byte HWM.
+ * permitted by their copy admission contracts. Measurements use up to 128
+ * messages; boundary tests use 130, below the default message/byte HWM.
  * No producer thread, unbounded retry or hidden benchmark queue is introduced.
  */
 static int batch_exchange(batch_pair_t *pair, size_t count) {
-  unsigned char payload[BATCH_MAX_MESSAGES][BATCH_PAYLOAD_BYTES];
-  unsigned char received[BATCH_PAYLOAD_BYTES];
+  unsigned char *payload = pair->payload;
+  unsigned char *received = pair->received;
+  const size_t bytes = pair->payload_bytes;
   const uint64_t now = cmeta_monotonic_ms();
   uint64_t deadline;
   int status;
@@ -148,20 +162,19 @@ static int batch_exchange(batch_pair_t *pair, size_t count) {
       pair->sequence > UINT64_MAX - count || now > UINT64_MAX - BATCH_TIMEOUT_MS)
     return SALTS_EINVAL;
   deadline = now + BATCH_TIMEOUT_MS;
-  memset(payload, 0x5a, count * BATCH_PAYLOAD_BYTES);
+  memset(payload, 0x5a, count * bytes);
   for (size_t i = 0u; i < count; ++i) {
     const uint64_t sequence = pair->sequence + i;
-    memcpy(payload[i], &sequence, sizeof(sequence));
+    memcpy(payload + i * bytes, &sequence, sizeof(sequence));
     if (pair->use_zmq) {
-      if (zmq_send(pair->zmq_sender, payload[i], BATCH_PAYLOAD_BYTES, 0) !=
-          BATCH_PAYLOAD_BYTES)
+      if (zmq_send(pair->zmq_sender, payload + i * bytes, bytes, 0) != (int)bytes)
         return SALTS_EIO;
     } else {
       for (;;) {
 #if defined(FLOWMQ_BATCH_PHASE_TIMING)
         const uint64_t started = cmeta_hrtime();
 #endif
-        status = flowmq_send(pair->sender, payload[i], BATCH_PAYLOAD_BYTES,
+        status = flowmq_send(pair->sender, payload + i * bytes, bytes,
                              FLOWMQ_DONTWAIT);
 #if defined(FLOWMQ_BATCH_PHASE_TIMING)
         pair->send_ns += cmeta_hrtime() - started;
@@ -176,8 +189,7 @@ static int batch_exchange(batch_pair_t *pair, size_t count) {
   }
   for (size_t i = 0u; i < count; ++i) {
     if (pair->use_zmq) {
-      if (zmq_recv(pair->zmq_receiver, received, sizeof(received), 0) !=
-          BATCH_PAYLOAD_BYTES)
+      if (zmq_recv(pair->zmq_receiver, received, bytes, 0) != (int)bytes)
         return SALTS_EIO;
     } else {
       size_t received_size = 0u;
@@ -185,7 +197,7 @@ static int batch_exchange(batch_pair_t *pair, size_t count) {
 #if defined(FLOWMQ_BATCH_PHASE_TIMING)
         const uint64_t started = cmeta_hrtime();
 #endif
-        status = flowmq_recv(pair->receiver, received, sizeof(received),
+        status = flowmq_recv(pair->receiver, received, bytes,
                              &received_size, FLOWMQ_DONTWAIT);
 #if defined(FLOWMQ_BATCH_PHASE_TIMING)
         pair->recv_ns += cmeta_hrtime() - started;
@@ -195,9 +207,9 @@ static int batch_exchange(batch_pair_t *pair, size_t count) {
         if (status != SALTS_OK) return status;
       }
       if (status != SALTS_OK) return status;
-      if (received_size != BATCH_PAYLOAD_BYTES) return SALTS_EPROTO;
+      if (received_size != bytes) return SALTS_EPROTO;
     }
-    if (memcmp(received, payload[i], sizeof(received)) != 0) return SALTS_EPROTO;
+    if (memcmp(received, payload + i * bytes, bytes) != 0) return SALTS_EPROTO;
   }
   pair->sequence += count;
   if (pair->use_zmq) return SALTS_OK;
@@ -210,7 +222,7 @@ static int batch_exchange(batch_pair_t *pair, size_t count) {
 #if defined(FLOWMQ_BATCH_PROBE)
 static int batch_probe_result(const flowmq_socket_batch_probe_t *before,
                               const flowmq_socket_batch_probe_t *after,
-                              size_t batch, size_t messages, int report) {
+                              size_t batch, size_t messages, size_t bytes, int report) {
   const uint64_t direct = after->direct_writes - before->direct_writes;
   const uint64_t queued = after->queued_writes - before->queued_writes;
   const uint64_t ranges = after->queued_ranges - before->queued_ranges;
@@ -225,7 +237,7 @@ static int batch_probe_result(const flowmq_socket_batch_probe_t *before,
       printf("BATCH_HIST,%zu,%zu,%llu\n", batch, i, (unsigned long long)writes);
   }
   if (after->messages - before->messages != messages ||
-      after->payload_bytes - before->payload_bytes != messages * BATCH_PAYLOAD_BYTES ||
+      after->payload_bytes - before->payload_bytes != messages * bytes ||
       histogram_writes != queued || histogram_ranges != ranges ||
       direct + ranges != messages || direct + queued == 0u)
     return SALTS_EPROTO;
@@ -237,22 +249,35 @@ static int batch_probe_result(const flowmq_socket_batch_probe_t *before,
 }
 #endif
 
-static int batch_run(int use_zmq, size_t batch, size_t messages,
-                     size_t repetition, size_t order, int measured, int coalesce) {
+#if defined(FLOWMQ_BATCH_PROBE)
+static int batch_compare_ns(const void *left, const void *right) {
+  const uint64_t a = *(const uint64_t *)left, b = *(const uint64_t *)right;
+  return (a > b) - (a < b);
+}
+#endif
+
+static int batch_run_sized(int use_zmq, size_t batch, size_t messages,
+                           size_t repetition, size_t order, int measured,
+                           int coalesce, size_t bytes) {
   batch_pair_t pair = {0};
   flowmq_bench_metrics_t before = {0}, after = {0};
   uint64_t started = 0u, finished = 0u;
   size_t completed = 0u;
-  int status = batch_pair_open(&pair, use_zmq, coalesce);
+  uint64_t *burst_ns = NULL;
+  int status = batch_pair_open(&pair, use_zmq, coalesce, bytes);
 #if defined(FLOWMQ_BATCH_PROBE)
   flowmq_socket_batch_probe_t probe_before = {0}, probe_after = {0};
   flowmq_socket_batch_probe_t rx_before = {0}, rx_after = {0};
 #endif
   if (status != SALTS_OK) goto cleanup;
   if (batch == 0u || batch > BATCH_MAX_MESSAGES || messages == 0u ||
-      messages % batch != 0u || messages > SIZE_MAX / BATCH_PAYLOAD_BYTES) {
+      messages % batch != 0u || messages > SIZE_MAX / bytes) {
     status = SALTS_EINVAL;
     goto cleanup;
+  }
+  if (measured == 3) {
+    burst_ns = calloc(messages / batch, sizeof(*burst_ns));
+    if (burst_ns == NULL) { status = SALTS_ENOMEM; goto cleanup; }
   }
   for (size_t i = 0u; i < BATCH_WARMUP_ROUNDS; ++i) {
     status = batch_exchange(&pair, batch);
@@ -273,11 +298,13 @@ static int batch_run(int use_zmq, size_t batch, size_t messages,
   if (status != SALTS_OK) goto cleanup;
 #if !defined(FLOWMQ_BATCH_PROBE)
   benchmark_io("fixed-total TCP batch workload", 1u, messages,
-               messages * BATCH_PAYLOAD_BYTES) {
+               messages * bytes) {
 #endif
     started = cmeta_hrtime();
     for (; completed < messages; completed += batch) {
+      const uint64_t burst_start = burst_ns == NULL ? 0u : cmeta_hrtime();
       status = batch_exchange(&pair, batch);
+      if (burst_ns != NULL) burst_ns[completed / batch] = cmeta_hrtime() - burst_start;
       if (status != SALTS_OK) goto measurement_finished;
     }
     finished = cmeta_hrtime();
@@ -299,19 +326,39 @@ measurement_finished:
     if (status == SALTS_OK)
       status = flowmq_socket_batch_probe_read(pair.receiver, &rx_after);
     if (status == SALTS_OK)
-      status = batch_probe_result(&probe_before, &probe_after, batch, messages, measured == 1);
+      status = batch_probe_result(&probe_before, &probe_after, batch, messages, bytes, measured == 1);
     if (status != SALTS_OK) goto cleanup;
     {
       const uint64_t direct = probe_after.direct_writes - probe_before.direct_writes;
       const uint64_t queued = probe_after.queued_writes - probe_before.queued_writes;
       const uint64_t ranges = probe_after.queued_ranges - probe_before.queued_ranges;
-      if (probe_after.submitted_ranges - probe_before.submitted_ranges !=
-              direct + (coalesce ? queued : ranges) ||
-          probe_after.coalesced_writes - probe_before.coalesced_writes !=
-              (coalesce ? queued : 0u)) {
+      const uint64_t copied = probe_after.coalesced_writes - probe_before.coalesced_writes;
+      const uint64_t copied_ranges = probe_after.coalesced_ranges - probe_before.coalesced_ranges;
+      if (copied > queued || copied_ranges > ranges ||
+          probe_after.submitted_ranges - probe_before.submitted_ranges !=
+              direct + copied + ranges - copied_ranges ||
+          (coalesce != 3 && copied != (coalesce ? queued : 0u)) ||
+          (coalesce == 3 && probe_after.coalesced_bytes_peak > 16384u)) {
         status = SALTS_EPROTO;
         goto cleanup;
       }
+    }
+    if (measured == 3) {
+      const size_t bursts = messages / batch;
+      const double seconds = (double)(finished - started) / 1e9;
+      qsort(burst_ns, bursts, sizeof(*burst_ns), batch_compare_ns);
+      printf("BATCH_POLICY,%s,%zu,%zu,%zu,%zu,%zu,%.9f,%.3f,%.3f,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",
+             coalesce == 3 ? "bounded" : "sg32", bytes, batch, repetition, order,
+             messages, seconds, (double)messages / seconds,
+             (double)(after.cpu_ns - before.cpu_ns) / messages,
+             (unsigned long long)burst_ns[(bursts * 95u + 99u) / 100u - 1u],
+             (unsigned long long)burst_ns[(bursts * 99u + 99u) / 100u - 1u],
+             (unsigned long long)after.peak_rss_bytes,
+             (unsigned long long)(probe_after.direct_writes - probe_before.direct_writes +
+                                  probe_after.queued_writes - probe_before.queued_writes),
+             (unsigned long long)(probe_after.submitted_ranges - probe_before.submitted_ranges),
+             (unsigned long long)pair.poll_calls, (unsigned long long)pair.send_retries);
+      fflush(stdout);
     }
 #define BATCH_PHASE_SUM(member) \
       ((unsigned long long)(probe_after.member - probe_before.member + \
@@ -363,11 +410,18 @@ measurement_finished:
   }
 #endif
 cleanup:
+  free(burst_ns);
   {
     const int close_status = batch_pair_close(&pair);
     if (status == SALTS_OK) status = close_status;
   }
   return status;
+}
+
+static int batch_run(int use_zmq, size_t batch, size_t messages,
+                     size_t repetition, size_t order, int measured, int coalesce) {
+  return batch_run_sized(use_zmq, batch, messages, repetition, order, measured,
+                         coalesce, BATCH_PAYLOAD_BYTES);
 }
 
 spec("FlowMQ and libzmq batch sweep") {
@@ -378,10 +432,57 @@ spec("FlowMQ and libzmq batch sweep") {
 #if defined(FLOWMQ_BATCH_PROBE)
       check_equal(batch_run(0, batch_sizes[i], batch_sizes[i] * 3u, 0u, 0u, 0, 1), SALTS_OK);
       check_equal(batch_run(0, batch_sizes[i], batch_sizes[i] * 3u, 0u, 0u, 0, 2), SALTS_OK);
+      check_equal(batch_run(0, batch_sizes[i], batch_sizes[i] * 3u, 0u, 0u, 0, 3), SALTS_OK);
 #endif
     }
   }
 #if defined(FLOWMQ_BATCH_PROBE)
+  it("correctness: production copy policy respects frame and byte boundaries") {
+    static const struct { size_t bytes, batch, copies, peak; } cases[] = {
+      {64u, 1u, 0u, 0u}, {64u, 2u, 0u, 0u}, {64u, 3u, 0u, 0u},
+      {64u, 17u, 0u, 0u}, {64u, 18u, 1u, 1632u},
+      {64u, 128u, 1u, 12192u}, {64u, 129u, 1u, 12288u},
+      {64u, 130u, 1u, 12288u}, {224u, 65u, 1u, 16384u},
+      {224u, 66u, 1u, 16384u}, {224u, 128u, 2u, 16384u},
+      {225u, 128u, 0u, 0u}, {1024u, 128u, 0u, 0u}};
+    for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+      batch_pair_t pair = {0};
+      flowmq_socket_batch_probe_t stats = {0};
+      int status = batch_pair_open(&pair, 0, 3, cases[i].bytes);
+      if (status == SALTS_OK) status = batch_exchange(&pair, cases[i].batch);
+      if (status == SALTS_OK) status = flowmq_socket_batch_probe_read(pair.sender, &stats);
+      const int close_status = batch_pair_close(&pair);
+      check_equal(status, SALTS_OK);
+      check_equal(close_status, SALTS_OK);
+      check_equal(stats.coalesced_writes, cases[i].copies);
+      check_equal(stats.coalesced_bytes_peak, cases[i].peak);
+      check_equal(stats.messages, cases[i].batch);
+    }
+  }
+  bench("policy: bounded copy versus historical SG") {
+    static const struct { size_t bytes, batch; } cases[] = {
+      {64u, 1u}, {64u, 8u}, {64u, 32u}, {64u, 128u},
+      {224u, 128u}, {225u, 128u}, {1024u, 128u}, {65536u, 16u}};
+    const size_t count = sizeof(cases) / sizeof(cases[0]);
+    printf("BATCH_POLICY_HEADER,variant,payload_bytes,batch,repeat,order,messages,seconds,"
+           "messages_per_second,cpu_ns_per_message,burst_p95_ns,burst_p99_ns,"
+           "process_peak_rss_bytes,logical_writes,submitted_ranges,poll_calls,send_retries\n");
+    for (size_t repetition = 0u; repetition < BATCH_REPEATS; ++repetition) {
+      for (size_t position = 0u; position < count; ++position) {
+        const size_t index = (position + repetition) % count;
+        /* Keep the short 225 B/1 KiB cases above a handful of Windows CPU
+         * timer ticks. The 64 KiB control transfers 1 GiB per sample. */
+        const size_t messages = cases[index].bytes == 65536u
+            ? 16384u : BATCH_MEASURE_MESSAGES;
+        for (size_t order = 0u; order < 2u; ++order) {
+          const int mode = ((order + repetition + index) % 2u) == 0u ? 0 : 3;
+          check_equal(batch_run_sized(0, cases[index].batch, messages,
+                                      repetition + 1u, order, 3, mode,
+                                      cases[index].bytes), SALTS_OK);
+        }
+      }
+    }
+  }
   bench("diagnostic: actual FlowMQ copy admission batches") {
     printf("BATCH_PROBE_HEADER,batch,messages,direct_writes,queued_writes,queued_ranges,"
            "messages_per_logical_write,native_write_count\n");
