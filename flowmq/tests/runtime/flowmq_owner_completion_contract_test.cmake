@@ -6,7 +6,7 @@ if(NOT DEFINED FLOWMQ_OWNER_SOURCE OR NOT EXISTS "${FLOWMQ_OWNER_SOURCE}")
 endif()
 file(READ "${FLOWMQ_OWNER_SOURCE}" source)
 
-string(FIND "${source}" "status = native_io_backend_observe(" observe_start)
+string(FIND "${source}" "  if (status == SALTS_OK) {\\n    /* Once observe returns a batch" observe_start)
 string(FIND "${source}" "  /*\n   * Match the qualified #67 ordering:" progress_start)
 if(observe_start LESS 0 OR progress_start LESS_EQUAL observe_start)
   message(FATAL_ERROR "Owner observe/progress boundary changed; requalify routing")
