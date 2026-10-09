@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(flowmq_package_consumer C)
+project(flowmq_package_consumer C CXX)
 
 if(NOT DEFINED ENV{FLOWMQ_ROOT} OR "$ENV{FLOWMQ_ROOT}" STREQUAL "")
   message(FATAL_ERROR "FLOWMQ_ROOT must name the installed FlowMQ prefix")
@@ -42,3 +42,7 @@ endforeach()
 
 add_executable(flowmq_package_consumer main.c)
 target_link_libraries(flowmq_package_consumer PRIVATE FlowMQ::FlowMQ)
+
+add_executable(flowmq_package_consumer_cpp consumer_cpp.cpp)
+target_compile_features(flowmq_package_consumer_cpp PRIVATE cxx_std_17)
+target_link_libraries(flowmq_package_consumer_cpp PRIVATE FlowMQ::FlowMQ)
