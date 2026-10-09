@@ -1,6 +1,7 @@
 #include "flowmq_owner.h"
 
 #include "flowmq_socket_external_internal.h"
+#include "flowmq_owner_batch.h"
 
 #include <salts/clock.h>
 #include <salts/error_codes.h>
@@ -73,6 +74,20 @@ static int flowmq_owner_progress_local(flowmq_socket_t *socket) {
              : status;
 }
 
+static int flowmq_owner_route_completion_slot(
+    void *user, size_t slot, const native_io_completion *completion,
+    bool *consumed, size_t *events) {
+  flowmq_owner_t *owner = (flowmq_owner_t *)user;
+  flowmq_socket_t *socket = owner->sockets[slot];
+  if (socket == NULL || !flowmq_socket_internal_runtime_active(socket)) {
+    *consumed = false;
+    if (events != NULL) *events = 0u;
+    return SALTS_OK;
+  }
+  return flowmq_socket_internal_route_external_completion(
+      socket, completion, consumed, events);
+}
+
 static int flowmq_owner_progress_once(flowmq_owner_t *owner,
                                       uint32_t max_wait_ms) {
   uint32_t wait_ms = max_wait_ms;
@@ -110,34 +125,10 @@ static int flowmq_owner_progress_once(flowmq_owner_t *owner,
       wait_ms, &completion_count);
   if (status != SALTS_OK && status != SALTS_ETIMEDOUT) return status;
 
-  if (status == SALTS_OK) {
-    /* Once observe returns a batch, every completion must be considered.
-     * An error from one router may follow partial consumption: never submit
-     * that same completion to another router, but continue with later ones. */
-    for (size_t index = 0u; index < completion_count; ++index) {
-      bool consumed = false;
-      bool route_failed = false;
-      for (size_t i = 0u;
-           i < owner->socket_capacity && !consumed; ++i) {
-        flowmq_socket_t *socket = owner->sockets[i];
-        bool socket_consumed = false;
-        size_t events = 0u;
-        if (socket == NULL ||
-            !flowmq_socket_internal_runtime_active(socket))
-          continue;
-        status = flowmq_socket_internal_route_external_completion(
-            socket, &owner->completions[index], &socket_consumed, &events);
-        if (status != SALTS_OK) {
-          if (first_error == SALTS_OK) first_error = status;
-          route_failed = true;
-          break;
-        }
-        if (socket_consumed) consumed = true;
-      }
-      if (!consumed && !route_failed && first_error == SALTS_OK)
-        first_error = SALTS_EPROTO;
-    }
-  }
+  if (status == SALTS_OK)
+    first_error = flowmq_owner_batch_route(
+        owner->completions, completion_count, owner->socket_capacity,
+        flowmq_owner_route_completion_slot, owner);
 
   /*
    * Match the qualified #67 ordering:
