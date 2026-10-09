@@ -78,6 +78,7 @@ static int flowmq_owner_progress_once(flowmq_owner_t *owner,
   uint32_t wait_ms = max_wait_ms;
   size_t active_count = 0u;
   size_t completion_count = 0u;
+  int first_error = SALTS_OK;
   int status;
 
   if (owner == NULL || !owner->backend_initialized || owner->backend_closed)
@@ -110,8 +111,12 @@ static int flowmq_owner_progress_once(flowmq_owner_t *owner,
   if (status != SALTS_OK && status != SALTS_ETIMEDOUT) return status;
 
   if (status == SALTS_OK) {
+    /* Once observe returns a batch, every completion must be considered.
+     * An error from one router may follow partial consumption: never submit
+     * that same completion to another router, but continue with later ones. */
     for (size_t index = 0u; index < completion_count; ++index) {
       bool consumed = false;
+      bool route_failed = false;
       for (size_t i = 0u;
            i < owner->socket_capacity && !consumed; ++i) {
         flowmq_socket_t *socket = owner->sockets[i];
@@ -122,10 +127,15 @@ static int flowmq_owner_progress_once(flowmq_owner_t *owner,
           continue;
         status = flowmq_socket_internal_route_external_completion(
             socket, &owner->completions[index], &socket_consumed, &events);
-        if (status != SALTS_OK) return status;
+        if (status != SALTS_OK) {
+          if (first_error == SALTS_OK) first_error = status;
+          route_failed = true;
+          break;
+        }
         if (socket_consumed) consumed = true;
       }
-      if (!consumed) return SALTS_EPROTO;
+      if (!consumed && !route_failed && first_error == SALTS_OK)
+        first_error = SALTS_EPROTO;
     }
   }
 
@@ -141,9 +151,10 @@ static int flowmq_owner_progress_once(flowmq_owner_t *owner,
         !flowmq_socket_internal_runtime_active(socket))
       continue;
     status = flowmq_owner_progress_local(socket);
-    if (status != SALTS_OK) return status;
+    if (status != SALTS_OK && first_error == SALTS_OK)
+      first_error = status;
   }
-  return SALTS_OK;
+  return first_error;
 }
 
 flowmq_owner_t *flowmq_owner_new(
