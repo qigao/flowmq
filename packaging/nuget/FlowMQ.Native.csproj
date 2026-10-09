@@ -20,4 +20,10 @@
     <None Include="README.md" Pack="true" PackagePath="\" />
     <None Include="$(PackageRoot)/sdk/**/*" Pack="true" PackagePath="sdk/" />
   </ItemGroup>
+  <!-- CI selects the latest official rc.N/stable from GitHub Releases.
+       Normal PackageReference remains 2.3.0-*; this override excludes
+       incomplete historical rc.sha integration packages from qualification. -->
+  <ItemGroup Condition="'$(FlowMQSaltsReleaseVersion)' != ''">
+    <PackageReference Update="Salts.Native" Version="$(FlowMQSaltsReleaseVersion)" />
+  </ItemGroup>
 </Project>
