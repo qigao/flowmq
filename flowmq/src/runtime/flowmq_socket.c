@@ -1823,6 +1823,18 @@ static int flowmq_socket_tls_identity_verify(flowmq_socket_peer_t *peer,
   return SALTS_EPERM;
 }
 
+/* A successful transport connect is not a recovered FMQ/6 peer session.
+ * Only the full HELLO + SETTINGS exchange can reset reconnect backoff. */
+static void flowmq_socket_peer_reconnect_protocol_ready(flowmq_socket_peer_t *peer) {
+  flowmq_socket_endpoint_t *endpoint;
+  if (peer == NULL || !flowmq_peer_state_ready(&peer->state) ||
+      peer->endpoint_index >= FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY)
+    return;
+  endpoint = &peer->owner->endpoints[peer->endpoint_index];
+  if (endpoint->used && endpoint->active)
+    flowmq_reconnect_reset(&endpoint->reconnect);
+}
+
 static int flowmq_socket_process_receive(flowmq_socket_peer_t *peer) {
   flowmq_socket_t *socket = peer->owner;
   if (peer->commit_pending) return SALTS_ENOBUFS;
@@ -1891,6 +1903,8 @@ static int flowmq_socket_process_receive(flowmq_socket_peer_t *peer) {
       if (status == SALTS_OK)
         status = flowmq_peer_state_handshake_mark(
             &peer->state, FLOWMQ_PEER_HANDSHAKE_SETTINGS_RX);
+      if (status == SALTS_OK)
+        flowmq_socket_peer_reconnect_protocol_ready(peer);
       if (status == SALTS_OK && peer->heartbeat_active)
         flowmq_protocol_heartbeat_deadlines_on_receive(
             &peer->heartbeat, cmeta_hrtime());
@@ -2039,7 +2053,7 @@ static void flowmq_socket_on_state(void *user, cnet_connection connection,
       if (endpoint->used) {
         endpoint->active = 1u;
         endpoint->retry_pending = 0u;
-        flowmq_reconnect_reset(&endpoint->reconnect);
+        /* Preserve previous attempt backoff until FMQ/6 protocol READY. */
       }
     }
     if (flowmq_peer_state_transition(
@@ -2234,6 +2248,8 @@ static void flowmq_socket_on_send(void *user, cnet_connection connection,
     flowmq_socket_fail(peer->owner, SALTS_EPROTO);
     return;
   }
+  if (completed == FLOWMQ_PEER_WRITE_SETTINGS)
+    flowmq_socket_peer_reconnect_protocol_ready(peer);
   if (completed == FLOWMQ_PEER_WRITE_DATA) {
     flowmq_socket_peer_record_completion(peer);
     if (peer->outbound_bytes >= peer->inflight_payload_size)
