@@ -8,6 +8,7 @@
 #include "flowmq_peer_state.h"
 #include "flowmq_protocol_internal.h"
 #include "flowmq_reconnect.h"
+#include "flowmq_reconnect_ready.h"
 #include "flowmq_stream_decoder.h"
 #include "flowmq_subscription_set.h"
 #include "flowmq_socket_option.h"
@@ -166,6 +167,7 @@ struct flowmq_socket_peer_s {
   unsigned heartbeat_active : 1;
   unsigned pong_pending : 1;
   unsigned owned_receive_active : 1;
+  unsigned reconnect_ready_recorded;
 };
 
 struct flowmq_ctx_s {
@@ -1827,12 +1829,17 @@ static int flowmq_socket_tls_identity_verify(flowmq_socket_peer_t *peer,
  * Only the full HELLO + SETTINGS exchange can reset reconnect backoff. */
 static void flowmq_socket_peer_reconnect_protocol_ready(flowmq_socket_peer_t *peer) {
   flowmq_socket_endpoint_t *endpoint;
-  if (peer == NULL || !flowmq_peer_state_ready(&peer->state) ||
+  int status;
+  if (peer == NULL ||
       peer->endpoint_index >= FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY)
     return;
   endpoint = &peer->owner->endpoints[peer->endpoint_index];
-  if (endpoint->used && endpoint->active)
-    flowmq_reconnect_reset(&endpoint->reconnect);
+  if (!endpoint->used || !endpoint->active) return;
+  status = flowmq_reconnect_reset_on_protocol_ready(
+      &endpoint->reconnect, &peer->state, &peer->reconnect_ready_recorded);
+  if (status != SALTS_OK && status != SALTS_EBUSY &&
+      status != SALTS_EALREADY)
+    flowmq_socket_fail(peer->owner, status);
 }
 
 static int flowmq_socket_process_receive(flowmq_socket_peer_t *peer) {
@@ -2053,7 +2060,7 @@ static void flowmq_socket_on_state(void *user, cnet_connection connection,
       if (endpoint->used) {
         endpoint->active = 1u;
         endpoint->retry_pending = 0u;
-        /* Preserve previous attempt backoff until FMQ/6 protocol READY. */
+        /* CONNECTED has no authority to reset protocol recovery state. */
       }
     }
     if (flowmq_peer_state_transition(
