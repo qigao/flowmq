@@ -4662,6 +4662,18 @@ int flowmq_socket_internal_async_error_matches(
          socket->async_error == status;
 }
 
+int flowmq_socket_internal_endpoint_backoff(
+    const flowmq_socket_t *socket, size_t endpoint_index,
+    uint64_t *current_delay_ms) {
+  if (socket == NULL || current_delay_ms == NULL ||
+      endpoint_index >= FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY ||
+      !socket->endpoints[endpoint_index].used)
+    return SALTS_EINVAL;
+  *current_delay_ms =
+      socket->endpoints[endpoint_index].reconnect.current_delay_ms;
+  return SALTS_OK;
+}
+
 int flowmq_socket_internal_fanout_match_count(
     const flowmq_socket_t *socket, const void *topic, size_t topic_size,
     size_t *count) {
