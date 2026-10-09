@@ -13,6 +13,7 @@ salts_idl_target(
   IDL "${CMAKE_CURRENT_SOURCE_DIR}/databind/channel.schema"
   ARTIFACT_NAME "flowmq_contract_channel"
   TRANSPORTS FLOWMQ
+  BINARY_CODEC
   PROJECTION_CONFIG
     "${CMAKE_CURRENT_SOURCE_DIR}/databind/channel_config.json")
 
@@ -21,6 +22,7 @@ salts_idl_target(
   IDL "${CMAKE_CURRENT_SOURCE_DIR}/databind/service.schema"
   ARTIFACT_NAME "flowmq_contract_service"
   TRANSPORTS FLOWMQ
+  BINARY_CODEC
   PROJECTION_CONFIG
     "${CMAKE_CURRENT_SOURCE_DIR}/databind/service_config.json")
 
