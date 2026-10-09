@@ -2,6 +2,7 @@
 
 #include "flowmq_socket_external_internal.h"
 #include "flowmq_owner_batch.h"
+#include "flowmq_owner_internal.h"
 
 #include <salts/clock.h>
 #include <salts/error_codes.h>
@@ -88,8 +89,9 @@ static int flowmq_owner_route_completion_slot(
       socket, completion, consumed, events);
 }
 
-static int flowmq_owner_progress_once(flowmq_owner_t *owner,
-                                      uint32_t max_wait_ms) {
+int flowmq_owner_internal_progress_once(
+    flowmq_owner_t *owner, uint32_t max_wait_ms,
+    flowmq_owner_internal_batch_fn dispatch, void *user) {
   uint32_t wait_ms = max_wait_ms;
   size_t active_count = 0u;
   size_t completion_count = 0u;
@@ -125,10 +127,15 @@ static int flowmq_owner_progress_once(flowmq_owner_t *owner,
       wait_ms, &completion_count);
   if (status != SALTS_OK && status != SALTS_ETIMEDOUT) return status;
 
-  if (status == SALTS_OK)
-    first_error = flowmq_owner_batch_route(
-        owner->completions, completion_count, owner->socket_capacity,
-        flowmq_owner_route_completion_slot, owner);
+  if (status == SALTS_OK) {
+    first_error = dispatch != NULL
+        ? dispatch(user, owner->completions, completion_count,
+                   owner->socket_capacity, flowmq_owner_route_completion_slot,
+                   owner)
+        : flowmq_owner_batch_route(
+              owner->completions, completion_count, owner->socket_capacity,
+              flowmq_owner_route_completion_slot, owner);
+  }
 
   /*
    * Match the qualified #67 ordering:
@@ -146,6 +153,11 @@ static int flowmq_owner_progress_once(flowmq_owner_t *owner,
       first_error = status;
   }
   return first_error;
+}
+
+static int flowmq_owner_progress_once(flowmq_owner_t *owner,
+                                      uint32_t max_wait_ms) {
+  return flowmq_owner_internal_progress_once(owner, max_wait_ms, NULL, NULL);
 }
 
 flowmq_owner_t *flowmq_owner_new(

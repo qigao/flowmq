@@ -85,6 +85,22 @@ XSUB 的期望订阅重新同步属于控制面恢复，与 DATA replay 分开�
 这些边界由 `test_flowmq_peer_state` 的握手排列测试及 `test_flowmq_socket` 的真实
 TCP 错误 HELLO、TLS 身份拒绝、multipart 断连和 XSUB 重连测试覆盖（#118 / #120）。
 
+### 已观察完成批次的错误边界
+
+Owner 每轮只有一次 `native_io_backend_observe()`。一旦取出完成批次，即使某项
+路由失败，也必须继续处理剩余事件，再推进各 live socket 的本地阶段，最后返回
+第一个错误。路由函数可能先消费事件再返回错误，因此不能将该事件重试或交给
+另一个 socket；完全无人认领的事件仍返回 `SALTS_EPROTO`，不能静默吞掉。
+
+`test_flowmq_owner_fault` 使用三个实际 TCP ROUTER/DEALER 连接共享一个 Owner，
+在同一次真实 observe 返回的首项或中间项被 CNet 消费后注入错误报告。
+测试检查批次后续事件、retained payload 的单次释放、排队消息传递、发送计数、
+流控额度恢复，以及关闭出错 socket 后相邻连接继续推进。
+私有同步 dispatcher 仅用于该验收，不安装到 SDK、不保存在 Owner 中；普通
+poll/close 仍直接选择默认批次路由。测试没有制造完成事件、替换 backend 或增加
+Owner 的 observe 次数。这覆盖 #119 的真实批次故障边界，不代表 #125 的 SG
+host lease、独立 SG completion、陈旧 generation 或跨平台验收已完成。
+
 ## 发送内存与所有权
 
 `flowmq_send` 仍保持 borrowed-input/copy 契约：FMQ/6 协议头写入 socket 自有的
