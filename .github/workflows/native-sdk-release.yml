@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       salts_candidate_sha:
-        description: Full Salts SHA with a successful producer CI (blank uses branch pin)
+        description: Optional Salts producer SHA for manual candidate gate (blank uses NuGet RC/stable)
         type: string
         required: false
         default: ''
@@ -74,10 +74,6 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $run = ''
           $sha = $env:CANDIDATE_SHA
-          if (-not $sha -and $env:GITHUB_REF_TYPE -ne 'tag') {
-            $pin = Get-Content cmake/ci/salts-candidate.json -Raw | ConvertFrom-Json
-            $sha = $pin.commit
-          }
           if ($sha) {
             if ($sha -notmatch '^[0-9a-f]{40}$') { throw 'Specify a full lowercase Salts commit SHA' }
             if ($env:GITHUB_REF_TYPE -eq 'tag') { throw 'Release tags cannot consume candidate SDKs' }
@@ -843,8 +839,8 @@ jobs:
             <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
             <ItemGroup>
               <PackageReference Include="FlowMQ.Native" Version="[${{ needs.metadata.outputs.version }}]" />
-              <PackageReference Include="Salts.Native" Version="*" />
-              <PackageReference Include="SaltsUtils.Native" Version="*" />
+              <PackageReference Include="Salts.Native" Version="2.3.0-*" />
+              <PackageReference Include="SaltsUtils.Native" Version="4.3.0-*" />
             </ItemGroup>
           </Project>
           EOF
@@ -880,8 +876,8 @@ jobs:
             <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
             <ItemGroup>
               <PackageReference Include="FlowMQ.Native" Version="[${{ needs.metadata.outputs.version }}]" />
-              <PackageReference Include="Salts.Native" Version="*" />
-              <PackageReference Include="SaltsUtils.Native" Version="*" />
+              <PackageReference Include="Salts.Native" Version="2.3.0-*" />
+              <PackageReference Include="SaltsUtils.Native" Version="4.3.0-*" />
             </ItemGroup>
           </Project>
           "@ | Set-Content -LiteralPath $project
