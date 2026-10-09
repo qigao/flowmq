@@ -222,6 +222,12 @@ distinct-core owner candidate。饱和的 64 KiB pipelined DEALER→REP workload
 0.615x control；这证明 same-endpoint composition 可以获得真实多核收益，但不构成所有 payload
 或 workload 都线性扩展的承诺。
 
+2026-10-10 的 [Windows 固定连接数多 lane 测量](FLOWMQ_LANE_SCALING.md) 使用八条独立
+TCP PAIR 连接、batch=128，连接两端固定在同一 ordinary owner 线程。八轮配对中，
+8 lane 对 1 lane 的吞吐加速中位数为 64 B **5.032×**、1 KiB **6.576×**，进程 CPU/wall
+约 7.8；对应 CPU/条增加约 54.9% 和 17.2%。该结果验证独立 owner 多核分片，不是
+`flowmq_owner_t` listener shared wait、统一端口 accept 分配或跨机网络性能的测量。
+
 每个 live peer 独占 heartbeat deadline、pending-PONG 和双向累计 credit 状态。
 peer 的可变协议状态拆成三个独立维度，而不是一个乘积型大 FSM：
 

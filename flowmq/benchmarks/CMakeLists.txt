@@ -21,6 +21,15 @@ if(WIN32)
   target_link_libraries(bench_flowmq_socket_owners PRIVATE psapi)
 endif()
 if(BUILD_TESTS)
+  add_test(NAME bench_flowmq_lane_scaling
+           COMMAND bench_flowmq_socket_owners --filter "lane scaling:")
+  set_tests_properties(bench_flowmq_lane_scaling
+                       PROPERTIES LABELS "flowmq;benchmark" RUN_SERIAL TRUE TIMEOUT 600)
+  if(WIN32)
+    set_tests_properties(bench_flowmq_lane_scaling
+                         PROPERTIES ENVIRONMENT_MODIFICATION
+                                    "${FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS}")
+  endif()
   add_test(NAME test_flowmq_socket_owners
            COMMAND bench_flowmq_socket_owners --filter "correctness:")
   set_tests_properties(test_flowmq_socket_owners
