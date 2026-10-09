@@ -46,6 +46,43 @@ NativeIO/CNet observe 路径处理真实终态。消息、路由、重连与 TLS
 资格验证；该模式显式跳过 Android、NuGet pack/qualify/publish。
 没有配置候选 SHA 时不再隐式使用历史候选 pin。
 
+## CNet 2.3 explicit remote destination admission (FlowMQ #122)
+
+`flowmq_destination_choose()` uses **Salts CNet's actual destination policy**
+(`cnet_destination_choose`) on a caller-owned, immutable endpoint-set snapshot.
+It performs **one remote endpoint decision**, separate from SG Owner placement,
+physical peer pooling and protocol-level routing. `flowmq_connect_selected()`
+then calls ordinary `flowmq_connect()` **once** for the chosen URI. Later
+reconnect attempts stay pinned to that URI; no hidden discovery, DATA replay,
+background scheduler, per-message rehash or protocol/TLS downgrade is added.
+
+```c
+flowmq_destination_endpoint_t peers[] = {
+    { .endpoint_id = 10, .authority_id = 7, .uri = "tls://10.0.0.1:443",
+      .weight = 1, .eligible = 1 },
+    { .endpoint_id = 20, .authority_id = 7, .uri = "tls://10.0.0.2:443",
+      .weight = 1, .eligible = 1 },
+};
+flowmq_destination_selection_t policy = FLOWMQ_DESTINATION_SELECTION_INIT;
+flowmq_destination_result_t selected = FLOWMQ_DESTINATION_RESULT_INIT;
+policy.kind = FLOWMQ_DESTINATION_STRICT_KEY;
+policy.snapshot_generation = 42;
+policy.key_known = 1;
+policy.key_hash = 1234;
+/* Configure verified TLS credentials/SNI on the socket before admission.
+ * The host must prefilter authorized/healthy endpoints and present a uniform
+ * authority_id and tcp/tls scheme; CNet verifies the actual TLS peer. */
+int status = flowmq_connect_selected(socket, peers, 2, &policy, &selected);
+```
+
+Selection returns an ID and snapshot generation; successful connect means only
+*dial admission*, not verified FMQ/6 readiness or DATA delivery. Strict-key
+HRW winner FULL fails `SALTS_ENOBUFS` instead of silently choosing another
+peer. Invalid IDs, mixed authorities, mixed TLS/plaintext schemes and expired
+snapshots fail before any socket or network mutation. Endpoint sets are bounded
+to four entries in this first slice. The application owns any choice of
+destination set, sequence ticket, authority eligibility and TLS configuration.
+
 ## Caller-driven transport
 
 旧的 callback endpoint API 已删除。普通 socket 保留 ZeroMQ 风格的
