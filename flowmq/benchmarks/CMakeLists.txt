@@ -158,7 +158,70 @@ if(FLOWMQ_BUILD_ZMQ_BENCHMARK)
   endif()
   target_link_libraries(bench_flowmq_socket PRIVATE libzmq)
   target_compile_definitions(bench_flowmq_socket PRIVATE FLOWMQ_BENCH_WITH_ZMQ=1)
+
+  # A separate static copy confines admission counters to diagnostic runs.
+  # Inherit the production source list, includes and dependencies so that the
+  # measured executable still links the ordinary, uninstrumented transport.
+  foreach(probe_kind IN ITEMS probe profile)
+    set(probe_transport flowmq_transport_batch_${probe_kind})
+    add_library(${probe_transport} STATIC ${FLOWMQ_TRANSPORT_SOURCES})
+    cmake_config_target(${probe_transport} FOLDER "flowmq/benchmarks/support")
+    target_include_directories(${probe_transport}
+      PUBLIC $<TARGET_PROPERTY:flowmq_transport,INTERFACE_INCLUDE_DIRECTORIES>
+      PRIVATE $<TARGET_PROPERTY:flowmq_transport,INCLUDE_DIRECTORIES>)
+    target_link_libraries(${probe_transport}
+      PUBLIC $<TARGET_PROPERTY:flowmq_transport,LINK_LIBRARIES>)
+    target_compile_definitions(${probe_transport} PRIVATE FLOWMQ_BATCH_PROBE=1)
+  endforeach()
+  target_compile_definitions(flowmq_transport_batch_profile PRIVATE FLOWMQ_BATCH_PHASE_TIMING=1)
+
+  foreach(batch_target IN ITEMS bench_flowmq_batch bench_flowmq_batch_probe bench_flowmq_batch_profile)
+    if(batch_target STREQUAL "bench_flowmq_batch_probe")
+      set(batch_transport flowmq_transport_batch_probe)
+    elseif(batch_target STREQUAL "bench_flowmq_batch_profile")
+      set(batch_transport flowmq_transport_batch_profile)
+    else()
+      set(batch_transport FlowMQ::Transport)
+    endif()
+    cmake_add_benchmark(${batch_target}
+      SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_batch.c
+      LIBS ${batch_transport} libzmq Salts::TinyTest
+      INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/runtime
+      FOLDER "flowmq/benchmarks/runtime")
+    if(WIN32)
+      target_link_libraries(${batch_target} PRIVATE psapi)
+    endif()
+  endforeach()
+  target_compile_definitions(bench_flowmq_batch_probe PRIVATE FLOWMQ_BATCH_PROBE=1)
+  target_compile_definitions(bench_flowmq_batch_profile
+    PRIVATE FLOWMQ_BATCH_PROBE=1 FLOWMQ_BATCH_PHASE_TIMING=1)
+
   if(BUILD_TESTS)
+    foreach(batch_target IN ITEMS bench_flowmq_batch bench_flowmq_batch_probe bench_flowmq_batch_profile)
+      add_test(NAME test_${batch_target} COMMAND ${batch_target} --filter "correctness:")
+      set_tests_properties(test_${batch_target}
+        PROPERTIES LABELS "flowmq;flowmq-transport" RUN_SERIAL TRUE TIMEOUT 120)
+      if(WIN32)
+        set_tests_properties(test_${batch_target} PROPERTIES
+          ENVIRONMENT_MODIFICATION "${FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS}")
+      endif()
+    endforeach()
+    add_test(NAME bench_flowmq_batch_sweep
+             COMMAND bench_flowmq_batch --filter "performance:")
+    add_test(NAME bench_flowmq_batch_diagnostic
+             COMMAND bench_flowmq_batch_probe --filter "diagnostic:")
+    add_test(NAME bench_flowmq_batch_ablation
+             COMMAND bench_flowmq_batch_probe --filter "ablation:")
+    add_test(NAME bench_flowmq_batch_phases
+             COMMAND bench_flowmq_batch_profile --filter "diagnostic:")
+    set_tests_properties(bench_flowmq_batch_sweep bench_flowmq_batch_diagnostic
+                         bench_flowmq_batch_ablation bench_flowmq_batch_phases
+      PROPERTIES LABELS "flowmq;benchmark" RUN_SERIAL TRUE TIMEOUT 600)
+    if(WIN32)
+      set_tests_properties(bench_flowmq_batch_sweep bench_flowmq_batch_diagnostic
+                           bench_flowmq_batch_ablation bench_flowmq_batch_phases
+        PROPERTIES ENVIRONMENT_MODIFICATION "${FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS}")
+    endif()
     # The paired cases share fixed sample counts, independent of smoke/CI mode.
     add_test(NAME bench_flowmq_zmq_comparison
              COMMAND bench_flowmq_socket --filter "paired TCP comparison")
