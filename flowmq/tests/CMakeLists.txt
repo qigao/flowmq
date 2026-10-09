@@ -132,6 +132,13 @@ cmake_add_test(
   FOLDER "flowmq/tests/runtime")
 
 cmake_add_test(
+  test_flowmq_owner_batch
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/test_flowmq_owner_batch.c
+  LIBS FlowMQ::Transport Salts::TinyTest
+  INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/runtime
+  FOLDER "flowmq/tests/runtime")
+
+cmake_add_test(
   test_flowmq_socket_option
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/test_flowmq_socket_option.c
   LIBS FlowMQ::Transport Salts::TinyTest
@@ -179,6 +186,7 @@ set(FLOWMQ_TRANSPORT_TESTS
     test_flowmq_owned_stream
     test_flowmq_segmented_receive_contract
     test_flowmq_owner
+    test_flowmq_owner_batch
     test_flowmq_socket_option
     test_flowmq_peer_state)
 
