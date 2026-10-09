@@ -136,6 +136,7 @@ cmake_add_test(
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/test_flowmq_peer_state.c
   LIBS FlowMQ::Transport Salts::TinyTest
   INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/runtime
+           ${PROJECT_SOURCE_DIR}/flowmq/src/core/session
   FOLDER "flowmq/tests/runtime")
 
 cmake_add_test(
