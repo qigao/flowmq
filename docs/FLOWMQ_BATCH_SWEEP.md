@@ -342,3 +342,105 @@ owner fault、multipart、HWM、在途 buffer 生命周期及公开 C11/C++17 co
 本次没有新增分配失败注入、CNet busy 注入或 sanitizer 配置；对应 flush 失败回滚
 依据代码审查，不能标为故障注入测试已通过。TLS 与多 peer 的功能回归不等同于 TLS
 吞吐或多 peer 尾延迟/公平性测量；Linux/macOS、跨进程及长期稳态负载仍未验证。
+
+
+## 合批后的 progress 归因（2026-10-10）
+
+本轮复用同一 Windows/MSVC/发布 SDK 环境和生产 copy policy，测量合批后下一处值得优化的
+成本。只扩展私有 `FLOWMQ_BATCH_PROBE`；普通生产库未增加计数、计时或策略开关。
+[阶段数据](flowmq-progress-phases-windows-20261010.csv) 为 9 组，
+[干预数据](flowmq-progress-ablation-windows-20261010.csv) 为 54 组；均逐条校验内容和 FIFO。
+
+### 方法与观测边界
+
+三个场景为 64 B / batch=1（65,536 条），64 B / batch=128 与 1 KiB / batch=128
+（各 262,144 条）。8 个预热 burst 后才切换私有 progress 策略、取计数起点并开始计时。
+阶段测量每场景三轮；干预测量每场景六轮，三个策略的先后位置各出现两次：
+
+- `baseline`：生产 progress 顺序。
+- `no_pre_manager`：只省略 listener readiness 前的 manager advance，保留 local advance。
+- `no_listener_check`：保留两个 manager advance，只省略 listener readiness 检查；
+  **明确停止接纳新连接，仅用于固定拓扑诊断，不能作为部署策略。**
+
+所有测量组的 `manager_work` 和 `listener_ready` 均为零；计时窗口没有关闭、回收或新连接
+接纳。`manager_work` 是动作数，不是访问 record 数。正常 baseline 的每次 local progress
+访问四个 peer slots，其中一个 used；不能由这个计数推导空 slot 的 CPU 时间。
+`no_listener_check` 的 ready=0 本身也不能证明没有等待的新连接；固定拓扑由 harness 保证。
+
+阶段数据开启额外 wall clock，含探针开销；消除实验关闭阶段计时，但保留相同计数器和每批
+延迟采集。其阶段 ns 列为零代表未采集，不代表实际零成本。CPU 使用整个进程累计时间，
+仍受 Windows 时间粒度限制；P99 是每组完整发送/接收/内容校验/credit progress 的每批
+端到端分位数。setup、预热、排序和关闭不计入。两类测量的绝对时间不可跨表相减。
+
+### 阶段结果（事实，MED）
+
+下表是三轮各阶段占该组总 wall time 比例的中位数。manager 两处先相加再计算；listener
+wait 嵌套在 listener 阶段，manager/reconnect 也嵌套在外层，不能把嵌套项重复相加。
+
+| payload / batch | listener 全阶段 | 其中 readiness wait | client poll | local progress | 两处 manager 合计 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 64 B / 1 | 26.19% | 23.59% | 57.99% | 7.54% | 1.64% |
+| 64 B / 128 | 7.35% | 6.67% | 43.89% | 8.00% | 0.42% |
+| 1 KiB / 128 | 9.98% | 9.04% | 58.55% | 5.40% | 0.57% |
+
+**计算：**manager 两处累计 ns / manager_calls 的中位数约 27 ns/调用；listener_wait_ns /
+listener_checks 约 1.18、1.29、1.26 µs/调用。以上都含 clock 测量开销，不能解释为纯 CPU
+指令成本。local progress 扣去 manager 和 reconnect 仍包含控制帧、flush、状态处理等工作，
+没有足够分项证据把剩余时间归因为空闲 peer 扫描。
+
+**源码事实：**本轮 Salts SDK 对应 `58ff08fc95b4aa1dc493c0b7080426b2c11d4959` 的
+`cnet/src/cnet_manager.c:cnet_manager_advance` 只有在 ready 或 close_pending 非零时才进入
+record 循环；`cnet/manager.h` 也明确无可运行管理工作时不扫描。原先“每次有两次 manager
+调用，所以重复扫描是主要瓶颈”的假设不成立。listener wait 在本平台走独立 WSAPoll，
+即使没有新的连接，也会在已建立会话的数据 progress 中重复执行。
+
+### 固定拓扑干预结果
+
+下表各项为六组独立测量的中位数。最后一列先将每轮策略吞吐除以同轮 baseline，再取
+中位数；不等于前两列中位数之比。每个变体都使用生产合批策略。
+
+| payload / batch | 策略 | 条/s | CPU ns/条 | 每批 P99 µs | 配对吞吐比中位数 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 64 B / 1 | baseline | 71,053 | 14,067 | 24.25 | 1.000 |
+| 64 B / 1 | no_pre_manager | 71,605 | 13,709 | 22.80 | 1.058 |
+| 64 B / 1 | no_listener_check | 98,457 | 10,133 | 18.15 | 1.381 |
+| 64 B / 128 | baseline | 1,856,330 | 536 | 119.75 | 1.000 |
+| 64 B / 128 | no_pre_manager | 1,924,540 | 507 | 107.80 | 1.008 |
+| 64 B / 128 | no_listener_check | 2,188,809 | 477 | 88.60 | 1.087 |
+| 1 KiB / 128 | baseline | 773,240 | 1,311 | 250.15 | 1.000 |
+| 1 KiB / 128 | no_pre_manager | 799,866 | 1,252 | 279.30 | 0.977 |
+| 1 KiB / 128 | no_listener_check | 895,280 | 1,162 | 240.00 | 1.113 |
+
+**推论及限制（MED）：**省略 pre-manager 的配对吞吐范围分别为 0.968–1.196、
+0.930–1.215、0.850–1.176；各场景均包含退步，结合阶段占比不足以支持生产改动。
+保留 manager 的正常回收顺序。
+
+省略 listener check 的配对范围分别为 1.110–1.623、0.942–1.741、1.023–1.292。
+64 B / batch=1 和 1 KiB / batch=128 六轮均提高；64 B / batch=128 并非每轮提高。
+这支持研究消除独立 readiness 检查，但主机波动明显，不能拿最快组或中位数比例当作
+shared-wait 实现的收益承诺。该干预还删除了新连接服务，**不具备生产语义等价性**。
+
+本轮没有直接实现 Leader/Followers、降低 accept 检查频率或删除 manager 推进。
+后续方案是已有 CNet external accept 与 FlowMQ 固定 owner 的共享等待，见
+[Acceptor–Connector 决策](ARCHITECTURE.md#acceptorconnector-接入决策2026-10-10)。
+尚无 CPU stack profile、TLS 性能、多 peer 公平性、新连接接纳延迟或 Linux/macOS 数据；
+client poll 仍是最大计时区间，但包含回调，不能把整段解释为纯内核等待。
+
+复测入口（MSVC 开发环境）：
+
+```powershell
+cmake --build --preset win-release-user
+ctest --preset win-release-user -R "^test_bench_flowmq_batch" --output-on-failure
+ctest --preset bench-win-release-user -R "^bench_flowmq_progress_phases$" -V --output-log build/progress-phases.log
+ctest --preset bench-win-release-user -R "^bench_flowmq_progress_ablation$" -V --output-log build/progress-ablation.log
+ctest --preset win-release-user -L flowmq-transport --output-on-failure
+```
+
+本轮 Release 构建成功；三个 burst correctness CTest 通过（0.96 秒），阶段 benchmark
+通过（9 组，4.57 秒），干预 benchmark 通过（54 组，24.23 秒）。`flowmq-transport`
+回归 **23/23 通过**（200.91 秒），包含 TCP/TLS、pool、owner fault、公开 C11/C++17
+consumer 及多核示例。CSV 另核对了执行顺序平衡、三策略的 poll/逻辑写/drive 次数一致、
+每次 local progress 四个 slots/一个 used peer，以及 manager/listener 零实际工作。
+完整日志保存在
+`build/progress-build.log`、`build/progress-correctness.log`、`build/progress-phases.log`、
+`build/progress-ablation.log` 和 `build/progress-regression.log`。

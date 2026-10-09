@@ -38,6 +38,103 @@ flowmq/tests/、flowmq/benchmarks/       按相同责任分组的验证入口
 现已取消。Core 只保留 socket/runtime 实际使用的 pattern 与 session 状态；Saga、通用 priority
 queue、scatter/gather、stream partition 和 circuit breaker 不再编入主库。
 
+## Acceptor–Connector 接入决策（2026-10-10）
+
+**状态：设计候选，尚未扩展公开 owner 契约。** 本次只添加私有诊断及测量结果。
+现有 `flowmq_owner_socket()` 明确排除 listener bind；`flowmq_bind()` 对 external backend
+仍返回 `SALTS_ENOTSUP`。启用服务端能力需要单独审查公开行为及下面的生命周期验证。
+
+**依据（事实，MED）：**[合批后的 progress 实测](FLOWMQ_BATCH_SWEEP.md#合批后的-progress-归因2026-10-10)
+显示，Windows 单 peer 稳态下 manager 空调用约 27 ns；listener 空 readiness 检查约
+1.2–1.3 µs。64 B / batch=128 中，两处 manager 合计约 0.42%，listener wait 约 6.67%。
+因此优先研究复用共享等待以消除独立 listener readiness 检查；不据调用次数删除 manager
+回收，也不把四个固定 peer slot 的扫描直接认作瓶颈。
+
+候选方案及取舍：
+
+| 方案 | 适配性与决定 |
+| --- | --- |
+| Acceptor–Connector，listener 与连接共享固定 owner 的 backend | 优先候选；分离连接接纳与协议会话，复用 CNet 现有能力，目标是合并等待 |
+| 每隔 N 次 progress 检查 listener | 会改变新连接接纳延迟与公平性；固定拓扑测量不足以选择 N，不采用 |
+| Leader/Followers，多线程轮流等待和处理 | 当前没有线程竞争或 worker 不均衡证据；任意线程处理当前 CNet 状态违反 owner 亲和，不直接套用 |
+| 保持 ordinary socket + SO_REUSEPORT 多 owner | 保留现有部署方式；平台不支持时仍返回 ENOTSUP，不以隐藏 accept 线程补足 |
+
+[ACE Acceptor–Connector](https://www.dre.vanderbilt.edu/~schmidt/ACE/book2/c7.html)
+提供连接建立与会话服务分离的边界；
+[Leader/Followers](https://www.dre.vanderbilt.edu/~schmidt/PDF/lf.pdf) 解决线程池中的等待与处理分工。
+这里借用职责划分，不引入 ACE 库、虚表框架或第二套调度器。若未来业务处理成为瓶颈，
+另测固定 owner 之间的负载分布，再评估有明确绑定规则的线程设计。
+
+### 已有能力与责任
+
+核对的 SDK 为 Salts `2.3.0-rc.1`，源码 `58ff08fc95b4aa1dc493c0b7080426b2c11d4959`；
+事实源是其 `cnet/cnet.h`、`cnet/manager.h` 和 `cnet/src/cnet_listener.c`：
+
+- CNet listener 可 attach 到同种 backend，借用 backend，不负责 observe/destroy。
+  每个 listener 至多一个 external accept；重复 submit 返回同一个 generation-safe request。
+  `SALTS_EALREADY` 表示已有终态结果待消费，不能再提交 accept。
+- owner observe 一次后，把完成交给 `cnet_listener_route_external_completion()`。
+  非本 listener 的事件返回 consumed=false；成功的 accepted child 先由 listener 保管。
+  `accept_detached()` 随后 move 出描述符，再由 `cnet_manager_adopt()` 在最终 owner 上建立连接。
+- FlowMQ socket 继续唯一拥有 peer、decoder、FSM、HWM、credit 和 reconnect 状态；
+  manager 负责连接记录及回收。accept 的 request identity 只用于路由，不复制会话事实源。
+- 已有 `cnet_handoff` 是有界连接接纳交接能力，不自带 worker 或唤醒。首版无需跨 owner
+  交接，也不引入逐消息 MPSC 队列。TLS 的 detached adoption 存在，但 FlowMQ external
+  runtime 当前仅支持 TCP；首版范围限定 TCP，不推导为 TLS shared wait 已可用。
+
+### 候选 progress 与容量协议
+
+```text
+固定 owner，所有调用串行：
+  推进 CNet client；有 admission 容量的 listener 确保一个 accept 在途
+  汇总 caller / CNet / FlowMQ deadlines
+  一次 shared NativeIO observe
+  路由 accept 和 client completions；每个完成最多消费一次
+  消费已完成的 accept -> manager adopt -> 一次 FlowMQ local progress
+  下一 owner cycle 才推进刚接纳的连接；不追加第二次 CNet advance
+```
+
+提交 accept 前，先预留一个 peer、可选 pool lease 和 manager admission record；
+每个 listener 最多持有一组预留，计入现有四 peer 的硬上限。无容量则不提交新 accept，
+连接留在内核 backlog；进度循环仍推进已有连接。预留成功而 submit 失败时，走 manager
+cancel、context hold release、pool/peer release 的明确回滚，不能泄漏 credit。
+预留阶段尚无业务 DATA、decoder 输出或协议 READY；成功 adopt 才开始正常会话生命周期。
+
+listener request 保存完整 slot/generation。在现有 socket 路由中先匹配该 identity，再交给
+listener router；未匹配才尝试该 socket 的 client router，不按裸 slot 或 native handle 判定。
+保留现有有界 socket registry 枚举，首版不另外维护全局索引。与现有 owner fault 规则一致：
+路由发生错误后不把同一个完成交给另一个消费者；继续处理批次剩余事件及 local progress，
+最终返回首个错误。每个 listener 每 cycle 最多接纳一个 child，避免连接突发占尽会话处理。
+
+设 owner 的 socket 上限为 S、listener 上限 L≤S、peer 上限 P=4、每 socket 原 request
+预算为 R。现有 backend 预算为 endpoints=2PS、requests=RS、completion batch=RS。
+候选保守预算为 endpoints=2PS+2L（listener 与 accepted-child 余量）、requests=RS+L、
+completion batch=RS+L；乘加均 checked，超限返回 ERANGE。listener 的 child 最多一个，
+已经包含在其预留 peer 内，不能当作可无限增长的额外连接池。具体 backend 对 child escrow
+的资源计数仍须通过容量耗尽测试核实，预算公式不是容量测试通过的证明。
+
+### 关闭、迁移与验证门槛
+
+**HIGH：**关闭先禁止新 accept/reconnect。若 accept 仍在途，SDK 的 listener close 会提交
+cancel 并返回 EBUSY，owner 必须继续 shared observe/route，直到终态完成已消费，再重试
+listener close/destroy。取消前已成功的 child 由 listener 清理，或已 move 后由 manager/peer
+清理，不能双重关闭；预留 record 和 context hold 也必须终结。不能因为 client 已停止就把
+仍有 listener 完成义务的 socket 从路由 registry 移除。所有 listener/client/manager 义务
+消失后才销毁 socket，最后一个 socket 关闭后才销毁共享 backend。
+
+影响范围是 runtime socket/owner、公开 owner 文档、transport 测试与 benchmark；协议 codec、
+消息格式和应用 send/recv 契约保持原样。无需新依赖。先在内部验证接入，再一次性开放完整
+TCP owner bind 能力，不安装占位 API。迁移由应用显式选择 owner domain；ordinary domain
+继续可用。回滚需关闭该 owner 的 sockets 后重建 ordinary sockets，不能 live detach；不涉及
+磁盘数据或 wire 格式迁移，也不以失败后的自动切换掩盖容量或生命周期错误。
+
+开放前必须验证：无连接时 timeout 与 CPU、连接突发与每 listener 公平性、满 peer/pool 后
+恢复、accept/attach/adopt 失败回滚、generation 复用、混合 accept/client 完成批次出错后继续
+drain、pending accept 取消及 late completion、关闭一个 socket 时邻接 socket 继续传输。
+保留现有 payload/FIFO/HWM/retained 生命周期回归；比较相同 TCP workload 下 ordinary 与
+owner listener 的吞吐、进程 CPU、P99、接纳延迟与峰值资源，按目标平台分别测量。
+本次固定拓扑 ablation 不覆盖这些门槛，也不代表上述接入已实现或已获得性能收益。
+
 ## 执行模型
 
 CNet 是调用者驱动的单-owner协程池，不是线程池。FlowMQ 不创建 progress thread，

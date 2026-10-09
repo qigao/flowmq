@@ -37,6 +37,16 @@ typedef struct flowmq_socket_batch_probe_s {
   uint64_t coalesced_ranges;
   uint64_t coalesced_bytes_peak;
   uint64_t submitted_ranges;
+  uint64_t listener_manager_ns;
+  uint64_t local_manager_ns;
+  uint64_t listener_wait_ns;
+  uint64_t reconnect_ns;
+  uint64_t manager_calls;
+  uint64_t manager_work;
+  uint64_t listener_checks;
+  uint64_t listener_ready;
+  uint64_t local_slots;
+  uint64_t local_used_peers;
 } flowmq_socket_batch_probe_t;
 
 #if defined(FLOWMQ_BATCH_PROBE)
@@ -47,6 +57,11 @@ int flowmq_socket_batch_probe_read(const flowmq_socket_t *socket,
  * historical interventions without the production small-frame/byte limits.
  * Retained application payloads are unchanged in every mode. */
 int flowmq_socket_batch_probe_coalesce(flowmq_socket_t *socket, int mode);
+/* Owner-only, between benchmark operations after warmup. 0 = production;
+ * 1 = omit pre-poll listener manager advance; 2 = omit listener readiness.
+ * Mode 2 deliberately cannot admit new connections: fixed-topology diagnostic
+ * upper bound only, never a deployable accept policy. */
+int flowmq_socket_batch_probe_progress(flowmq_socket_t *socket, int mode);
 #endif
 
 #endif

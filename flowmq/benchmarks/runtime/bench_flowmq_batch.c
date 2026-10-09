@@ -258,7 +258,7 @@ static int batch_compare_ns(const void *left, const void *right) {
 
 static int batch_run_sized(int use_zmq, size_t batch, size_t messages,
                            size_t repetition, size_t order, int measured,
-                           int coalesce, size_t bytes) {
+                           int coalesce, size_t bytes, int progress) {
   batch_pair_t pair = {0};
   flowmq_bench_metrics_t before = {0}, after = {0};
   uint64_t started = 0u, finished = 0u;
@@ -268,6 +268,8 @@ static int batch_run_sized(int use_zmq, size_t batch, size_t messages,
 #if defined(FLOWMQ_BATCH_PROBE)
   flowmq_socket_batch_probe_t probe_before = {0}, probe_after = {0};
   flowmq_socket_batch_probe_t rx_before = {0}, rx_after = {0};
+#else
+  (void)progress;
 #endif
   if (status != SALTS_OK) goto cleanup;
   if (batch == 0u || batch > BATCH_MAX_MESSAGES || messages == 0u ||
@@ -275,7 +277,7 @@ static int batch_run_sized(int use_zmq, size_t batch, size_t messages,
     status = SALTS_EINVAL;
     goto cleanup;
   }
-  if (measured == 3) {
+  if (measured == 3 || measured == 4) {
     burst_ns = calloc(messages / batch, sizeof(*burst_ns));
     if (burst_ns == NULL) { status = SALTS_ENOMEM; goto cleanup; }
   }
@@ -287,6 +289,10 @@ static int batch_run_sized(int use_zmq, size_t batch, size_t messages,
   pair.send_retries = 0u;
 #if defined(FLOWMQ_BATCH_PROBE)
   if (!use_zmq) {
+    status = flowmq_socket_batch_probe_progress(pair.sender, progress);
+    if (status == SALTS_OK)
+      status = flowmq_socket_batch_probe_progress(pair.receiver, progress);
+    if (status != SALTS_OK) goto cleanup;
     pair.send_ns = pair.recv_ns = pair.poll_ns = 0u;
     status = flowmq_socket_batch_probe_read(pair.sender, &probe_before);
     if (status == SALTS_OK)
@@ -363,6 +369,35 @@ measurement_finished:
 #define BATCH_PHASE_SUM(member) \
       ((unsigned long long)(probe_after.member - probe_before.member + \
                             rx_after.member - rx_before.member))
+    if (measured == 4) {
+      const size_t bursts = messages / batch;
+      /* The interventions apply only after both ends finish warmup. No accept
+       * or retirement work is allowed inside this fixed-topology workload. */
+      if (BATCH_PHASE_SUM(listener_ready) != 0u || BATCH_PHASE_SUM(manager_work) != 0u) {
+        status = SALTS_EPROTO;
+        goto cleanup;
+      }
+      qsort(burst_ns, bursts, sizeof(*burst_ns), batch_compare_ns);
+      printf("PROGRESS_RESULT,%s,%zu,%zu,%zu,%zu,%zu,%llu,%.3f,%llu,%llu,%llu,%llu,"
+             "%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",
+             progress == 1 ? "no_pre_manager" : progress == 2 ? "no_listener_check" : "baseline",
+             bytes, batch, repetition, order, messages,
+             (unsigned long long)(finished - started),
+             (double)(after.cpu_ns - before.cpu_ns) / messages,
+             (unsigned long long)burst_ns[(bursts * 95u + 99u) / 100u - 1u],
+             (unsigned long long)burst_ns[(bursts * 99u + 99u) / 100u - 1u],
+             (unsigned long long)pair.poll_calls,
+             (unsigned long long)(probe_after.direct_writes - probe_before.direct_writes +
+                                  probe_after.queued_writes - probe_before.queued_writes),
+             BATCH_PHASE_SUM(drive_calls), BATCH_PHASE_SUM(listener_ns),
+             BATCH_PHASE_SUM(client_poll_ns), BATCH_PHASE_SUM(local_progress_ns),
+             BATCH_PHASE_SUM(listener_manager_ns), BATCH_PHASE_SUM(local_manager_ns),
+             BATCH_PHASE_SUM(listener_wait_ns), BATCH_PHASE_SUM(reconnect_ns),
+             BATCH_PHASE_SUM(manager_calls), BATCH_PHASE_SUM(manager_work),
+             BATCH_PHASE_SUM(listener_checks), BATCH_PHASE_SUM(listener_ready),
+             BATCH_PHASE_SUM(local_slots), BATCH_PHASE_SUM(local_used_peers));
+      fflush(stdout);
+    }
 #if defined(FLOWMQ_BATCH_PHASE_TIMING)
     if (measured == 1) {
       printf("BATCH_PHASE,%zu,%zu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",
@@ -421,8 +456,18 @@ cleanup:
 static int batch_run(int use_zmq, size_t batch, size_t messages,
                      size_t repetition, size_t order, int measured, int coalesce) {
   return batch_run_sized(use_zmq, batch, messages, repetition, order, measured,
-                         coalesce, BATCH_PAYLOAD_BYTES);
+                         coalesce, BATCH_PAYLOAD_BYTES, 0);
 }
+
+#if defined(FLOWMQ_BATCH_PROBE)
+static void batch_progress_header(void) {
+  printf("PROGRESS_HEADER,variant,payload_bytes,batch,repeat,order,messages,wall_ns,"
+         "cpu_ns_per_message,burst_p95_ns,burst_p99_ns,poll_calls,logical_writes,"
+         "drive_calls,listener_ns,client_poll_ns,local_progress_ns,listener_manager_ns,"
+         "local_manager_ns,listener_wait_ns,reconnect_ns,manager_calls,manager_work,"
+         "listener_checks,listener_ready,local_slots,local_used_peers\n");
+}
+#endif
 
 spec("FlowMQ and libzmq batch sweep") {
   it("correctness: copy bursts preserve payloads and FIFO") {
@@ -437,6 +482,39 @@ spec("FlowMQ and libzmq batch sweep") {
     }
   }
 #if defined(FLOWMQ_BATCH_PROBE)
+  it("correctness: fixed-topology progress interventions preserve copy delivery") {
+    for (int mode = 0; mode < 3; ++mode) {
+      check_equal(batch_run_sized(0, 128u, 384u, 0u, 0u, 0, 3, 64u, mode), SALTS_OK);
+      check_equal(batch_run_sized(0, 128u, 384u, 0u, 0u, 0, 3, 1024u, mode), SALTS_OK);
+    }
+  }
+  bench("progress-phases: production copy progress attribution") {
+    static const struct { size_t bytes, batch, messages; } cases[] = {
+      {64u, 1u, 65536u}, {64u, 128u, BATCH_MEASURE_MESSAGES},
+      {1024u, 128u, BATCH_MEASURE_MESSAGES}};
+    batch_progress_header();
+    for (size_t repetition = 0u; repetition < 3u; ++repetition)
+      for (size_t i = 0u; i < 3u; ++i) {
+        const size_t index = (i + repetition) % 3u;
+        check_equal(batch_run_sized(0, cases[index].batch, cases[index].messages,
+                                    repetition + 1u, 0u, 4, 3, cases[index].bytes, 0), SALTS_OK);
+      }
+  }
+  bench("progress-ablation: fixed-topology progress costs") {
+    static const struct { size_t bytes, batch, messages; } cases[] = {
+      {64u, 1u, 65536u}, {64u, 128u, BATCH_MEASURE_MESSAGES},
+      {1024u, 128u, BATCH_MEASURE_MESSAGES}};
+    batch_progress_header();
+    for (size_t repetition = 0u; repetition < BATCH_REPEATS; ++repetition)
+      for (size_t i = 0u; i < 3u; ++i) {
+        const size_t index = (i + repetition) % 3u;
+        for (size_t order = 0u; order < 3u; ++order) {
+          const int mode = (int)((order + repetition + index) % 3u);
+          check_equal(batch_run_sized(0, cases[index].batch, cases[index].messages,
+                                      repetition + 1u, order, 4, 3, cases[index].bytes, mode), SALTS_OK);
+        }
+      }
+  }
   it("correctness: production copy policy respects frame and byte boundaries") {
     static const struct { size_t bytes, batch, copies, peak; } cases[] = {
       {64u, 1u, 0u, 0u}, {64u, 2u, 0u, 0u}, {64u, 3u, 0u, 0u},
@@ -478,7 +556,7 @@ spec("FlowMQ and libzmq batch sweep") {
           const int mode = ((order + repetition + index) % 2u) == 0u ? 0 : 3;
           check_equal(batch_run_sized(0, cases[index].batch, messages,
                                       repetition + 1u, order, 3, mode,
-                                      cases[index].bytes), SALTS_OK);
+                                      cases[index].bytes, 0), SALTS_OK);
         }
       }
     }

@@ -62,10 +62,16 @@ socket owner lane，pattern FSM 与网络 peer 使用同一事实源。
 
 ## CNet 边界
 
-`cnet_client_poll()` 可以一次推进该 client 的所有 connection，但 `cnet_listener_wait()`
-目前是独立 wait primitive。FlowMQ 的 caller-driven `poll` 对列表中的 socket 执行非阻塞
-progress，并以 1ms 有界间隔重复检查，因而具备统一 timeout 语义。CNet 后续若提供可组合
-readiness/wait-set，可替换该等待策略以降低空闲唤醒延迟，但不得用隐藏线程掩盖这一边界。
+`cnet_client_poll()` 可以一次推进该 client 的所有 connection。FlowMQ ordinary socket
+仍单独调用 `cnet_listener_wait()`；ordinary `poll` 对列表中的 socket 执行非阻塞
+progress，并以 1ms 有界间隔重复检查，提供统一 timeout 语义。
+
+本轮迁移使用的 Salts 2.3.0-rc.1 SDK 已提供 `cnet_listener_attach_external()`、
+`cnet_listener_submit_external_accept()` 和 `cnet_listener_route_external_completion()`，
+可以由宿主通过共享 NativeIO backend 推进 accept，与 `cnet_listener_wait()` 互斥。
+FlowMQ 现有 explicit owner 仍只开放 TCP client-side；服务端接入属于尚未实现的
+[Acceptor–Connector 设计](ARCHITECTURE.md#acceptorconnector-接入决策2026-10-10)，
+不能把 SDK 能力当作当前 FlowMQ 已支持的行为。
 
 ### 协议 READY 与重连退避
 

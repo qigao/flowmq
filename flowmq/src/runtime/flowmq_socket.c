@@ -208,6 +208,7 @@ struct flowmq_socket_s {
 #if defined(FLOWMQ_BATCH_PROBE)
   flowmq_socket_batch_probe_t batch_probe;
   int batch_probe_coalesce;
+  int batch_probe_progress;
 #endif
   flowmq_ctx_t *ctx;
   flowmq_pattern_state_t pattern;
@@ -315,6 +316,32 @@ int flowmq_socket_batch_probe_coalesce(flowmq_socket_t *socket, int mode) {
   if (socket->runtime_initialized) return SALTS_EBUSY;
   socket->batch_probe_coalesce = mode;
   return SALTS_OK;
+}
+
+int flowmq_socket_batch_probe_progress(flowmq_socket_t *socket, int mode) {
+  if (socket == NULL || mode < 0 || mode > 2) return SALTS_EINVAL;
+  if (!socket->runtime_initialized) return SALTS_EBUSY;
+  socket->batch_probe_progress = mode;
+  return SALTS_OK;
+}
+
+static int flowmq_socket_batch_probe_manager(flowmq_socket_t *socket,
+                                            int listener) {
+  size_t work = 0u;
+#if defined(FLOWMQ_BATCH_PHASE_TIMING)
+  const uint64_t started = cmeta_hrtime();
+#endif
+  const int status = cnet_manager_advance(&socket->manager,
+                                         FLOWMQ_SOCKET_PEER_CAPACITY, &work);
+#if defined(FLOWMQ_BATCH_PHASE_TIMING)
+  if (listener) socket->batch_probe.listener_manager_ns += cmeta_hrtime() - started;
+  else socket->batch_probe.local_manager_ns += cmeta_hrtime() - started;
+#else
+  (void)listener;
+#endif
+  ++socket->batch_probe.manager_calls;
+  socket->batch_probe.manager_work += work;
+  return status;
 }
 #endif
 
@@ -4403,8 +4430,13 @@ static int flowmq_socket_resume_receive(flowmq_socket_peer_t *peer) {
 static int flowmq_socket_listener_progress(flowmq_socket_t *socket) {
   int status;
   if (!socket->listener_initialized) return SALTS_OK;
+#if defined(FLOWMQ_BATCH_PROBE)
+  status = socket->batch_probe_progress == 1 ? SALTS_OK
+      : flowmq_socket_batch_probe_manager(socket, 1);
+#else
   size_t work;
   status = cnet_manager_advance(&socket->manager, FLOWMQ_SOCKET_PEER_CAPACITY, &work);
+#endif
   if (status != SALTS_OK) return status;
   if (socket->peer_pool.impl != NULL) {
     cnet_pool_snapshot pool;
@@ -4418,7 +4450,20 @@ static int flowmq_socket_listener_progress(flowmq_socket_t *socket) {
   }
   {
     int ready = 0;
+#if defined(FLOWMQ_BATCH_PROBE)
+    if (socket->batch_probe_progress == 2) return SALTS_OK;
+    ++socket->batch_probe.listener_checks;
+#endif
+#if defined(FLOWMQ_BATCH_PHASE_TIMING)
+    const uint64_t started = cmeta_hrtime();
+#endif
     status = cnet_listener_wait(&socket->listener, 0u, &ready);
+#if defined(FLOWMQ_BATCH_PHASE_TIMING)
+    socket->batch_probe.listener_wait_ns += cmeta_hrtime() - started;
+#endif
+#if defined(FLOWMQ_BATCH_PROBE)
+    socket->batch_probe.listener_ready += ready != 0;
+#endif
     if (status != SALTS_OK) return status;
     if (!ready) return SALTS_OK;
   }
@@ -4453,14 +4498,30 @@ static int flowmq_socket_listener_progress(flowmq_socket_t *socket) {
 }
 
 static int flowmq_socket_progress_local(flowmq_socket_t *socket) {
+#if defined(FLOWMQ_BATCH_PROBE)
+  int status = flowmq_socket_batch_probe_manager(socket, 0);
+#else
   size_t work;
   int status = cnet_manager_advance(&socket->manager, FLOWMQ_SOCKET_PEER_CAPACITY, &work);
+#endif
   if (status != SALTS_OK) return status;
+#if defined(FLOWMQ_BATCH_PHASE_TIMING)
+  const uint64_t reconnect_started = cmeta_hrtime();
+#endif
   status = flowmq_socket_reconnect_progress(socket);
+#if defined(FLOWMQ_BATCH_PHASE_TIMING)
+  socket->batch_probe.reconnect_ns += cmeta_hrtime() - reconnect_started;
+#endif
   if (status != SALTS_OK) return status;
   for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
     flowmq_socket_peer_t *peer = &socket->peers[i];
+#if defined(FLOWMQ_BATCH_PROBE)
+    ++socket->batch_probe.local_slots;
+#endif
     if (!flowmq_peer_state_is_used(&peer->state)) continue;
+#if defined(FLOWMQ_BATCH_PROBE)
+    ++socket->batch_probe.local_used_peers;
+#endif
     if (flowmq_peer_state_needs_close_retry(&peer->state)) {
       status = cnet_close(&socket->client, peer->connection);
       if (status == SALTS_OK || status == SALTS_EALREADY) {

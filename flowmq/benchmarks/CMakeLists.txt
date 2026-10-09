@@ -216,12 +216,18 @@ if(FLOWMQ_BUILD_ZMQ_BENCHMARK)
              COMMAND bench_flowmq_batch_profile --filter "diagnostic:")
     add_test(NAME bench_flowmq_batch_policy
              COMMAND bench_flowmq_batch_probe --filter "policy:")
+    add_test(NAME bench_flowmq_progress_phases
+             COMMAND bench_flowmq_batch_profile --filter "progress-phases:")
+    add_test(NAME bench_flowmq_progress_ablation
+             COMMAND bench_flowmq_batch_probe --filter "progress-ablation:")
     set_tests_properties(bench_flowmq_batch_sweep bench_flowmq_batch_diagnostic
                          bench_flowmq_batch_ablation bench_flowmq_batch_phases bench_flowmq_batch_policy
+                         bench_flowmq_progress_phases bench_flowmq_progress_ablation
       PROPERTIES LABELS "flowmq;benchmark" RUN_SERIAL TRUE TIMEOUT 600)
     if(WIN32)
       set_tests_properties(bench_flowmq_batch_sweep bench_flowmq_batch_diagnostic
                            bench_flowmq_batch_ablation bench_flowmq_batch_phases bench_flowmq_batch_policy
+                           bench_flowmq_progress_phases bench_flowmq_progress_ablation
         PROPERTIES ENVIRONMENT_MODIFICATION "${FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS}")
     endif()
     # The paired cases share fixed sample counts, independent of smoke/CI mode.
