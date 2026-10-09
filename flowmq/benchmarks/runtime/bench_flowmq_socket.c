@@ -1603,6 +1603,72 @@ spec("FlowMQ direct socket benchmark") {
   }
 
 #if defined(FLOWMQ_BENCH_WITH_ZMQ)
+  group("paired TCP comparison") {
+    static bench_pair_t flow_pair;
+    static bench_zmq_pair_t zmq_pair;
+    static unsigned char payload[BENCH_PAYLOAD_BYTES];
+    static unsigned char large_payload[BENCH_LARGE_PAYLOAD_BYTES];
+
+    before_each() {
+      memset(&flow_pair, 0, sizeof(flow_pair));
+      memset(&zmq_pair, 0, sizeof(zmq_pair));
+      memset(payload, 0x5a, sizeof(payload));
+      memset(large_payload, 0xa5, sizeof(large_payload));
+    }
+    after_each() {
+      const int status = bench_pair_close(&flow_pair);
+      bench_zmq_close(&zmq_pair);
+      check_equal(status, SALTS_OK);
+    }
+
+    bench("FlowMQ copy") {
+      check_equal(bench_pair_open(&flow_pair), SALTS_OK);
+      check_equal(bench_exchange(&flow_pair, payload, sizeof(payload)), SALTS_OK);
+      benchmark_bytes("PAIR 64-byte one-way", BENCH_SAMPLES,
+                      BENCH_PAYLOAD_BYTES) {
+        check_equal(bench_exchange(&flow_pair, payload, sizeof(payload)), SALTS_OK);
+      }
+      check_equal(bench_exchange(&flow_pair, large_payload, sizeof(large_payload)),
+                  SALTS_OK);
+      benchmark_bytes("PAIR 64-KiB one-way", BENCH_LARGE_SAMPLES,
+                      BENCH_LARGE_PAYLOAD_BYTES) {
+        check_equal(bench_exchange(&flow_pair, large_payload, sizeof(large_payload)),
+                    SALTS_OK);
+      }
+      /* Start the admission bursts with fresh flow credit, as in the full suite. */
+      check_equal(bench_pair_close(&flow_pair), SALTS_OK);
+      check_equal(bench_pair_open(&flow_pair), SALTS_OK);
+      check_equal(bench_exchange(&flow_pair, payload, sizeof(payload)), SALTS_OK);
+      check_equal(bench_exchange_batch(&flow_pair, payload, sizeof(payload)), SALTS_OK);
+      benchmark_io("PAIR 64-message queued batch", BENCH_BATCH_SAMPLES,
+                   BENCH_BATCH_MESSAGES, BENCH_BATCH_MESSAGES * BENCH_PAYLOAD_BYTES) {
+        check_equal(bench_exchange_batch(&flow_pair, payload, sizeof(payload)), SALTS_OK);
+      }
+    }
+
+    bench("libzmq copy") {
+      check_equal(bench_zmq_open(&zmq_pair), 0);
+      check_equal(bench_zmq_exchange(&zmq_pair, payload, sizeof(payload)), 0);
+      benchmark_bytes("PAIR 64-byte one-way", BENCH_SAMPLES,
+                      BENCH_PAYLOAD_BYTES) {
+        check_equal(bench_zmq_exchange(&zmq_pair, payload, sizeof(payload)), 0);
+      }
+      check_equal(bench_zmq_exchange(&zmq_pair, large_payload, sizeof(large_payload)), 0);
+      benchmark_bytes("PAIR 64-KiB one-way", BENCH_LARGE_SAMPLES,
+                      BENCH_LARGE_PAYLOAD_BYTES) {
+        check_equal(bench_zmq_exchange(&zmq_pair, large_payload, sizeof(large_payload)), 0);
+      }
+      bench_zmq_close(&zmq_pair);
+      check_equal(bench_zmq_open(&zmq_pair), 0);
+      check_equal(bench_zmq_exchange(&zmq_pair, payload, sizeof(payload)), 0);
+      check_equal(bench_zmq_exchange_batch(&zmq_pair, payload, sizeof(payload)), 0);
+      benchmark_io("PAIR 64-message queued batch", BENCH_BATCH_SAMPLES,
+                   BENCH_BATCH_MESSAGES, BENCH_BATCH_MESSAGES * BENCH_PAYLOAD_BYTES) {
+        check_equal(bench_zmq_exchange_batch(&zmq_pair, payload, sizeof(payload)), 0);
+      }
+    }
+  }
+
   bench("libzmq loopback TCP reference") {
     static unsigned char payload[BENCH_PAYLOAD_BYTES];
     static unsigned char large_payload[BENCH_LARGE_PAYLOAD_BYTES];

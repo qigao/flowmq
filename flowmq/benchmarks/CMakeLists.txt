@@ -158,4 +158,18 @@ if(FLOWMQ_BUILD_ZMQ_BENCHMARK)
   endif()
   target_link_libraries(bench_flowmq_socket PRIVATE libzmq)
   target_compile_definitions(bench_flowmq_socket PRIVATE FLOWMQ_BENCH_WITH_ZMQ=1)
+  if(BUILD_TESTS)
+    # The paired cases share fixed sample counts, independent of smoke/CI mode.
+    add_test(NAME bench_flowmq_zmq_comparison
+             COMMAND bench_flowmq_socket --filter "paired TCP comparison")
+    set_tests_properties(bench_flowmq_zmq_comparison
+                         PROPERTIES LABELS "flowmq;benchmark" RUN_SERIAL TRUE
+                                    TIMEOUT 600
+                                    ENVIRONMENT "FLOWMQ_BENCH_CI=0;FLOWMQ_BENCH_SMOKE=0")
+    if(WIN32)
+      set_tests_properties(bench_flowmq_zmq_comparison
+                           PROPERTIES ENVIRONMENT_MODIFICATION
+                                      "${FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS}")
+    endif()
+  endif()
 endif()

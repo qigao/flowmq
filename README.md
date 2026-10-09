@@ -483,9 +483,13 @@ FMP/1 由当前 SaltsUtils 的 `salts-idlc` 生成；工具更新会触发头文
 新数据路径 benchmark：
 
 ```powershell
-cmake --fresh --preset win-release-user -DFLOWMQ_BUILD_ZMQ_BENCHMARK=ON
+cmake --fresh --preset win-release-user -DBUILD_TESTS=ON -DFLOWMQ_BUILD_ZMQ_BENCHMARK=ON
 cmake --build --preset win-release-user --target bench_flowmq_socket
+ctest --preset bench-win-release-user -R "^bench_flowmq_zmq_comparison$" --repeat until-fail:3 -V
 ```
+
+同负载 TCP copy 对照使用双方相同的完整样本数，独立于 smoke/CI 缩减开关。
+Windows 实测、原始数据和限制见 [FlowMQ / libzmq 对照](docs/FLOWMQ_ZMQ_COMPARISON.md)。
 
 ZeroMQ 由 `vcpkg.json` 安装；公平对比必须使用 Release preset，使 FlowMQ 与
 libzmq 都链接 Release 产物。GitHub Actions 通过
