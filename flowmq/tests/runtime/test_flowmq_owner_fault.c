@@ -1,4 +1,5 @@
 #include "flowmq_owner_internal.h"
+#include "flowmq_peer_pool.h"
 #include "tinytest.h"
 #include "cmeta_error.h"
 
@@ -128,6 +129,12 @@ static void owner_fault_open(owner_fault_fixture *f) {
     f->peers[lane] = flowmq_socket(f->ctx, FLOWMQ_DEALER);
     check_not_null(f->clients[lane]);
     check_not_null(f->peers[lane]);
+#if defined(FLOWMQ_TEST_PEER_POOL)
+    flowmq_peer_pool_config_t pool = FLOWMQ_PEER_POOL_CONFIG_INIT;
+    pool.max_peers = pool.max_connecting = 1u;
+    check_equal(flowmq_socket_set_peer_pool(f->clients[lane], &pool), SALTS_OK);
+    check_equal(flowmq_socket_set_peer_pool(f->peers[lane], &pool), SALTS_OK);
+#endif
     check_equal(flowmq_setsockopt(f->clients[lane], FLOWMQ_RECONNECT_IVL,
                                  &reconnect_disabled, sizeof(reconnect_disabled)),
                 SALTS_OK);
@@ -160,6 +167,14 @@ static void owner_fault_open(owner_fault_fixture *f) {
     }
   }
   check_true(all_ready);
+#if defined(FLOWMQ_TEST_PEER_POOL)
+  for (size_t lane = 0u; lane < FAULT_LANES; ++lane) {
+    flowmq_peer_pool_snapshot_t pool = FLOWMQ_PEER_POOL_SNAPSHOT_INIT;
+    check_equal(flowmq_socket_get_peer_pool(f->clients[lane], &pool), SALTS_OK);
+    check_equal(pool.active_leases, 1u);
+    check_equal(pool.ready, 1u);
+  }
+#endif
 }
 
 static void owner_fault_round(owner_fault_fixture *f, size_t round, bool inject) {

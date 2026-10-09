@@ -1,4 +1,5 @@
 #include "flowmq_socket.h"
+#include "flowmq_peer_pool.h"
 #include "flowmq_socket_external_internal.h"
 #include "flowmq_tls_identity_map.h"
 #include "flowmq_tls_test_material.h"
@@ -10,6 +11,19 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#if defined(FLOWMQ_TEST_PEER_POOL)
+/* Run the same public behavior contracts with pool admission enabled. This
+ * fixture still creates real sockets and exercises the real transport. */
+static flowmq_socket_t *flowmq_test_socket_pool(flowmq_ctx_t *ctx, int type) {
+  flowmq_peer_pool_config_t config = FLOWMQ_PEER_POOL_CONFIG_INIT;
+  flowmq_socket_t *socket = flowmq_socket(ctx, type);
+  if (socket != NULL)
+    check_equal(flowmq_socket_set_peer_pool(socket, &config), SALTS_OK);
+  return socket;
+}
+#define flowmq_socket flowmq_test_socket_pool
+#endif
 
 enum {
   FLOWMQ_TEST_PROGRESS_LIMIT = 10000u,
@@ -208,6 +222,12 @@ spec("flowmq_socket lifecycle and pattern surface") {
           option_size = sizeof(rejections);
           check_equal(flowmq_getsockopt(client, FLOWMQ_TLS_IDENTITY_REJECTIONS,
                                        &rejections, &option_size), SALTS_OK);
+#if defined(FLOWMQ_TEST_PEER_POOL)
+          flowmq_peer_pool_snapshot_t pool = FLOWMQ_PEER_POOL_SNAPSHOT_INIT;
+          check_equal(flowmq_socket_get_peer_pool(client, &pool), SALTS_OK);
+          check_equal(pool.ready, 0u);
+          check_equal(pool.active_leases, 0u);
+#endif
           check_equal(flowmq_recv(client, received, sizeof(received),
                                  &received_size, FLOWMQ_DONTWAIT), SALTS_EBUSY);
         }

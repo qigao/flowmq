@@ -12,6 +12,7 @@
 #include "flowmq_security.h"
 #include "flowmq_socket.h"
 #include "flowmq_destination.h"
+#include "flowmq_peer_pool.h"
 #include "flowmq_owner.h"
 #include "flowmq_tls_identity_map.h"
 #include "flowmq_transport.h"

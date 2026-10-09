@@ -10,6 +10,18 @@ static_assert(FLOWMQ_DESTINATION_MAX_ENDPOINTS == 4u,
               "installed bounded admission limit changed");
 
 int main() {
+  flowmq_ctx_t *ctx = flowmq_ctx_new();
+  if (ctx == nullptr) return 3;
+  flowmq_socket_t *socket = flowmq_socket(ctx, FLOWMQ_PAIR);
+  flowmq_peer_pool_config_t config = FLOWMQ_PEER_POOL_CONFIG_INIT;
+  flowmq_peer_pool_snapshot_t snapshot = FLOWMQ_PEER_POOL_SNAPSHOT_INIT;
+  const bool pool_ok = socket != nullptr &&
+      flowmq_socket_set_peer_pool(socket, &config) == SALTS_OK &&
+      flowmq_socket_get_peer_pool(socket, &snapshot) == SALTS_OK &&
+      snapshot.enabled && snapshot.drained && snapshot.active_leases == 0u;
+  const int close_status = socket != nullptr ? flowmq_close(socket) : SALTS_OK;
+  const int term_status = flowmq_ctx_term(ctx);
+  if (!pool_ok || close_status != SALTS_OK || term_status != SALTS_OK) return 4;
   const flowmq_destination_endpoint_t endpoints[] = {
       {10u, 55u, "tcp://127.0.0.1:10001", 1u, 0u, 1},
       {20u, 55u, "tcp://127.0.0.1:10002", 1u, 0u, 1}};

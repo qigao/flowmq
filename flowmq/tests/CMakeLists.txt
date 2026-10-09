@@ -111,6 +111,20 @@ cmake_add_test(
   FOLDER "flowmq/tests/runtime")
 
 cmake_add_test(
+  test_flowmq_peer_pool
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/test_flowmq_peer_pool.c
+  LIBS FlowMQ::Transport Salts::TinyTest
+  FOLDER "flowmq/tests/runtime")
+
+cmake_add_test(
+  test_flowmq_socket_pool
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/test_flowmq_socket.c
+  LIBS FlowMQ::Transport Salts::TinyTest
+  INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/runtime
+  FOLDER "flowmq/tests/runtime")
+target_compile_definitions(test_flowmq_socket_pool PRIVATE FLOWMQ_TEST_PEER_POOL=1)
+
+cmake_add_test(
   test_flowmq_owned_stream
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/test_flowmq_owned_stream.c
   LIBS FlowMQ::Transport Salts::TinyTest
@@ -144,6 +158,14 @@ cmake_add_test(
   LIBS FlowMQ::Transport Salts::TinyTest
   INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/runtime
   FOLDER "flowmq/tests/runtime")
+
+cmake_add_test(
+  test_flowmq_owner_fault_pool
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/test_flowmq_owner_fault.c
+  LIBS FlowMQ::Transport Salts::TinyTest
+  INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/runtime
+  FOLDER "flowmq/tests/runtime")
+target_compile_definitions(test_flowmq_owner_fault_pool PRIVATE FLOWMQ_TEST_PEER_POOL=1)
 
 cmake_add_test(
   test_flowmq_socket_option
@@ -190,13 +212,33 @@ set(FLOWMQ_TRANSPORT_TESTS
     test_flowmq_transport
     test_flowmq_socket
     test_flowmq_destination
+    test_flowmq_peer_pool
+    test_flowmq_socket_pool
     test_flowmq_owned_stream
     test_flowmq_segmented_receive_contract
     test_flowmq_owner
     test_flowmq_owner_fault
+    test_flowmq_owner_fault_pool
     test_flowmq_owner_batch
     test_flowmq_socket_option
     test_flowmq_peer_state)
+
+# Reuse the installed-package consumers to check the same public C11/C++17
+# calls against the product shared library during normal runtime regression.
+# Installed target/dependency qualification remains in tests/package.
+cmake_add_test(
+  test_flowmq_public_c11
+  SOURCES ${PROJECT_SOURCE_DIR}/tests/package/main.c
+  LIBS FlowMQ::FlowMQ
+  FOLDER "flowmq/tests/runtime")
+target_compile_features(test_flowmq_public_c11 PRIVATE c_std_11)
+cmake_add_test(
+  test_flowmq_public_cpp17
+  SOURCES ${PROJECT_SOURCE_DIR}/tests/package/consumer_cpp.cpp
+  LIBS FlowMQ::FlowMQ
+  FOLDER "flowmq/tests/runtime")
+target_compile_features(test_flowmq_public_cpp17 PRIVATE cxx_std_17)
+list(APPEND FLOWMQ_TRANSPORT_TESTS test_flowmq_public_c11 test_flowmq_public_cpp17)
 
 set_tests_properties(test_flowmq_protocol
                      PROPERTIES LABELS "fmq-release;flowmq-protocol")

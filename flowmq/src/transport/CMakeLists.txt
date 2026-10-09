@@ -19,6 +19,7 @@ set(FLOWMQ_TRANSPORT_SOURCES
 set(FLOWMQ_TRANSPORT_HEADERS
     ${PROJECT_SOURCE_DIR}/flowmq/include/flowmq_socket.h
     ${PROJECT_SOURCE_DIR}/flowmq/include/flowmq_destination.h
+    ${PROJECT_SOURCE_DIR}/flowmq/include/flowmq_peer_pool.h
     ${PROJECT_SOURCE_DIR}/flowmq/include/flowmq_owner.h
     ${PROJECT_SOURCE_DIR}/flowmq/include/flowmq_transport.h)
 

@@ -83,6 +83,33 @@ snapshots fail before any socket or network mutation. Endpoint sets are bounded
 to four entries in this first slice. The application owns any choice of
 destination set, sequence ticket, authority eligibility and TLS configuration.
 
+## CNet 2.3 bounded peer pool (FlowMQ #123)
+
+`flowmq_peer_pool.h` provides optional startup-only admission limits for
+long-lived FMQ/6 connections. Each socket owns its pool on the same progress
+owner as its Manager. Defaults remain unchanged until explicitly enabled:
+
+```c
+flowmq_peer_pool_config_t pool = FLOWMQ_PEER_POOL_CONFIG_INIT;
+pool.max_peers = 2;
+pool.max_connecting = 1;
+int status = flowmq_socket_set_peer_pool(socket, &pool); /* Before bind/connect. */
+```
+
+Valid limits are `1 <= max_connecting <= max_peers <= 4`. An active dial reserves
+capacity before opening a connection and fails `SALTS_ENOBUFS` when full.
+Only a fully validated HELLO/SETTINGS exchange can acquire the peer's single
+session lease. Sends keep using existing HWM and credit; they do not acquire
+per-message leases. Socket, TLS policy, pattern and connection generation never
+share leases. Existing reconnect policy stays pinned to its endpoint.
+
+`flowmq_socket_get_peer_pool()` copies connecting, ready, draining and lease
+counts into a `FLOWMQ_PEER_POOL_SNAPSHOT_INIT` snapshot. A terminated peer with
+queued receive parts retains its slot until the last part is consumed or the
+socket closes. A full listener leaves new connections in its OS backlog while
+continuing established-peer progress. See the [ownership and shutdown design](
+docs/CNET_TCP_TLS_ARCHITECTURE.md#可选长期-peer-pool123).
+
 ## Caller-driven transport
 
 旧的 callback endpoint API 已删除。普通 socket 保留 ZeroMQ 风格的

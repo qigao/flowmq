@@ -53,6 +53,16 @@ int main(void)
     router = flowmq_socket(ctx, FLOWMQ_ROUTER);
     if (router == NULL) goto cleanup;
 
+    {
+        flowmq_peer_pool_config_t config = FLOWMQ_PEER_POOL_CONFIG_INIT;
+        flowmq_peer_pool_snapshot_t snapshot = FLOWMQ_PEER_POOL_SNAPSHOT_INIT;
+        config.max_peers = config.max_connecting = 1u;
+        if (flowmq_socket_set_peer_pool(router, &config) != SALTS_OK ||
+            flowmq_socket_get_peer_pool(router, &snapshot) != SALTS_OK ||
+            !snapshot.enabled || snapshot.max_peers != 1u || !snapshot.drained)
+            goto cleanup;
+    }
+
     /* int ABI */
     if (flowmq_setsockopt(router, FLOWMQ_REUSE_PORT, &reuse_port,
                           sizeof(reuse_port)) != 0)
