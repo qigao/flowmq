@@ -161,6 +161,49 @@ cmake_add_benchmark(
   INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/core/pattern
   FOLDER "flowmq/benchmarks/runtime")
 
+# Reuse the same private transport copies for pattern and PAIR diagnostics.
+# Neither the counters nor phase clocks enter the production transport target.
+foreach(probe_kind IN ITEMS probe profile)
+  set(probe_transport flowmq_transport_batch_${probe_kind})
+  add_library(${probe_transport} STATIC ${FLOWMQ_TRANSPORT_SOURCES})
+  cmake_config_target(${probe_transport} FOLDER "flowmq/benchmarks/support")
+  target_include_directories(${probe_transport}
+    PUBLIC $<TARGET_PROPERTY:flowmq_transport,INTERFACE_INCLUDE_DIRECTORIES>
+    PRIVATE $<TARGET_PROPERTY:flowmq_transport,INCLUDE_DIRECTORIES>)
+  target_link_libraries(${probe_transport}
+    PUBLIC $<TARGET_PROPERTY:flowmq_transport,LINK_LIBRARIES>)
+  target_compile_definitions(${probe_transport} PRIVATE FLOWMQ_BATCH_PROBE=1)
+
+  set(pattern_probe bench_flowmq_pattern_${probe_kind})
+  cmake_add_benchmark(${pattern_probe}
+    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_pattern_dispatch.c
+    LIBS ${probe_transport} Salts::TinyTest
+    DEFS FLOWMQ_BATCH_PROBE=1
+    INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/runtime
+    FOLDER "flowmq/benchmarks/runtime")
+  if(BUILD_TESTS)
+    add_test(NAME ${pattern_probe} COMMAND ${pattern_probe})
+    set_tests_properties(${pattern_probe} PROPERTIES
+      LABELS "flowmq;benchmark" RUN_SERIAL TRUE TIMEOUT 600
+      ENVIRONMENT "FLOWMQ_BENCH_SMOKE=0;FLOWMQ_PATTERN_OMIT_LISTENER=0")
+    if(WIN32)
+      set_tests_properties(${pattern_probe} PROPERTIES
+        ENVIRONMENT_MODIFICATION "${FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS}")
+    endif()
+  endif()
+endforeach()
+target_compile_definitions(flowmq_transport_batch_profile PRIVATE FLOWMQ_BATCH_PHASE_TIMING=1)
+if(BUILD_TESTS)
+  add_test(NAME bench_flowmq_pattern_no_listener COMMAND bench_flowmq_pattern_probe)
+  set_tests_properties(bench_flowmq_pattern_no_listener PROPERTIES
+    LABELS "flowmq;benchmark" RUN_SERIAL TRUE TIMEOUT 600
+    ENVIRONMENT "FLOWMQ_BENCH_SMOKE=0;FLOWMQ_PATTERN_OMIT_LISTENER=1")
+  if(WIN32)
+    set_tests_properties(bench_flowmq_pattern_no_listener PROPERTIES
+      ENVIRONMENT_MODIFICATION "${FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS}")
+  endif()
+endif()
+
 if(FLOWMQ_BUILD_ZMQ_BENCHMARK)
   find_package(ZeroMQ CONFIG REQUIRED)
   string(TOUPPER "${CMAKE_BUILD_TYPE}" _flowmq_zmq_config)
@@ -189,22 +232,6 @@ if(FLOWMQ_BUILD_ZMQ_BENCHMARK)
         ENVIRONMENT_MODIFICATION "${FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS}")
     endif()
   endif()
-
-  # A separate static copy confines admission counters to diagnostic runs.
-  # Inherit the production source list, includes and dependencies so that the
-  # measured executable still links the ordinary, uninstrumented transport.
-  foreach(probe_kind IN ITEMS probe profile)
-    set(probe_transport flowmq_transport_batch_${probe_kind})
-    add_library(${probe_transport} STATIC ${FLOWMQ_TRANSPORT_SOURCES})
-    cmake_config_target(${probe_transport} FOLDER "flowmq/benchmarks/support")
-    target_include_directories(${probe_transport}
-      PUBLIC $<TARGET_PROPERTY:flowmq_transport,INTERFACE_INCLUDE_DIRECTORIES>
-      PRIVATE $<TARGET_PROPERTY:flowmq_transport,INCLUDE_DIRECTORIES>)
-    target_link_libraries(${probe_transport}
-      PUBLIC $<TARGET_PROPERTY:flowmq_transport,LINK_LIBRARIES>)
-    target_compile_definitions(${probe_transport} PRIVATE FLOWMQ_BATCH_PROBE=1)
-  endforeach()
-  target_compile_definitions(flowmq_transport_batch_profile PRIVATE FLOWMQ_BATCH_PHASE_TIMING=1)
 
   foreach(batch_target IN ITEMS bench_flowmq_batch bench_flowmq_batch_probe bench_flowmq_batch_profile)
     if(batch_target STREQUAL "bench_flowmq_batch_probe")

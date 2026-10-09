@@ -7,8 +7,11 @@
 /* Benchmark-only copy-lane counters, compiled solely into the probe target.
  * One progress thread owns the socket and reads snapshots between operations.
  * These count successful DATA admission into CNet, not native submissions or
- * peer acknowledgements. Qualification covers single-part PAIR copy sends;
- * retained and multipart admission are intentionally outside this probe.
+ * peer acknowledgements. Qualification covers single-part PAIR and pattern
+ * copy sends (including ROUTER with a local identity plus one DATA frame).
+ * Application-retained sends are outside the write counters. For multipart,
+ * queued_ranges counts DATA frames while messages counts final parts; do not
+ * assume ranges == messages without qualifying the workload's frame shape.
  * Fixed storage, no payload references, callbacks, atomics or allocations.
  * The benchmark bounds the measured workload well below uint64_t overflow.
  */

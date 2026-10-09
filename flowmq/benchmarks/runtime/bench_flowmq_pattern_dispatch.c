@@ -7,6 +7,21 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(FLOWMQ_BATCH_PROBE)
+#include "flowmq_socket_batch_probe.h"
+#include <stdio.h>
+
+static flowmq_socket_t *bench_probe_socket(flowmq_ctx_t *ctx, int type) {
+  flowmq_socket_t *socket = flowmq_socket(ctx, type);
+  if (socket != NULL && flowmq_socket_batch_probe_coalesce(socket, 3) != SALTS_OK) {
+    (void)flowmq_close(socket);
+    return NULL;
+  }
+  return socket;
+}
+#define flowmq_socket(ctx, type) bench_probe_socket(ctx, type)
+#endif
+
 enum {
   BENCH_PATTERN_PAYLOAD_BYTES = 64u,
   BENCH_PATTERN_SAMPLES = 20000u,
@@ -29,6 +44,11 @@ typedef struct bench_socket_group_s {
   flowmq_ctx_t *ctx;
   flowmq_socket_t *sockets[BENCH_PATTERN_PEERS + 1u];
   size_t count;
+#if defined(FLOWMQ_BATCH_PROBE)
+  flowmq_socket_batch_probe_t before;
+  uint64_t started_ns;
+  int omit_listener;
+#endif
 } bench_socket_group_t;
 
 static int bench_group_progress(bench_socket_group_t *group) {
@@ -49,6 +69,98 @@ static int bench_group_progress_many(bench_socket_group_t *group,
     status = bench_group_progress(group);
   return status;
 }
+
+#if defined(FLOWMQ_BATCH_PROBE)
+/* Owner-thread snapshots only, outside the sample loop. No borrowed payloads
+ * or reset of live counters. Fixed groups and sample counts bound all sums. */
+#define BENCH_PROBE_FIELDS(M) \
+  M(direct_writes) M(queued_writes) M(messages) M(payload_bytes) \
+  M(queued_ranges) M(submitted_ranges) M(coalesced_writes) M(coalesced_ranges) M(drive_calls) \
+  M(listener_checks) M(listener_ready) M(manager_calls) M(manager_work) \
+  M(local_slots) M(local_used_peers) M(listener_ns) M(listener_wait_ns) \
+  M(client_poll_ns) M(local_progress_ns) M(receive_callback_ns) \
+  M(listener_manager_ns) M(local_manager_ns) M(reconnect_ns)
+
+static int bench_probe_snapshot(const bench_socket_group_t *group,
+                                 flowmq_socket_batch_probe_t *total) {
+  memset(total, 0, sizeof(*total));
+  for (size_t i = 0u; i < group->count; ++i) {
+    flowmq_socket_batch_probe_t socket_stats;
+    int status = flowmq_socket_batch_probe_read(group->sockets[i], &socket_stats);
+    if (status != SALTS_OK) return status;
+#define BENCH_PROBE_ADD(field) total->field += socket_stats.field;
+    BENCH_PROBE_FIELDS(BENCH_PROBE_ADD)
+#undef BENCH_PROBE_ADD
+    for (size_t n = 0u; n <= FLOWMQ_BATCH_PROBE_MAX_FRAMES; ++n)
+      total->queued_range_histogram[n] += socket_stats.queued_range_histogram[n];
+  }
+  return SALTS_OK;
+}
+
+static int bench_probe_begin(bench_socket_group_t *group) {
+  const char *omit = getenv("FLOWMQ_PATTERN_OMIT_LISTENER");
+  if (omit != NULL && strcmp(omit, "0") != 0 && strcmp(omit, "1") != 0)
+    return SALTS_EINVAL;
+  group->omit_listener = omit != NULL && strcmp(omit, "1") == 0;
+  /* Finish fixture setup/control completions before taking the baseline. */
+  int status = bench_group_progress_many(group, 32u);
+  /* Only this diagnostic window has a fixed established topology. Mode 2
+   * preserves manager progress but cannot accept new connections. */
+  for (size_t i = 0u; status == SALTS_OK && i < group->count; ++i)
+    status = flowmq_socket_batch_probe_progress(
+        group->sockets[i], group->omit_listener ? 2 : 0);
+  if (status == SALTS_OK) status = bench_probe_snapshot(group, &group->before);
+  group->started_ns = cmeta_hrtime();
+  return status;
+}
+
+static int bench_probe_end(const bench_socket_group_t *group, const char *name,
+                            size_t samples, size_t messages_per_sample) {
+  const uint64_t wall_ns = cmeta_hrtime() - group->started_ns;
+  const uint64_t expected = (uint64_t)samples * messages_per_sample;
+  flowmq_socket_batch_probe_t delta;
+  uint64_t histogram_writes = 0u, histogram_ranges = 0u;
+  int status = bench_probe_snapshot(group, &delta);
+  if (status != SALTS_OK) return status;
+#define BENCH_PROBE_SUBTRACT(field) delta.field -= group->before.field;
+  BENCH_PROBE_FIELDS(BENCH_PROBE_SUBTRACT)
+#undef BENCH_PROBE_SUBTRACT
+  for (size_t n = 1u; n <= FLOWMQ_BATCH_PROBE_MAX_FRAMES; ++n) {
+    const uint64_t writes = delta.queued_range_histogram[n] -
+                            group->before.queued_range_histogram[n];
+    histogram_writes += writes;
+    histogram_ranges += n * writes;
+    if (writes != 0u)
+      printf("PATTERN_HIST,%s,%zu,%llu\n", name, n, (unsigned long long)writes);
+  }
+  /* These cases send one wire DATA frame per logical message, including ROUTER
+   * whose identity envelope is local. Control writes are outside these counters.
+   * Admission counts and byte totals must match the verified received payloads. */
+  if (delta.messages != expected ||
+      delta.payload_bytes != expected * BENCH_PATTERN_PAYLOAD_BYTES ||
+      delta.direct_writes + histogram_ranges != expected ||
+      histogram_writes != delta.queued_writes || histogram_ranges != delta.queued_ranges ||
+      delta.submitted_ranges + delta.coalesced_ranges !=
+          delta.direct_writes + delta.queued_ranges + delta.coalesced_writes ||
+      delta.listener_ready != 0u || delta.manager_work != 0u ||
+      (group->omit_listener && delta.listener_checks != 0u))
+    return SALTS_EPROTO;
+  printf("PATTERN_PROBE,%s,%d,%zu,%llu,%llu", name, group->omit_listener, samples,
+         (unsigned long long)expected, (unsigned long long)wall_ns);
+#define BENCH_PROBE_PRINT(field) printf(",%llu", (unsigned long long)delta.field);
+  BENCH_PROBE_FIELDS(BENCH_PROBE_PRINT)
+#undef BENCH_PROBE_PRINT
+  printf("\n");
+  return SALTS_OK;
+}
+
+#define BENCH_PROBE_BEGIN(group) check_equal(bench_probe_begin(group), SALTS_OK)
+#define BENCH_PROBE_END(group, name, samples, messages) \
+  check_equal(bench_probe_end(group, name, samples, messages), SALTS_OK)
+#else
+#define BENCH_PROBE_BEGIN(group) ((void)0)
+#define BENCH_PROBE_END(group, name, samples, messages) ((void)0)
+#endif
 
 static void bench_group_close(bench_socket_group_t *group) {
   if (group == NULL) return;
@@ -657,10 +769,18 @@ spec("FlowMQ pattern dispatch benchmark") {
     const size_t poll_samples = bench_pattern_samples(BENCH_PATTERN_POLLOUT_SAMPLES);
     int status;
 
+#if defined(FLOWMQ_BATCH_PROBE)
+    printf("PATTERN_PROBE_HEADER,scenario,omit_listener,samples,expected_messages,wall_ns");
+#define BENCH_PROBE_HEADER(field) printf("," #field);
+    BENCH_PROBE_FIELDS(BENCH_PROBE_HEADER)
+#undef BENCH_PROBE_HEADER
+    printf("\nPATTERN_HIST_HEADER,scenario,frames_per_write,writes\n");
+#endif
     memset(payload, 0x5a, sizeof(payload));
 
     status = bench_pub_open(&pub);
     check_equal(status, SALTS_OK);
+    BENCH_PROBE_BEGIN(&pub.group);
     benchmark_io("PUB 4-peer fanout", samples,
                  BENCH_PATTERN_PEERS,
                  BENCH_PATTERN_PEERS * BENCH_PATTERN_PAYLOAD_BYTES) {
@@ -668,11 +788,13 @@ spec("FlowMQ pattern dispatch benchmark") {
         status = bench_pub_exchange(&pub, payload, sizeof(payload));
     }
     check_equal(status, SALTS_OK);
+    BENCH_PROBE_END(&pub.group, "pub_fanout", samples, BENCH_PATTERN_PEERS);
     bench_group_close(&pub.group);
 
     status = bench_push_open(&push);
     check_equal(status, SALTS_OK);
     check_equal(bench_push_cycle(&push, payload, sizeof(payload)), SALTS_OK);
+    BENCH_PROBE_BEGIN(&push.group);
     benchmark_io("PUSH 4-peer round-robin", samples,
                  BENCH_PATTERN_PEERS,
                  BENCH_PATTERN_PEERS * BENCH_PATTERN_PAYLOAD_BYTES) {
@@ -680,30 +802,35 @@ spec("FlowMQ pattern dispatch benchmark") {
         status = bench_push_cycle(&push, payload, sizeof(payload));
     }
     check_equal(status, SALTS_OK);
+    BENCH_PROBE_END(&push.group, "push_round_robin", samples, BENCH_PATTERN_PEERS);
     bench_group_close(&push.group);
 
     status = bench_router_open(&router);
     check_equal(status, SALTS_OK);
     check_equal(bench_router_exchange(&router, payload, sizeof(payload)),
                 SALTS_OK);
+    BENCH_PROBE_BEGIN(&router.group);
     benchmark_io("ROUTER identity one-way", samples,
                  1u, BENCH_PATTERN_PAYLOAD_BYTES) {
       if (status == SALTS_OK)
         status = bench_router_exchange(&router, payload, sizeof(payload));
     }
     check_equal(status, SALTS_OK);
+    BENCH_PROBE_END(&router.group, "router_identity", samples, 1u);
     bench_group_close(&router.group);
 
     status = bench_reqrep_open(&reqrep);
     check_equal(status, SALTS_OK);
     check_equal(bench_reqrep_roundtrip(&reqrep, payload, sizeof(payload)),
                 SALTS_OK);
+    BENCH_PROBE_BEGIN(&reqrep.group);
     benchmark_io("REQ/REP roundtrip", samples,
                  2u, 2u * BENCH_PATTERN_PAYLOAD_BYTES) {
       if (status == SALTS_OK)
         status = bench_reqrep_roundtrip(&reqrep, payload, sizeof(payload));
     }
     check_equal(status, SALTS_OK);
+    BENCH_PROBE_END(&reqrep.group, "reqrep", samples, 2u);
     bench_group_close(&reqrep.group);
 
     {
@@ -714,6 +841,7 @@ spec("FlowMQ pattern dispatch benchmark") {
       status = bench_pub_filtered_open(&filtered, filtered_payload,
                                        sizeof(filtered_payload));
       check_equal(status, SALTS_OK);
+      BENCH_PROBE_BEGIN(&filtered.group);
       benchmark_io("PUB 2-of-4 filtered fanout", samples, 2u,
                    2u * BENCH_PATTERN_PAYLOAD_BYTES) {
         if (status == SALTS_OK)
@@ -721,6 +849,7 @@ spec("FlowMQ pattern dispatch benchmark") {
               &filtered, filtered_payload, sizeof(filtered_payload));
       }
       check_equal(status, SALTS_OK);
+      BENCH_PROBE_END(&filtered.group, "pub_filtered", samples, 2u);
       bench_group_close(&filtered.group);
     }
 
@@ -732,6 +861,7 @@ spec("FlowMQ pattern dispatch benchmark") {
       check_equal(bench_router_isolation_cycle(
                       &isolation, payload, sizeof(payload)),
                   SALTS_OK);
+      BENCH_PROBE_BEGIN(&isolation.group);
       benchmark_io("ROUTER slow-peer isolation", samples, 1u,
                    BENCH_PATTERN_PAYLOAD_BYTES) {
         if (status == SALTS_OK)
@@ -739,6 +869,7 @@ spec("FlowMQ pattern dispatch benchmark") {
               &isolation, payload, sizeof(payload));
       }
       check_equal(status, SALTS_OK);
+      BENCH_PROBE_END(&isolation.group, "router_isolation", samples, 1u);
       bench_group_close(&isolation.group);
     }
 
@@ -747,11 +878,13 @@ spec("FlowMQ pattern dispatch benchmark") {
       status = bench_push_open(&poll_push);
       check_equal(status, SALTS_OK);
       check_equal(bench_pollout(poll_push.push, 1), SALTS_OK);
+      BENCH_PROBE_BEGIN(&poll_push.group);
       benchmark_ops("POLLOUT PUSH ready", poll_samples, 1u) {
         if (status == SALTS_OK)
           status = bench_pollout(poll_push.push, 1);
       }
       check_equal(status, SALTS_OK);
+      BENCH_PROBE_END(&poll_push.group, "pollout_push", poll_samples, 0u);
       bench_group_close(&poll_push.group);
     }
 
@@ -759,11 +892,13 @@ spec("FlowMQ pattern dispatch benchmark") {
       bench_pair_blocked_t blocked;
       status = bench_pair_blocked_open(&blocked, payload, sizeof(payload));
       check_equal(status, SALTS_OK);
+      BENCH_PROBE_BEGIN(&blocked.group);
       benchmark_ops("POLLOUT PAIR credit-exhausted", poll_samples, 1u) {
         if (status == SALTS_OK)
           status = bench_pollout(blocked.sender, 0);
       }
       check_equal(status, SALTS_OK);
+      BENCH_PROBE_END(&blocked.group, "pollout_blocked_pair", poll_samples, 0u);
       bench_group_close(&blocked.group);
     }
 
@@ -775,11 +910,13 @@ spec("FlowMQ pattern dispatch benchmark") {
                                           sizeof(payload));
       check_equal(status, SALTS_OK);
       check_equal(bench_pollout(reply_ready.rep, 1), SALTS_OK);
+      BENCH_PROBE_BEGIN(&reply_ready.group);
       benchmark_ops("POLLOUT REP reply-peer ready", poll_samples, 1u) {
         if (status == SALTS_OK)
           status = bench_pollout(reply_ready.rep, 1);
       }
       check_equal(status, SALTS_OK);
+      BENCH_PROBE_END(&reply_ready.group, "pollout_rep", poll_samples, 0u);
       status = bench_send_retry(&reply_ready.group, reply_ready.rep,
                                 payload, sizeof(payload), 0);
       check_equal(status, SALTS_OK);
