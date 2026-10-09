@@ -143,6 +143,16 @@ cmake_add_benchmark(
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_pattern_dispatch.c
   LIBS FlowMQ::Transport Salts::TinyTest
   FOLDER "flowmq/benchmarks/runtime")
+if(BUILD_TESTS)
+  add_test(NAME bench_flowmq_pattern_dispatch COMMAND bench_flowmq_pattern_dispatch)
+  set_tests_properties(bench_flowmq_pattern_dispatch PROPERTIES
+    LABELS "flowmq;benchmark" RUN_SERIAL TRUE TIMEOUT 600
+    ENVIRONMENT "FLOWMQ_BENCH_SMOKE=0")
+  if(WIN32)
+    set_tests_properties(bench_flowmq_pattern_dispatch PROPERTIES
+      ENVIRONMENT_MODIFICATION "${FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS}")
+  endif()
+endif()
 
 cmake_add_benchmark(
   bench_flowmq_dispatch_policy

@@ -370,6 +370,41 @@ barrier。qualification test 必须证明：
 per-message reflection lookup。现有 runtime source gate 与 installed package consumer 继续
 分别约束这两个 production boundary。
 
+## Pattern 路由与事务边界
+
+Core 的不可变 `flowmq_pattern_desc_t` 分别描述 routing、subscription、mute 和 FSM。
+当前 runtime 的回复目的地选择与 `POLLOUT` 仍通过 `fsm_class == REP` 判定；descriptor
+也提供 `routing_class == REPLY_PEER`。现有 schema 中二者对应同一种 socket，因此尚无
+行为冲突，但路由判定与事务规则仍有耦合，copy/multipart/retained 的 peer 扫描也有重复。
+
+2026-10-10 评估了私有只读选择函数 `flowmq_socket_select_round_robin_peer()`，并将回复
+目的地判定改为读取 routing class。**该候选因性能回退尚未排除，未纳入生产实现**；实验
+快照、测量数据与决定见 [pattern 路由评估](FLOWMQ_PATTERN_ROUTING.md)。后续拆分必须保留
+以下 round-robin 路径的已有接纳语义，不能用同一种“选择可写 peer”策略替换所有路径：
+
+| 路径 | 选择条件 | 后续提交边界 |
+| --- | --- | --- |
+| multipart 首帧 | 第一个 ready peer，可尚无完整消息 credit | 首帧 staging 成功后固定 generation；final 才检查整条消息 |
+| 单帧 copy | ready 且 credit/HWM/有界队列可接纳 | 调用点保留原 cursor 更新时机，编码后执行 admission |
+| 单帧 retained | copy 条件加空闲 write lane、空 outbound ring | 准备 retained frame 后执行即时 admission |
+
+没有 ready peer 或 retained lane 暂忙时返回 `SALTS_EBUSY`；存在 ready 但容量不足的
+候选时，扫描失败仍优先返回 `SALTS_ENOBUFS`。已固定的 multipart、回复 peer 和 ROUTER
+identity route 不参加重新负载均衡，继续校验原 generation。PUB/XPUB 保留订阅快照与
+final fanout 接纳规则。队列、credit 和 payload 的权威所有者仍是当前 socket/peer，所有
+步骤由同一个 progress owner 串行执行。
+
+CNet 负责连接与异步 IO；Acceptor–Connector/Proactor 对应的传输职责不会替代这些消息
+pattern 规则。拆分候选使用静态策略分类，扫描为 O(peer capacity)、额外空间 O(1)，不增加
+逐消息函数指针表或另一套可变路由状态，不涉及公开 API、wire format 或配置迁移。
+
+行为证据来自 `test_flowmq_socket` / `test_flowmq_socket_pool`：新增 PUSH 双 peer 场景覆盖
+copy/retained 单帧绕过耗尽 credit 的 peer、multipart final 拒绝后保持目的地、credit 恢复后的
+完整重试和 part 边界；既有测试覆盖 REP slot generation、ROUTER 慢 peer 隔离及 PUB 快照。
+`bench_flowmq_pattern_dispatch` 已注册到 CTest benchmark profile，可验证 PUB、PUSH、ROUTER、
+REQ/REP 与三种 POLLOUT 场景。它逐样本驱动网络并校验 payload，测得时间包含 progress 和
+接收，不是纯路由分支成本，也不能与 lane/batch 吞吐数据直接比较。
+
 ## Send 数据路径
 
 ```text

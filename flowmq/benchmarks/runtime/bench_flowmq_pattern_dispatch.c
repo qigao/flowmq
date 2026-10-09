@@ -10,16 +10,19 @@
 enum {
   BENCH_PATTERN_PAYLOAD_BYTES = 64u,
   BENCH_PATTERN_SAMPLES = 20000u,
+  /* Readiness is sub-microsecond in some cases; 20k samples cover only about
+   * 10ms. Use a longer window to reduce short scheduler/frequency transients. */
+  BENCH_PATTERN_POLLOUT_SAMPLES = 1000000u,
   BENCH_PATTERN_PEERS = 4u,
   BENCH_PATTERN_PROGRESS_LIMIT = 100000u,
   BENCH_PATTERN_PROGRESS_TIMEOUT_MS = 250u
 };
 
-static size_t bench_pattern_samples(void) {
+static size_t bench_pattern_samples(size_t full_samples) {
   const char *smoke = getenv("FLOWMQ_BENCH_SMOKE");
   return smoke != NULL && strcmp(smoke, "0") != 0
              ? (size_t)1u
-             : (size_t)BENCH_PATTERN_SAMPLES;
+             : full_samples;
 }
 
 typedef struct bench_socket_group_s {
@@ -650,7 +653,8 @@ spec("FlowMQ pattern dispatch benchmark") {
     bench_push_t push;
     bench_router_t router;
     bench_reqrep_t reqrep;
-    const size_t samples = bench_pattern_samples();
+    const size_t samples = bench_pattern_samples(BENCH_PATTERN_SAMPLES);
+    const size_t poll_samples = bench_pattern_samples(BENCH_PATTERN_POLLOUT_SAMPLES);
     int status;
 
     memset(payload, 0x5a, sizeof(payload));
@@ -743,7 +747,7 @@ spec("FlowMQ pattern dispatch benchmark") {
       status = bench_push_open(&poll_push);
       check_equal(status, SALTS_OK);
       check_equal(bench_pollout(poll_push.push, 1), SALTS_OK);
-      benchmark_ops("POLLOUT PUSH ready", samples, 1u) {
+      benchmark_ops("POLLOUT PUSH ready", poll_samples, 1u) {
         if (status == SALTS_OK)
           status = bench_pollout(poll_push.push, 1);
       }
@@ -755,7 +759,7 @@ spec("FlowMQ pattern dispatch benchmark") {
       bench_pair_blocked_t blocked;
       status = bench_pair_blocked_open(&blocked, payload, sizeof(payload));
       check_equal(status, SALTS_OK);
-      benchmark_ops("POLLOUT PAIR credit-exhausted", samples, 1u) {
+      benchmark_ops("POLLOUT PAIR credit-exhausted", poll_samples, 1u) {
         if (status == SALTS_OK)
           status = bench_pollout(blocked.sender, 0);
       }
@@ -771,7 +775,7 @@ spec("FlowMQ pattern dispatch benchmark") {
                                           sizeof(payload));
       check_equal(status, SALTS_OK);
       check_equal(bench_pollout(reply_ready.rep, 1), SALTS_OK);
-      benchmark_ops("POLLOUT REP reply-peer ready", samples, 1u) {
+      benchmark_ops("POLLOUT REP reply-peer ready", poll_samples, 1u) {
         if (status == SALTS_OK)
           status = bench_pollout(reply_ready.rep, 1);
       }

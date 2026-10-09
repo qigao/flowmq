@@ -5089,6 +5089,120 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
+  it("skips exhausted PUSH peers for single parts but preserves a multipart pin") {
+    static const char full_window[] = "1234";
+    char endpoint[128] = {0};
+    char received[8] = {0};
+    size_t endpoint_size = 0u;
+    size_t received_size = 0u;
+    size_t receive_window = sizeof(full_window) - 1u;
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *push = flowmq_socket(ctx, FLOWMQ_PUSH);
+    flowmq_socket_t *slow = flowmq_socket(ctx, FLOWMQ_PULL);
+    flowmq_socket_t *healthy = flowmq_socket(ctx, FLOWMQ_PULL);
+    int status;
+
+    check_not_null(ctx);
+    check_not_null(push);
+    check_not_null(slow);
+    check_not_null(healthy);
+    check_equal(flowmq_setsockopt(slow, FLOWMQ_RCVHWM_BYTES,
+                                  &receive_window, sizeof(receive_window)), SALTS_OK);
+    check_equal(flowmq_setsockopt(healthy, FLOWMQ_RCVHWM_BYTES,
+                                  &receive_window, sizeof(receive_window)), SALTS_OK);
+    check_equal(flowmq_bind(push, "tcp://127.0.0.1:0"), SALTS_OK);
+    check_equal(flowmq_last_endpoint(push, endpoint, sizeof(endpoint),
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(slow, endpoint), SALTS_OK);
+    status = SALTS_EBUSY;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+      check_equal(progress_pair(push, slow), SALTS_OK);
+      status = flowmq_send(push, full_window, sizeof(full_window) - 1u,
+                           FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+
+    /* Join the second peer after the first consumes its entire credit window.
+     * Receipt is deliberately deferred so transport completion cannot replenish
+     * that credit. Both single-part surfaces must still reach the healthy peer. */
+    check_equal(flowmq_connect(healthy, endpoint), SALTS_OK);
+    status = SALTS_ENOBUFS;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                        (status == SALTS_EBUSY || status == SALTS_ENOBUFS); ++i) {
+      check_equal(progress_three(push, slow, healthy), SALTS_OK);
+      status = flowmq_send(push, "a", 1u, FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    {
+      static char payload[] = "b";
+      mem_buffer_t *buffer = mem_wrap_external(payload, 1u, NULL, NULL);
+      mem_slice_t slice;
+      check_not_null(buffer);
+      slice = mem_slice(buffer, 0u, 1u);
+      check_not_null(slice.buffer);
+      status = SALTS_EBUSY;
+      for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                          (status == SALTS_EBUSY || status == SALTS_ENOBUFS); ++i) {
+        check_equal(progress_three(push, slow, healthy), SALTS_OK);
+        status = flowmq_send_slice(push, &slice, FLOWMQ_DONTWAIT);
+      }
+      check_equal(status, SALTS_OK);
+      mem_slice_release(&slice);
+      mem_buffer_release(buffer);
+    }
+
+    check_equal(flowmq_send(push, "x", 1u, FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), SALTS_OK);
+    check_equal(flowmq_send(push, "y", 1u, FLOWMQ_DONTWAIT), SALTS_ENOBUFS);
+    for (size_t part = 0u; part < 2u; ++part) {
+      status = SALTS_EBUSY;
+      for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+        check_equal(progress_three(push, slow, healthy), SALTS_OK);
+        status = flowmq_recv(healthy, received, sizeof(received), &received_size,
+                             FLOWMQ_DONTWAIT);
+      }
+      check_equal(status, SALTS_OK);
+      check_equal(received_size, 1u);
+      check_equal(received[0], part == 0u ? 'a' : 'b');
+    }
+    check_equal(flowmq_recv(healthy, received, sizeof(received), &received_size,
+                            FLOWMQ_DONTWAIT), SALTS_EBUSY);
+    check_equal(flowmq_recv(slow, received, sizeof(received), &received_size,
+                            FLOWMQ_DONTWAIT), SALTS_OK);
+    check_equal(received_size, sizeof(full_window) - 1u);
+    check_equal(memcmp(received, full_window, received_size), 0);
+
+    /* Replenishing the original peer admits exactly the staged x/y message. */
+    status = SALTS_ENOBUFS;
+    for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_ENOBUFS; ++i) {
+      check_equal(progress_three(push, slow, healthy), SALTS_OK);
+      status = flowmq_send(push, "y", 1u, FLOWMQ_DONTWAIT);
+    }
+    check_equal(status, SALTS_OK);
+    for (size_t part = 0u; part < 2u; ++part) {
+      int more = -1;
+      size_t option_size = sizeof(more);
+      status = SALTS_EBUSY;
+      for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+        check_equal(progress_three(push, slow, healthy), SALTS_OK);
+        status = flowmq_recv(slow, received, sizeof(received), &received_size,
+                             FLOWMQ_DONTWAIT);
+      }
+      check_equal(status, SALTS_OK);
+      check_equal(received_size, 1u);
+      check_equal(received[0], part == 0u ? 'x' : 'y');
+      check_equal(flowmq_getsockopt(slow, FLOWMQ_RCVMORE, &more, &option_size), SALTS_OK);
+      check_equal(more, part == 0u ? 1 : 0);
+    }
+    check_equal(flowmq_recv(healthy, received, sizeof(received), &received_size,
+                            FLOWMQ_DONTWAIT), SALTS_EBUSY);
+    check_equal(flowmq_recv(slow, received, sizeof(received), &received_size,
+                            FLOWMQ_DONTWAIT), SALTS_EBUSY);
+    check_equal(flowmq_close(push), SALTS_OK);
+    check_equal(flowmq_close(slow), SALTS_OK);
+    check_equal(flowmq_close(healthy), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+  }
+
   it("stops at negotiated receive credit and resumes after application consumption") {
     static const char full_window[] = "1234";
     static const char next[] = "x";
