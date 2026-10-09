@@ -153,7 +153,7 @@ jobs:
     env:
       FLOWMQ_RID: ${{ matrix.rid }}
       FLOWMQ_TRIPLET: ${{ matrix.triplet }}
-      QIGAO_NUGET_PACKAGES: ${{ github.workspace }}/stage/nuget
+      QIGAO_NUGET_PACKAGES: ${{ github.workspace }}/build/nuget-packages
       CCACHE_DIR: ${{ github.workspace }}/build/ccache
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_COMPILERCHECK: content
@@ -174,7 +174,7 @@ jobs:
       - name: Restore resolved NuGet package payloads
         uses: actions/cache@v4
         with:
-          path: stage/nuget
+          path: build/nuget-packages
           key: flowmq-nuget-v1-${{ matrix.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             flowmq-nuget-v1-${{ matrix.os }}-${{ runner.arch }}-
@@ -329,18 +329,22 @@ jobs:
         run: |
           set -euo pipefail
           config="$RUNNER_TEMP/flowmq-android-nuget.config"
-          packages="$GITHUB_WORKSPACE/stage/nuget"
+          packages="$GITHUB_WORKSPACE/build/nuget-packages"
           printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
           dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json \
             --name github --username qigao --password "$GITHUB_TOKEN" \
             --store-password-in-clear-text --configfile "$config"
           dotnet restore packaging/nuget/FlowMQ.Native.csproj --configfile "$config" --packages "$packages" --no-cache --force-evaluate
-          salts_versions=("$packages/salts.native"/*)
-          salts_utils_versions=("$packages/saltsutils.native"/*)
-          test "${#salts_versions[@]}" -eq 1
-          test "${#salts_utils_versions[@]}" -eq 1
-          salts_pkg="${salts_versions[0]}"
-          salts_utils_pkg="${salts_utils_versions[0]}"
+          # Restored cache may contain older payloads; use fresh NuGet assets,
+          # never directory order, to select exactly the current producer SDK.
+          assets="$GITHUB_WORKSPACE/packaging/nuget/obj/project.assets.json"
+          test -f "$assets"
+          mapfile -t salts_paths < <(jq -r '.libraries | to_entries[] | select((.key | ascii_downcase) | startswith("salts.native/")) | .value.path' "$assets")
+          mapfile -t utils_paths < <(jq -r '.libraries | to_entries[] | select((.key | ascii_downcase) | startswith("saltsutils.native/")) | .value.path' "$assets")
+          test "${#salts_paths[@]}" -eq 1
+          test "${#utils_paths[@]}" -eq 1
+          salts_pkg="$packages/${salts_paths[0]}"
+          salts_utils_pkg="$packages/${utils_paths[0]}"
           test -d "$salts_pkg"
           test -d "$salts_utils_pkg"
           echo "SALTS_ROOT=$salts_pkg/sdk/android-arm64-v8a" >> "$GITHUB_ENV"
