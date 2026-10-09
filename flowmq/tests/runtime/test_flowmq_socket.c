@@ -83,6 +83,239 @@ static void check_retained_multipart(flowmq_socket_t *sender, flowmq_socket_t *r
 }
 
 spec("flowmq_socket lifecycle and pattern surface") {
+  group("protocol recovery across transport generations") {
+    static flowmq_ctx_t *ctx;
+    static flowmq_socket_t *client;
+    static flowmq_socket_t *server;
+    static char *ca_path;
+    static char *cert_path;
+    static char *key_path;
+
+    before_each() {
+      ctx = flowmq_ctx_new();
+      client = NULL;
+      server = NULL;
+      ca_path = NULL;
+      cert_path = NULL;
+      key_path = NULL;
+      check_not_null(ctx);
+    }
+
+    after_each() {
+      if (client != NULL) check_equal(flowmq_close(client), SALTS_OK);
+      if (server != NULL) check_equal(flowmq_close(server), SALTS_OK);
+      if (ctx != NULL) check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+      if (ca_path != NULL) {
+        check_equal(tt_remove_file(ca_path), 0);
+        free(ca_path);
+      }
+      if (cert_path != NULL) {
+        check_equal(tt_remove_file(cert_path), 0);
+        free(cert_path);
+      }
+      if (key_path != NULL) {
+        check_equal(tt_remove_file(key_path), 0);
+        free(key_path);
+      }
+    }
+
+    it("preserves capped backoff when a connecting TLS ROUTER rejects HELLO identity") {
+      static const char identity[] = "authorized-peer";
+      static const char payload[] = "new-authorized-session";
+      flowmq_tls_identity_binding_t binding = {
+          sizeof(binding), "sha256:" FLOWMQ_TLS_TEST_CERTIFICATE_SHA256,
+          identity};
+      flowmq_tls_identity_map_config_t policy =
+          FLOWMQ_TLS_IDENTITY_MAP_CONFIG_INIT;
+      char endpoint[128] = {0};
+      char received[64] = {0};
+      size_t endpoint_size = 0u;
+      size_t received_size = 0u;
+      uint64_t delay_ms = 0u;
+      uint64_t previous_delay_ms = 0u;
+      uint64_t rejections = 0u;
+      size_t option_size = sizeof(rejections);
+      int reconnect_ms = 2;
+      int reconnect_max_ms = 8;
+      int require_certificate = 1;
+      int status = SALTS_EBUSY;
+
+      ca_path = tt_make_temp_file("flowmq-recovery-ca", ".pem");
+      cert_path = tt_make_temp_file("flowmq-recovery-cert", ".pem");
+      key_path = tt_make_temp_file("flowmq-recovery-key", ".pem");
+      check_not_null(ca_path);
+      check_not_null(cert_path);
+      check_not_null(key_path);
+      check_equal(tt_write_file(ca_path, FLOWMQ_TLS_TEST_ROOT_CA,
+                               sizeof(FLOWMQ_TLS_TEST_ROOT_CA) - 1u), 0);
+      check_equal(tt_write_file(cert_path, FLOWMQ_TLS_TEST_CERTIFICATE,
+                               sizeof(FLOWMQ_TLS_TEST_CERTIFICATE) - 1u), 0);
+      check_equal(tt_write_file(key_path, FLOWMQ_TLS_TEST_KEY,
+                               sizeof(FLOWMQ_TLS_TEST_KEY) - 1u), 0);
+      client = flowmq_socket(ctx, FLOWMQ_ROUTER);
+      check_not_null(client);
+      policy.bindings = &binding;
+      policy.binding_count = 1u;
+      check_equal(flowmq_setsockopt(client, FLOWMQ_TLS_IDENTITY_POLICY,
+                                   &policy, sizeof(policy)), SALTS_OK);
+      check_equal(flowmq_setsockopt(client, FLOWMQ_RECONNECT_IVL,
+                                   &reconnect_ms, sizeof(reconnect_ms)), SALTS_OK);
+      check_equal(flowmq_setsockopt(client, FLOWMQ_RECONNECT_IVL_MAX,
+                                   &reconnect_max_ms, sizeof(reconnect_max_ms)),
+                  SALTS_OK);
+      check_equal(flowmq_setsockopt(client, FLOWMQ_TLS_CA_FILE, ca_path,
+                                   strlen(ca_path)), SALTS_OK);
+      check_equal(flowmq_setsockopt(client, FLOWMQ_TLS_CERT_FILE, cert_path,
+                                   strlen(cert_path)), SALTS_OK);
+      check_equal(flowmq_setsockopt(client, FLOWMQ_TLS_KEY_FILE, key_path,
+                                   strlen(key_path)), SALTS_OK);
+      check_equal(flowmq_setsockopt(client, FLOWMQ_TLS_SERVER_NAME,
+                                   "localhost", sizeof("localhost") - 1u),
+                  SALTS_OK);
+
+      /* The connecting socket owns the rejection and retry state. A server
+       * rejecting its client cannot prove that the client saw a rejection
+       * before completing its own independent HELLO/SETTINGS exchange. */
+      for (size_t phase = 0u; phase < 2u; ++phase) {
+        const char *peer_identity = phase == 0u ? "forged-peer" : identity;
+        server = flowmq_socket(ctx, FLOWMQ_DEALER);
+        check_not_null(server);
+        check_equal(flowmq_setsockopt(server, FLOWMQ_IDENTITY, peer_identity,
+                                     strlen(peer_identity)), SALTS_OK);
+        check_equal(flowmq_setsockopt(server, FLOWMQ_TLS_CA_FILE, ca_path,
+                                     strlen(ca_path)), SALTS_OK);
+        check_equal(flowmq_setsockopt(server, FLOWMQ_TLS_CERT_FILE, cert_path,
+                                     strlen(cert_path)), SALTS_OK);
+        check_equal(flowmq_setsockopt(server, FLOWMQ_TLS_KEY_FILE, key_path,
+                                     strlen(key_path)), SALTS_OK);
+        check_equal(flowmq_setsockopt(server, FLOWMQ_TLS_REQUIRE_CLIENT_CERTIFICATE,
+                                     &require_certificate,
+                                     sizeof(require_certificate)), SALTS_OK);
+        check_equal(flowmq_bind(server, phase == 0u ? "tls://127.0.0.1:0" : endpoint),
+                    SALTS_OK);
+        if (phase != 0u) break;
+        check_equal(flowmq_last_endpoint(server, endpoint, sizeof(endpoint),
+                                         &endpoint_size), SALTS_OK);
+        check_equal(flowmq_connect(client, endpoint), SALTS_OK);
+        for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                           (rejections < 4u || delay_ms != 8u); ++i) {
+          check_equal(progress_pair(client, server), SALTS_OK);
+          check_equal(flowmq_socket_internal_endpoint_backoff(client, 0u,
+                                                              &delay_ms), SALTS_OK);
+          check_true(delay_ms >= previous_delay_ms);
+          check_true(delay_ms <= 8u);
+          previous_delay_ms = delay_ms;
+          option_size = sizeof(rejections);
+          check_equal(flowmq_getsockopt(client, FLOWMQ_TLS_IDENTITY_REJECTIONS,
+                                       &rejections, &option_size), SALTS_OK);
+          check_equal(flowmq_recv(client, received, sizeof(received),
+                                 &received_size, FLOWMQ_DONTWAIT), SALTS_EBUSY);
+        }
+        check_true(rejections >= 4u);
+        check_equal(delay_ms, UINT64_C(8));
+        check_equal(flowmq_close(server), SALTS_OK);
+        server = NULL;
+      }
+
+      /* Only the authorized replacement can reset the same endpoint's
+       * backoff. Its DATA must arrive after a fresh FMQ/6 handshake. */
+      for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+        check_equal(progress_pair(client, server), SALTS_OK);
+        status = flowmq_send(server, payload, sizeof(payload) - 1u, FLOWMQ_DONTWAIT);
+      }
+      check_equal(status, SALTS_OK);
+      status = SALTS_EBUSY;
+      for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+        check_equal(progress_pair(client, server), SALTS_OK);
+        status = flowmq_recv(client, received, sizeof(received), &received_size,
+                             FLOWMQ_DONTWAIT);
+      }
+      check_equal(status, SALTS_OK);
+      check_equal(received_size, sizeof(identity) - 1u);
+      check_equal(received, identity, received_size);
+      check_equal(flowmq_recv(client, received, sizeof(received), &received_size,
+                             FLOWMQ_DONTWAIT), SALTS_OK);
+      check_equal(received_size, sizeof(payload) - 1u);
+      check_equal(received, payload, received_size);
+      check_equal(flowmq_socket_internal_endpoint_backoff(client, 0u, &delay_ms),
+                  SALTS_OK);
+      check_equal(delay_ms, UINT64_C(0));
+    }
+
+    it("cancels old multipart DATA instead of replaying it after reconnect READY") {
+      static const char old_part[] = "old-incomplete-message";
+      static const char fresh[] = "fresh-message";
+      char endpoint[128] = {0};
+      char received[64] = {0};
+      size_t endpoint_size = 0u;
+      size_t received_size = 0u;
+      uint64_t delay_ms = 0u;
+      short revents = 0;
+      int reconnect_ms = 2;
+      int status = SALTS_EBUSY;
+
+      client = flowmq_socket(ctx, FLOWMQ_PAIR);
+      server = flowmq_socket(ctx, FLOWMQ_PAIR);
+      check_not_null(client);
+      check_not_null(server);
+      check_equal(flowmq_setsockopt(client, FLOWMQ_RECONNECT_IVL,
+                                   &reconnect_ms, sizeof(reconnect_ms)), SALTS_OK);
+      check_equal(flowmq_bind(server, "tcp://127.0.0.1:0"), SALTS_OK);
+      check_equal(flowmq_last_endpoint(server, endpoint, sizeof(endpoint),
+                                       &endpoint_size), SALTS_OK);
+      check_equal(flowmq_connect(client, endpoint), SALTS_OK);
+      for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+        check_equal(progress_pair(client, server), SALTS_OK);
+        status = flowmq_send(client, old_part, sizeof(old_part) - 1u,
+                             FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE);
+      }
+      check_equal(status, SALTS_OK);
+      check_equal(flowmq_close(server), SALTS_OK);
+      server = NULL;
+
+      /* Observe actual disconnect before replacing the listener. The retry
+       * state, rather than elapsed wall time, proves the old peer retired. */
+      for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && delay_ms == 0u; ++i) {
+        flowmq_pollitem_t item = {.socket = client};
+        size_t ready = 0u;
+        check_equal(flowmq_poll(&item, 1u, 1u, &ready), SALTS_OK);
+        check_equal(flowmq_socket_internal_endpoint_backoff(client, 0u, &delay_ms),
+                    SALTS_OK);
+      }
+      check_not_equal(delay_ms, UINT64_C(0));
+      server = flowmq_socket(ctx, FLOWMQ_PAIR);
+      check_not_null(server);
+      check_equal(flowmq_bind(server, endpoint), SALTS_OK);
+      for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
+                         (revents & FLOWMQ_POLLOUT) == 0; ++i) {
+        check_equal(progress_pair(client, server), SALTS_OK);
+        check_equal(flowmq_socket_internal_poll_revents(client, FLOWMQ_POLLOUT,
+                                                       &revents), SALTS_OK);
+      }
+      check_true((revents & FLOWMQ_POLLOUT) != 0);
+      check_equal(flowmq_socket_internal_endpoint_backoff(client, 0u, &delay_ms),
+                  SALTS_OK);
+      check_equal(delay_ms, UINT64_C(0));
+      check_equal(flowmq_recv(server, received, sizeof(received), &received_size,
+                             FLOWMQ_DONTWAIT), SALTS_EBUSY);
+      check_equal(flowmq_send(client, "old-tail", sizeof("old-tail") - 1u,
+                             FLOWMQ_DONTWAIT), SALTS_ENOTCONN);
+      check_equal(flowmq_send(client, fresh, sizeof(fresh) - 1u, FLOWMQ_DONTWAIT),
+                  SALTS_OK);
+      status = SALTS_EBUSY;
+      for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT && status == SALTS_EBUSY; ++i) {
+        check_equal(progress_pair(client, server), SALTS_OK);
+        status = flowmq_recv(server, received, sizeof(received), &received_size,
+                             FLOWMQ_DONTWAIT);
+      }
+      check_equal(status, SALTS_OK);
+      check_equal(received_size, sizeof(fresh) - 1u);
+      check_equal(received, fresh, received_size);
+      check_equal(flowmq_recv(server, received, sizeof(received), &received_size,
+                             FLOWMQ_DONTWAIT), SALTS_EBUSY);
+    }
+  }
+
   it("creates every classic ZeroMQ socket type and keeps context ownership explicit") {
     static const int types[] = {
         FLOWMQ_PAIR, FLOWMQ_PUB,    FLOWMQ_SUB,    FLOWMQ_REQ,

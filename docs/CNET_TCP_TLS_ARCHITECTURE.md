@@ -67,6 +67,24 @@ socket owner lane，pattern FSM 与网络 peer 使用同一事实源。
 progress，并以 1ms 有界间隔重复检查，因而具备统一 timeout 语义。CNet 后续若提供可组合
 readiness/wait-set，可替换该等待策略以降低空闲唤醒延迟，但不得用隐藏线程掩盖这一边界。
 
+### 协议 READY 与重连退避
+
+连接 endpoint 拥有退避状态，peer generation 拥有一次性的 READY 标记。
+TCP/TLS `CONNECTED` 只表示 transport 建连成功；只有本地 HELLO/SETTINGS 的发送完成、
+远端 HELLO/SETTINGS 的接收与校验全部成功，才重置该 endpoint 的退避。
+TX-first 与 RX-first 均经过同一 READY gate。错误 pattern 或 TLS certificate/HELLO
+identity 校验失败不能重置退避，也不能使 DATA 获得发送资格。
+
+READY 是本地协议状态，不是对端应用执行确认。TLS 身份拒绝的重连测试由连接方
+ROUTER 执行 identity policy，并观测它自己的 endpoint 退避；不能从被服务端拒绝的
+客户端推断远端授权已成功或尚未成功。现有 FMQ/6 没有提供这样的远端确认。
+
+重连不重放旧 DATA。旧 peer 关闭时取消绑定到它的未完成 multipart，释放暂存内容，
+下一次发送返回 `SALTS_ENOTCONN`；新 READY 会话仅接受随后显式提交的新消息。
+XSUB 的期望订阅重新同步属于控制面恢复，与 DATA replay 分开。
+这些边界由 `test_flowmq_peer_state` 的握手排列测试及 `test_flowmq_socket` 的真实
+TCP 错误 HELLO、TLS 身份拒绝、multipart 断连和 XSUB 重连测试覆盖（#118 / #120）。
+
 ## 发送内存与所有权
 
 `flowmq_send` 仍保持 borrowed-input/copy 契约：FMQ/6 协议头写入 socket 自有的
