@@ -18,7 +18,8 @@ $packages = if ($env:QIGAO_NUGET_PACKAGES) {
 $project = Join-Path $restoreRoot 'flowmq-native-sdk-restore.csproj'
 New-Item -ItemType Directory -Path $restoreRoot -Force | Out-Null
 
-# Follow SaltsUtils: resolve floating versions anew; assets own the selected paths.
+# Resolve the requested Salts 2.3.0 / SaltsUtils 4.3.0 prerelease or stable
+# on every restore. Fresh project.assets.json owns the selected package paths.
 @'
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
@@ -26,15 +27,15 @@ New-Item -ItemType Directory -Path $restoreRoot -Force | Out-Null
     <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Salts.Native" Version="*" Condition="'$(UseSaltsCandidate)' != 'true'" />
-    <PackageReference Include="SaltsUtils.Native" Version="*" />
+    <PackageReference Include="Salts.Native" Version="2.3.0-*" Condition="'$(UseSaltsCandidate)' != 'true'" />
+    <PackageReference Include="SaltsUtils.Native" Version="4.3.0-*" />
   </ItemGroup>
 </Project>
 '@ | Set-Content -LiteralPath $project -Encoding utf8NoBOM
 
 $useCandidate = -not [string]::IsNullOrWhiteSpace($env:SALTS_CANDIDATE_ROOT)
 dotnet restore $project --packages $packages --configfile (Join-Path $repositoryRoot 'cmake/native-sdk.nuget.config') --no-cache --force-evaluate "-p:UseSaltsCandidate=$($useCandidate.ToString().ToLowerInvariant())"
-if ($LASTEXITCODE -ne 0) { throw 'Failed to restore the latest Salts and SaltsUtils SDKs' }
+if ($LASTEXITCODE -ne 0) { throw 'Failed to restore Salts 2.3.0-* and SaltsUtils 4.3.0-* SDKs' }
 $assets = Get-Content -LiteralPath (Join-Path $restoreRoot 'obj/project.assets.json') -Raw | ConvertFrom-Json -AsHashtable
 
 $sdks = @(
