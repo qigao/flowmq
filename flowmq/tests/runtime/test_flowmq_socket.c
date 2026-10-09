@@ -2269,6 +2269,89 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
+  it("retains capped reconnect backoff across real incompatible HELLO sessions") {
+    static const char payload[] = "only-after-protocol-ready";
+    char endpoint[128] = {0};
+    char received[64] = {0};
+    size_t endpoint_size = 0u;
+    size_t received_size = 0u;
+    uint64_t delay_ms = UINT64_MAX;
+    uint64_t previous_delay_ms = 0u;
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *server = flowmq_socket(ctx, FLOWMQ_ROUTER);
+    flowmq_socket_t *client = flowmq_socket(ctx, FLOWMQ_PAIR);
+    int reconnect_ms = 2;
+    int reconnect_max_ms = 8;
+    int sent = 0;
+    int received_message = 0;
+
+    check_not_null(ctx);
+    check_not_null(server);
+    check_not_null(client);
+    check_equal(flowmq_setsockopt(client, FLOWMQ_RECONNECT_IVL,
+                                  &reconnect_ms, sizeof(reconnect_ms)),
+                SALTS_OK);
+    check_equal(flowmq_setsockopt(client, FLOWMQ_RECONNECT_IVL_MAX,
+                                  &reconnect_max_ms, sizeof(reconnect_max_ms)),
+                SALTS_OK);
+    check_equal(flowmq_bind(server, "tcp://127.0.0.1:0"), SALTS_OK);
+    check_equal(flowmq_last_endpoint(server, endpoint, sizeof(endpoint),
+                                     &endpoint_size), SALTS_OK);
+    /* No configured remote endpoint means no meaningful retry state. */
+    check_equal(flowmq_socket_internal_endpoint_backoff(client, 0u,
+                                                        &delay_ms),
+                SALTS_EINVAL);
+    check_equal(flowmq_connect(client, endpoint), SALTS_OK);
+    check_equal(flowmq_socket_internal_endpoint_backoff(client, 0u,
+                                                        &delay_ms),
+                SALTS_OK);
+    check_equal(delay_ms, UINT64_C(0));
+
+    /* The ROUTER's FMQ/6 HELLO is incompatible with a PAIR's handshake.
+     * The TCP link can connect, but no session may reset attempt budget. */
+    for (size_t attempt = 0u;
+         attempt < FLOWMQ_TEST_PROGRESS_LIMIT && delay_ms < 8u; ++attempt) {
+      check_equal(progress_pair(client, server), SALTS_OK);
+      check_equal(flowmq_socket_internal_endpoint_backoff(client, 0u,
+                                                          &delay_ms),
+                  SALTS_OK);
+      if (previous_delay_ms != 0u)
+        check_true(delay_ms >= previous_delay_ms);
+      previous_delay_ms = delay_ms;
+    }
+    check_equal(delay_ms, UINT64_C(8));
+    check_equal(flowmq_send(client, payload, sizeof(payload) - 1u,
+                            FLOWMQ_DONTWAIT), SALTS_EBUSY);
+
+    /* Swap the peer at the same physical endpoint: only an actual accepted
+     * PAIR HELLO+SETTINGS permits DATA and resets the retry progression. */
+    check_equal(flowmq_close(server), SALTS_OK);
+    server = flowmq_socket(ctx, FLOWMQ_PAIR);
+    check_not_null(server);
+    check_equal(flowmq_bind(server, endpoint), SALTS_OK);
+    for (size_t attempt = 0u;
+         attempt < FLOWMQ_TEST_PROGRESS_LIMIT && !received_message; ++attempt) {
+      check_equal(progress_pair(client, server), SALTS_OK);
+      if (!sent && flowmq_send(client, payload, sizeof(payload) - 1u,
+                                FLOWMQ_DONTWAIT) == SALTS_OK)
+        sent = 1;
+      if (sent && flowmq_recv(server, received, sizeof(received),
+                              &received_size, FLOWMQ_DONTWAIT) == SALTS_OK)
+        received_message = 1;
+    }
+    check_true(received_message);
+    check_equal(received_size, sizeof(payload) - 1u);
+    check_equal(memcmp(received, payload, received_size), 0);
+    check_equal(flowmq_socket_internal_endpoint_backoff(client, 0u,
+                                                        &delay_ms),
+                SALTS_OK);
+    check_equal(delay_ms, UINT64_C(0));
+
+    check_equal(flowmq_close(client), SALTS_OK);
+    check_equal(flowmq_close(server), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+  }
+
   it("recycles terminal peer contexts after their last queued message is consumed") {
     flowmq_ctx_t *ctx = flowmq_ctx_new();
     flowmq_socket_t *receiver = flowmq_socket(ctx, FLOWMQ_ROUTER);
