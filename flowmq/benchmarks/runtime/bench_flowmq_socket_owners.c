@@ -5,6 +5,9 @@
 #include "tinytest.h"
 #include <salts/clock.h>
 #include <salts/thread.h>
+#if defined(FLOWMQ_BENCH_WITH_ZMQ)
+#include <zmq.h>
+#endif
 
 #include <errno.h>
 #include <stdatomic.h>
@@ -52,6 +55,10 @@ typedef struct owner_tls_files_s {
 typedef struct owner_pair_s {
   flowmq_socket_t *sender;
   flowmq_socket_t *receiver;
+#if defined(FLOWMQ_BENCH_WITH_ZMQ)
+  void *zmq_sender;
+  void *zmq_receiver;
+#endif
   uint64_t sequence;
   uint64_t identity;
   uint64_t burst_started_ns;
@@ -68,6 +75,7 @@ typedef struct owner_run_s {
   int tls;
   int peer_pool;
   int lane_scaling;
+  int use_zmq;
   size_t payload_bytes;
   size_t rounds;
   const owner_tls_files_t *files;
@@ -78,6 +86,9 @@ typedef struct owner_worker_s {
   size_t first_pair;
   size_t pair_count;
   flowmq_ctx_t *ctx;
+#if defined(FLOWMQ_BENCH_WITH_ZMQ)
+  void *zmq_ctx;
+#endif
   owner_pair_t pairs[OWNER_LANE_PAIRS];
   unsigned char *payload;
   unsigned char *received;
@@ -122,12 +133,42 @@ static int owner_socket_option(flowmq_socket_t *socket, int option, const char *
   return flowmq_setsockopt(socket, option, value, strlen(value));
 }
 
+#if defined(FLOWMQ_BENCH_WITH_ZMQ)
+static int owner_zmq_pair_open(owner_worker_t *worker, owner_pair_t *pair) {
+  char endpoint[OWNER_ENDPOINT_BYTES];
+  size_t endpoint_size = sizeof(endpoint);
+  const int hwm = OWNER_LANE_WINDOW;
+  const int linger = 0;
+  const int timeout = OWNER_TIMEOUT_MS;
+  pair->zmq_sender = zmq_socket(worker->zmq_ctx, ZMQ_PAIR);
+  pair->zmq_receiver = zmq_socket(worker->zmq_ctx, ZMQ_PAIR);
+  if (pair->zmq_sender == NULL || pair->zmq_receiver == NULL) return SALTS_ENOMEM;
+  void *sockets[] = {pair->zmq_sender, pair->zmq_receiver};
+  for (size_t i = 0u; i < 2u; ++i) {
+    if (zmq_setsockopt(sockets[i], ZMQ_LINGER, &linger, sizeof(linger)) != 0 ||
+        zmq_setsockopt(sockets[i], ZMQ_SNDTIMEO, &timeout, sizeof(timeout)) != 0 ||
+        zmq_setsockopt(sockets[i], ZMQ_RCVTIMEO, &timeout, sizeof(timeout)) != 0 ||
+        zmq_setsockopt(sockets[i], ZMQ_SNDHWM, &hwm, sizeof(hwm)) != 0 ||
+        zmq_setsockopt(sockets[i], ZMQ_RCVHWM, &hwm, sizeof(hwm)) != 0)
+      return SALTS_EIO;
+  }
+  if (zmq_bind(pair->zmq_receiver, "tcp://127.0.0.1:*") != 0 ||
+      zmq_getsockopt(pair->zmq_receiver, ZMQ_LAST_ENDPOINT, endpoint, &endpoint_size) != 0 ||
+      zmq_connect(pair->zmq_sender, endpoint) != 0)
+    return SALTS_EIO;
+  return SALTS_OK;
+}
+#endif
+
 static int owner_pair_open(owner_worker_t *worker, owner_pair_t *pair) {
   const owner_run_t *run = worker->run;
   char endpoint[OWNER_ENDPOINT_BYTES];
   size_t endpoint_size = 0u;
   int hwm = run->lane_scaling ? OWNER_LANE_WINDOW : OWNER_WINDOW;
   int status;
+#if defined(FLOWMQ_BENCH_WITH_ZMQ)
+  if (run->use_zmq) return owner_zmq_pair_open(worker, pair);
+#endif
   pair->sender = flowmq_socket(worker->ctx, FLOWMQ_PAIR);
   pair->receiver = flowmq_socket(worker->ctx, FLOWMQ_PAIR);
   if (pair->sender == NULL || pair->receiver == NULL) return SALTS_ENOMEM;
@@ -140,6 +181,8 @@ static int owner_pair_open(owner_worker_t *worker, owner_pair_t *pair) {
     if (status != SALTS_OK) return status;
   }
   status = flowmq_setsockopt(pair->sender, FLOWMQ_SNDHWM, &hwm, sizeof(hwm));
+  if (status == SALTS_OK && run->lane_scaling)
+    status = flowmq_setsockopt(pair->receiver, FLOWMQ_RCVHWM, &hwm, sizeof(hwm));
   if (status == SALTS_OK && run->tls) {
     status = owner_socket_option(pair->sender, FLOWMQ_TLS_CA_FILE, run->files->ca);
     if (status == SALTS_OK)
@@ -237,7 +280,14 @@ static int owner_lane_round(owner_worker_t *worker, int measured) {
       owner_payload(worker, pair, pair->sequence + message);
       for (;;) {
         worker->operation = "lane send";
-        status = flowmq_send(pair->sender, worker->payload, bytes, FLOWMQ_DONTWAIT);
+#if defined(FLOWMQ_BENCH_WITH_ZMQ)
+        if (worker->run->use_zmq) {
+          const int sent = zmq_send(pair->zmq_sender, worker->payload, bytes, 0);
+          status = sent == (int)bytes ? SALTS_OK
+              : sent < 0 && zmq_errno() == EAGAIN ? SALTS_ETIMEDOUT : SALTS_EIO;
+        } else
+#endif
+          status = flowmq_send(pair->sender, worker->payload, bytes, FLOWMQ_DONTWAIT);
         if (status != SALTS_EBUSY && status != SALTS_ENOBUFS) break;
         ++worker->retries;
         status = owner_progress(worker, pair, deadline);
@@ -252,8 +302,16 @@ static int owner_lane_round(owner_worker_t *worker, int measured) {
       size_t received_size = 0u;
       for (;;) {
         worker->operation = "lane receive";
-        status = flowmq_recv(pair->receiver, worker->received, bytes,
-                             &received_size, FLOWMQ_DONTWAIT);
+#if defined(FLOWMQ_BENCH_WITH_ZMQ)
+        if (worker->run->use_zmq) {
+          const int received = zmq_recv(pair->zmq_receiver, worker->received, bytes, 0);
+          status = received >= 0 ? SALTS_OK
+              : zmq_errno() == EAGAIN ? SALTS_ETIMEDOUT : SALTS_EIO;
+          if (received >= 0) received_size = (size_t)received;
+        } else
+#endif
+          status = flowmq_recv(pair->receiver, worker->received, bytes,
+                               &received_size, FLOWMQ_DONTWAIT);
         if (status != SALTS_EBUSY) break;
         status = owner_progress(worker, pair, deadline);
         if (status != SALTS_OK) return status;
@@ -268,6 +326,8 @@ static int owner_lane_round(owner_worker_t *worker, int measured) {
       worker->latencies[worker->sample_count++] = cmeta_hrtime() - pair->burst_started_ns;
     pair->sequence += OWNER_LANE_WINDOW;
   }
+  /* libzmq's I/O thread drives transport and credit in the background. */
+  if (worker->run->use_zmq) return SALTS_OK;
   /* Return credit on every connection before the next fixed-window round. */
   status = owner_progress(worker, &worker->pairs[0], deadline);
   if (status == SALTS_OK) status = owner_progress(worker, &worker->pairs[0], deadline);
@@ -280,7 +340,17 @@ static void owner_worker_close(owner_worker_t *worker) {
       owner_error(worker->run, flowmq_close(worker->pairs[i].sender));
     if (worker->pairs[i].receiver != NULL)
       owner_error(worker->run, flowmq_close(worker->pairs[i].receiver));
+#if defined(FLOWMQ_BENCH_WITH_ZMQ)
+    if (worker->pairs[i].zmq_sender != NULL && zmq_close(worker->pairs[i].zmq_sender) != 0)
+      owner_error(worker->run, SALTS_EIO);
+    if (worker->pairs[i].zmq_receiver != NULL && zmq_close(worker->pairs[i].zmq_receiver) != 0)
+      owner_error(worker->run, SALTS_EIO);
+#endif
   }
+#if defined(FLOWMQ_BENCH_WITH_ZMQ)
+  if (worker->zmq_ctx != NULL && zmq_ctx_term(worker->zmq_ctx) != 0)
+    owner_error(worker->run, SALTS_EIO);
+#endif
   if (worker->ctx != NULL) owner_error(worker->run, flowmq_ctx_term(worker->ctx));
   free(worker->payload);
   free(worker->received);
@@ -289,6 +359,7 @@ static void owner_worker_close(owner_worker_t *worker) {
 /* Observe the real session leases outside measurement. The workload keeps
  * exactly one fully READY pipe per socket; HWM remains a separate budget. */
 static int owner_pool_check(owner_worker_t *worker, owner_pair_t *pair) {
+  if (worker->run->use_zmq) return SALTS_OK;
   flowmq_socket_t *sockets[] = {pair->sender, pair->receiver};
   for (size_t i = 0u; i < sizeof(sockets) / sizeof(sockets[0]); ++i) {
     flowmq_peer_pool_snapshot_t pool = FLOWMQ_PEER_POOL_SNAPSHOT_INIT;
@@ -308,10 +379,21 @@ static void owner_worker_entry(void *arg) {
   int status = SALTS_OK;
   worker->phase = "setup";
   worker->operation = "init";
-  worker->ctx = flowmq_ctx_new();
+#if defined(FLOWMQ_BENCH_WITH_ZMQ)
+  if (run->use_zmq) {
+    worker->zmq_ctx = zmq_ctx_new();
+    if (worker->zmq_ctx == NULL) status = SALTS_ENOMEM;
+    else if (zmq_ctx_set(worker->zmq_ctx, ZMQ_IO_THREADS, 1) != 0 ||
+             zmq_ctx_get(worker->zmq_ctx, ZMQ_IO_THREADS) != 1) status = SALTS_EIO;
+  } else
+#endif
+  {
+    worker->ctx = flowmq_ctx_new();
+    if (worker->ctx == NULL) status = SALTS_ENOMEM;
+  }
   worker->payload = malloc(run->payload_bytes);
   worker->received = malloc(run->payload_bytes);
-  if (worker->ctx == NULL || worker->payload == NULL || worker->received == NULL)
+  if (worker->payload == NULL || worker->received == NULL)
     status = SALTS_ENOMEM;
   if (status == SALTS_OK) memset(worker->payload, 0xa5, run->payload_bytes);
   for (size_t i = 0u; status == SALTS_OK && i < worker->pair_count; ++i) {
@@ -373,7 +455,7 @@ static int owner_compare_ns(const void *left, const void *right) {
 
 static int owner_run_configured(size_t owners, size_t payload_bytes, size_t rounds, int tls,
                      const owner_tls_files_t *files, int measured, size_t repetition,
-                     int peer_pool, int lane_scaling, size_t order) {
+                     int peer_pool, int lane_scaling, size_t order, int use_zmq, size_t engine_order) {
   owner_run_t run = {0};
   owner_worker_t workers[OWNER_LANE_THREADS] = {0};
   cmeta_thread_t threads[OWNER_LANE_THREADS] = {0};
@@ -385,6 +467,10 @@ static int owner_run_configured(size_t owners, size_t payload_bytes, size_t roun
   uint64_t started_ns = 0u, finished_ns = 0u;
   size_t created = 0u, samples = 0u, retries = 0u;
   int status = SALTS_OK;
+#if !defined(FLOWMQ_BENCH_WITH_ZMQ)
+  if (use_zmq) return SALTS_ENOTSUP;
+#endif
+  if (use_zmq && (!lane_scaling || tls || peer_pool)) return SALTS_EINVAL;
   if (owners == 0u || owners > OWNER_LANE_THREADS || pairs % owners != 0u ||
       rounds == 0u || rounds > OWNER_MAX_ROUNDS || payload_bytes < 2u * sizeof(uint64_t))
     return SALTS_EINVAL;
@@ -401,6 +487,7 @@ static int owner_run_configured(size_t owners, size_t payload_bytes, size_t roun
   run.tls = tls;
   run.peer_pool = peer_pool;
   run.lane_scaling = lane_scaling;
+  run.use_zmq = use_zmq;
   run.payload_bytes = payload_bytes;
   run.rounds = rounds;
   run.files = files;
@@ -453,8 +540,8 @@ measurement_finished:
   }
   status = atomic_load(&run.error);
   if (status != SALTS_OK) {
-    fprintf(stderr, "OWNER_FAILED_CASE,transport=%s,bytes=%zu,owners=%zu,repeat=%zu,pool=%d\n",
-            tls ? "tls" : "tcp", payload_bytes, owners, repetition, peer_pool);
+    fprintf(stderr, "OWNER_FAILED_CASE,transport=%s,bytes=%zu,owners=%zu,repeat=%zu,pool=%d,zmq=%d\n",
+            tls ? "tls" : "tcp", payload_bytes, owners, repetition, peer_pool, use_zmq);
     for (size_t i = 0u; i < created; ++i)
       fprintf(stderr,
               "OWNER_ERROR,owner=%zu,phase=%s,operation=%s,samples=%zu,"
@@ -481,7 +568,10 @@ measurement_finished:
         const size_t lane_p99 =
             (worker->sample_count * OWNER_PERCENTILE + OWNER_PERCENT_SCALE - 1u) /
                 OWNER_PERCENT_SCALE - 1u;
-        printf("LANE_WORKER,%zu,%zu,%zu,%zu,%zu,%zu,%zu,%llu,%llu,%llu,%zu,%zu\n",
+        if (measured == 2)
+          printf("LANE_COMPARE_WORKER,%s,%zu,", use_zmq ? "libzmq" : "flowmq", engine_order);
+        else printf("LANE_WORKER,");
+        printf("%zu,%zu,%zu,%zu,%zu,%zu,%zu,%llu,%llu,%llu,%zu,%zu\n",
                payload_bytes, owners, repetition, order, i, worker->pair_count,
                worker->sample_count * window,
                (unsigned long long)(worker->started_ns - started_ns),
@@ -491,7 +581,10 @@ measurement_finished:
       }
       if (status == SALTS_OK) {
         qsort(latencies, samples, sizeof(*latencies), owner_compare_ns);
-        printf("LANE_RESULT,%zu,%zu,%zu,%zu,%zu,%zu,%zu,%llu,%.3f,%.3f,%llu,%llu,%zu,%zu,%llu\n",
+        if (measured == 2)
+          printf("LANE_COMPARE_RESULT,%s,%zu,", use_zmq ? "libzmq" : "flowmq", engine_order);
+        else printf("LANE_RESULT,");
+        printf("%zu,%zu,%zu,%zu,%zu,%zu,%zu,%llu,%.3f,%.3f,%llu,%llu,%zu,%zu,%llu\n",
                payload_bytes, owners, repetition, order, pairs, window, messages,
                (unsigned long long)(finished_ns - started_ns), (double)messages / seconds,
                (double)(after.cpu_ns - before.cpu_ns) / messages,
@@ -518,7 +611,7 @@ static int owner_run(size_t owners, size_t payload_bytes, size_t rounds, int tls
                      const owner_tls_files_t *files, int measured, size_t repetition,
                      int peer_pool) {
   return owner_run_configured(owners, payload_bytes, rounds, tls, files, measured,
-                               repetition, peer_pool, 0, 0u);
+                               repetition, peer_pool, 0, 0u, 0, 0u);
 }
 
 static int owner_env_count(const char *name, size_t default_value, size_t maximum, size_t *out) {
@@ -613,7 +706,7 @@ spec("FlowMQ independent owners") {
     for (size_t size = 0u; size < 2u; ++size)
       for (size_t owners = 1u; owners <= OWNER_LANE_THREADS; owners *= 2u)
         check_equal(owner_run_configured(owners, sizes[size], OWNER_CHECK_ROUNDS,
-                                          0, &files, 0, 0u, 0, 1, 0u), SALTS_OK);
+                                          0, &files, 0, 0u, 0, 1, 0u, 0, 0u), SALTS_OK);
   }
 
   bench("lane scaling: fixed eight TCP connections and 128-message copy bursts") {
@@ -637,10 +730,53 @@ spec("FlowMQ independent owners") {
         for (size_t order = 0u; order < OWNER_LANE_STEPS; ++order) {
           const size_t owners = (size_t)1u << ((order + repeat) % OWNER_LANE_STEPS);
           check_equal(owner_run_configured(owners, bytes, rounds, 0, &files, 1,
-                                            repeat + 1u, 0, 1, order), SALTS_OK);
+                                            repeat + 1u, 0, 1, order, 0, 0u), SALTS_OK);
         }
       }
   }
+
+#if defined(FLOWMQ_BENCH_WITH_ZMQ)
+  it("correctness: libzmq preserves the same eight-connection lane workload") {
+    const size_t sizes[] = {64u, 1024u};
+    for (size_t size = 0u; size < 2u; ++size)
+      for (size_t owners = 1u; owners <= OWNER_LANE_THREADS; owners *= 2u)
+        check_equal(owner_run_configured(owners, sizes[size], OWNER_CHECK_ROUNDS,
+                                          0, &files, 0, 0u, 0, 1, 0u, 1, 0u), SALTS_OK);
+  }
+
+  bench("lane comparison: FlowMQ and libzmq fixed eight-connection bursts") {
+    const size_t sizes[] = {64u, 1024u};
+    size_t rounds, repeats;
+    int major, minor, patch;
+    check_equal(owner_env_count("FLOWMQ_LANE_BENCH_ROUNDS", OWNER_LANE_ROUNDS,
+                                OWNER_MAX_ROUNDS, &rounds), SALTS_OK);
+    check_equal(owner_env_count("FLOWMQ_LANE_BENCH_REPEATS", OWNER_LANE_REPEATS,
+                                OWNER_MAX_REPEATS, &repeats), SALTS_OK);
+    zmq_version(&major, &minor, &patch);
+    printf("LANE_COMPARE_CONFIG,libzmq=%d.%d.%d,contexts_per_lane=1,zmq_io_threads_per_context=1,"
+           "pairs=%d,window=%d,send_receive_hwm=%d,parts=1,logical_cpus=%d,affinity=unbound,"
+           "rounds=%zu,repeats=%zu\n", major, minor, patch, OWNER_LANE_PAIRS,
+           OWNER_LANE_WINDOW, OWNER_LANE_WINDOW, cmeta_cpu_count(), rounds, repeats);
+    printf("LANE_COMPARE_HEADER,engine,engine_order,payload_bytes,lanes,repeat,order,connections,"
+           "batch,messages,wall_ns,messages_per_second,cpu_ns_per_message,burst_p95_ns,"
+           "burst_p99_ns,poll_calls,send_retries,process_peak_rss_bytes\n");
+    printf("LANE_COMPARE_WORKER_HEADER,engine,engine_order,payload_bytes,lanes,repeat,order,lane,"
+           "connections,messages,start_offset_ns,finish_offset_ns,burst_p99_ns,poll_calls,send_retries\n");
+    for (size_t repeat = 0u; repeat < repeats; ++repeat)
+      for (size_t size = 0u; size < 2u; ++size) {
+        const size_t bytes = sizes[(size + repeat) % 2u];
+        for (size_t order = 0u; order < OWNER_LANE_STEPS; ++order) {
+          const size_t owners = (size_t)1u << ((order + repeat) % OWNER_LANE_STEPS);
+          /* Each engine leads once at each lane-order position over 8 repeats. */
+          for (size_t engine_order = 0u; engine_order < 2u; ++engine_order) {
+            const int use_zmq = (int)((repeat / OWNER_LANE_STEPS + order + engine_order) % 2u);
+            check_equal(owner_run_configured(owners, bytes, rounds, 0, &files, 2,
+                                              repeat + 1u, 0, 1, order, use_zmq, engine_order), SALTS_OK);
+          }
+        }
+      }
+  }
+#endif
 
   for (int tls = 0; tls <= 1; ++tls) {
     const size_t sizes[] = {OWNER_SMALL_BYTES, OWNER_LARGE_BYTES};

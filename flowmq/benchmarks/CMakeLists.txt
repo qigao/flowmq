@@ -167,6 +167,18 @@ if(FLOWMQ_BUILD_ZMQ_BENCHMARK)
   endif()
   target_link_libraries(bench_flowmq_socket PRIVATE libzmq)
   target_compile_definitions(bench_flowmq_socket PRIVATE FLOWMQ_BENCH_WITH_ZMQ=1)
+  target_link_libraries(bench_flowmq_socket_owners PRIVATE libzmq)
+  target_compile_definitions(bench_flowmq_socket_owners PRIVATE FLOWMQ_BENCH_WITH_ZMQ=1)
+  if(BUILD_TESTS)
+    add_test(NAME bench_flowmq_lane_zmq
+             COMMAND bench_flowmq_socket_owners --filter "lane comparison:")
+    set_tests_properties(bench_flowmq_lane_zmq
+      PROPERTIES LABELS "flowmq;benchmark" RUN_SERIAL TRUE TIMEOUT 1200)
+    if(WIN32)
+      set_tests_properties(bench_flowmq_lane_zmq PROPERTIES
+        ENVIRONMENT_MODIFICATION "${FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS}")
+    endif()
+  endif()
 
   # A separate static copy confines admission counters to diagnostic runs.
   # Inherit the production source list, includes and dependencies so that the
