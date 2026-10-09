@@ -64,6 +64,12 @@ int flowmq_socket_internal_poll_revents(
 int flowmq_socket_internal_async_error_matches(
     const flowmq_socket_t *socket, int status);
 
+/* Private read-only test diagnostic; endpoint retry state is not an API.
+ * Caller must own the socket's progress lane and may not use this for routing. */
+int flowmq_socket_internal_endpoint_backoff(
+    const flowmq_socket_t *socket, size_t endpoint_index,
+    uint64_t *current_delay_ms);
+
 /* Private qualification query; never installed in the public SDK. */
 int flowmq_socket_internal_fanout_match_count(
     const flowmq_socket_t *socket, const void *topic, size_t topic_size,
