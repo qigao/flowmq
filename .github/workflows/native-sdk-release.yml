@@ -405,7 +405,7 @@ jobs:
           rm -rf stage
           mv stage-dereferenced stage
       - name: Run FlowMQ owner-affine multicore benchmark
-        if: matrix.os == 'linux' && github.event_name == 'workflow_dispatch' && inputs.run_benchmarks && needs.metadata.outputs.candidate_run_id == ''
+        if: matrix.os == 'linux' && github.event_name == 'workflow_dispatch' && inputs.run_benchmarks
         shell: bash
         run: |
           set -euo pipefail
@@ -501,7 +501,7 @@ jobs:
             echo "No distinct physical core is available; distinct-core case skipped." | tee -a "$GITHUB_STEP_SUMMARY"
           fi
       - name: Run FlowMQ shared owner-wait benchmark
-        if: matrix.os == 'linux' && github.event_name == 'workflow_dispatch' && inputs.run_benchmarks && needs.metadata.outputs.candidate_run_id == ''
+        if: matrix.os == 'linux' && github.event_name == 'workflow_dispatch' && inputs.run_benchmarks
         shell: bash
         run: |
           set -euo pipefail
@@ -524,7 +524,7 @@ jobs:
             cat "$result_dir/flowmq-shared-wait.md"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Run FlowMQ reuse-port multicore service benchmark
-        if: matrix.os == 'linux' && github.event_name == 'workflow_dispatch' && inputs.run_benchmarks && needs.metadata.outputs.candidate_run_id == ''
+        if: matrix.os == 'linux' && github.event_name == 'workflow_dispatch' && inputs.run_benchmarks
         shell: bash
         run: |
           set -euo pipefail
@@ -554,7 +554,7 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Run FlowMQ retained TLS natural framing benchmark
-        if: matrix.os == 'linux' && github.event_name == 'workflow_dispatch' && inputs.run_benchmarks && needs.metadata.outputs.candidate_run_id == ''
+        if: matrix.os == 'linux' && github.event_name == 'workflow_dispatch' && inputs.run_benchmarks
         shell: bash
         env:
           FLOWMQ_BENCH_CI: "1"
@@ -601,7 +601,7 @@ jobs:
             sed -n '/^TLS_EVIDENCE_BEGIN /,/^TLS_EVIDENCE_END /p' "$log"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Run FlowMQ retained fanout benchmark
-        if: matrix.os == 'linux' && github.event_name == 'workflow_dispatch' && inputs.run_benchmarks && needs.metadata.outputs.candidate_run_id == ''
+        if: matrix.os == 'linux' && github.event_name == 'workflow_dispatch' && inputs.run_benchmarks
         shell: bash
         env:
           FLOWMQ_BENCH_CI: "1"
@@ -624,42 +624,42 @@ jobs:
             cat "$result_dir/flowmq-retained-fanout.md"
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
-        if: matrix.os == 'linux' && github.event_name == 'workflow_dispatch' && inputs.run_benchmarks && needs.metadata.outputs.candidate_run_id == ''
+        if: matrix.os == 'linux' && github.event_name == 'workflow_dispatch' && inputs.run_benchmarks
         with:
           name: flowmq-retained-fanout-linux-x64
           path: flowmq-fanout-results
           if-no-files-found: error
           compression-level: 6
       - uses: actions/upload-artifact@v4
-        if: matrix.os == 'linux' && github.event_name == 'workflow_dispatch' && inputs.run_benchmarks && needs.metadata.outputs.candidate_run_id == ''
+        if: matrix.os == 'linux' && github.event_name == 'workflow_dispatch' && inputs.run_benchmarks
         with:
           name: flowmq-owned-receive-linux-x64
           path: flowmq-retained-tls-results/flowmq-owned-receive.md
           if-no-files-found: error
           compression-level: 6
       - uses: actions/upload-artifact@v4
-        if: matrix.os == 'linux' && github.event_name == 'workflow_dispatch' && inputs.run_benchmarks && needs.metadata.outputs.candidate_run_id == ''
+        if: matrix.os == 'linux' && github.event_name == 'workflow_dispatch' && inputs.run_benchmarks
         with:
           name: flowmq-retained-tls-linux-x64
           path: flowmq-retained-tls-results
           if-no-files-found: error
           compression-level: 6
       - uses: actions/upload-artifact@v4
-        if: matrix.os == 'linux' && github.event_name == 'workflow_dispatch' && inputs.run_benchmarks && needs.metadata.outputs.candidate_run_id == ''
+        if: matrix.os == 'linux' && github.event_name == 'workflow_dispatch' && inputs.run_benchmarks
         with:
           name: flowmq-reuse-port-linux-x64
           path: flowmq-reuse-port-results
           if-no-files-found: error
           compression-level: 6
       - uses: actions/upload-artifact@v4
-        if: matrix.os == 'linux' && github.event_name == 'workflow_dispatch' && inputs.run_benchmarks && needs.metadata.outputs.candidate_run_id == ''
+        if: matrix.os == 'linux' && github.event_name == 'workflow_dispatch' && inputs.run_benchmarks
         with:
           name: flowmq-shared-wait-linux-x64
           path: flowmq-shared-wait-results
           if-no-files-found: error
           compression-level: 6
       - uses: actions/upload-artifact@v4
-        if: matrix.os == 'linux' && github.event_name == 'workflow_dispatch' && inputs.run_benchmarks && needs.metadata.outputs.candidate_run_id == ''
+        if: matrix.os == 'linux' && github.event_name == 'workflow_dispatch' && inputs.run_benchmarks
         with:
           name: flowmq-owner-parallel-linux-x64
           path: flowmq-benchmark-results
