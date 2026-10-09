@@ -502,6 +502,31 @@
     ],
     "testPresets": [
         {
+            "name": "bench-win-release-user",
+            "configurePreset": "win-release-user",
+            "inherits": "base-benchmark"
+        },
+        {
+            "name": "bench-win-release-local-sdk",
+            "configurePreset": "win-release-local-sdk",
+            "inherits": "base-benchmark"
+        },
+        {
+            "name": "bench-linux-release-user",
+            "configurePreset": "linux-release-user",
+            "inherits": "base-benchmark"
+        },
+        {
+            "name": "bench-host-release-ci",
+            "configurePreset": "host-release-ci",
+            "inherits": "base-benchmark"
+        },
+        {
+            "name": "bench-mac-release-ci",
+            "configurePreset": "mac-release-ci",
+            "inherits": "base-benchmark"
+        },
+        {
             "name": "host-release-ci",
             "configurePreset": "host-release-ci",
             "inherits": "base-test"
@@ -542,7 +567,8 @@
             },
             "filter": {
                 "exclude": {
-                    "name": "^test_flowmq_segmented_receive_contract$"
+                    "name": "^test_flowmq_segmented_receive_contract$",
+                    "label": "benchmark"
                 }
             }
         }

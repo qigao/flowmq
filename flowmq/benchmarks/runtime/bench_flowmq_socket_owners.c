@@ -1,4 +1,5 @@
 #include "flowmq_socket.h"
+#include "flowmq_peer_pool.h"
 #include "flowmq_bench_metrics.h"
 #include "flowmq_tls_test_material.h"
 #include "tinytest.h"
@@ -57,6 +58,7 @@ typedef struct owner_run_s {
   int started;
   int cleanup;
   int tls;
+  int peer_pool;
   size_t payload_bytes;
   size_t rounds;
   const owner_tls_files_t *files;
@@ -107,6 +109,14 @@ static int owner_pair_open(owner_worker_t *worker, owner_pair_t *pair) {
   pair->sender = flowmq_socket(worker->ctx, FLOWMQ_PAIR);
   pair->receiver = flowmq_socket(worker->ctx, FLOWMQ_PAIR);
   if (pair->sender == NULL || pair->receiver == NULL) return SALTS_ENOMEM;
+  if (run->peer_pool) {
+    flowmq_peer_pool_config_t config = FLOWMQ_PEER_POOL_CONFIG_INIT;
+    config.max_peers = config.max_connecting = 1u;
+    status = flowmq_socket_set_peer_pool(pair->sender, &config);
+    if (status == SALTS_OK)
+      status = flowmq_socket_set_peer_pool(pair->receiver, &config);
+    if (status != SALTS_OK) return status;
+  }
   status = flowmq_setsockopt(pair->sender, FLOWMQ_SNDHWM, &hwm, sizeof(hwm));
   if (status == SALTS_OK && run->tls) {
     status = owner_socket_option(pair->sender, FLOWMQ_TLS_CA_FILE, run->files->ca);
@@ -202,6 +212,22 @@ static void owner_worker_close(owner_worker_t *worker) {
   free(worker->received);
 }
 
+/* Observe the real session leases outside measurement. The workload keeps
+ * exactly one fully READY pipe per socket; HWM remains a separate budget. */
+static int owner_pool_check(owner_worker_t *worker, owner_pair_t *pair) {
+  flowmq_socket_t *sockets[] = {pair->sender, pair->receiver};
+  for (size_t i = 0u; i < sizeof(sockets) / sizeof(sockets[0]); ++i) {
+    flowmq_peer_pool_snapshot_t pool = FLOWMQ_PEER_POOL_SNAPSHOT_INIT;
+    int status = flowmq_socket_get_peer_pool(sockets[i], &pool);
+    if (status != SALTS_OK) return status;
+    if (pool.enabled != worker->run->peer_pool) return SALTS_EPROTO;
+    if (pool.enabled && (pool.ready != 1u || pool.active_leases != 1u ||
+                         pool.physical_in_use != 1u || pool.connecting != 0u ||
+                         pool.draining != 0u || pool.sealed)) return SALTS_EPROTO;
+  }
+  return SALTS_OK;
+}
+
 static void owner_worker_entry(void *arg) {
   owner_worker_t *worker = arg;
   owner_run_t *run = worker->run;
@@ -220,6 +246,7 @@ static void owner_worker_entry(void *arg) {
     worker->phase = "warmup";
     if (status == SALTS_OK) status = owner_batch(worker, &worker->pairs[i], 1, 0);
     if (status == SALTS_OK) status = owner_batch(worker, &worker->pairs[i], 0, 0);
+    if (status == SALTS_OK) status = owner_pool_check(worker, &worker->pairs[i]);
   }
   owner_error(run, status);
   cmeta_mutex_lock(&run->mutex);
@@ -247,6 +274,10 @@ static void owner_worker_entry(void *arg) {
   while (!run->cleanup)
     cmeta_cond_wait(&run->changed, &run->mutex);
   cmeta_mutex_unlock(&run->mutex);
+  if (status == SALTS_OK) {
+    for (size_t i = 0u; i < worker->pair_count; ++i)
+      owner_error(run, owner_pool_check(worker, &worker->pairs[i]));
+  }
   owner_worker_close(worker);
 }
 
@@ -257,7 +288,8 @@ static int owner_compare_ns(const void *left, const void *right) {
 }
 
 static int owner_run(size_t owners, size_t payload_bytes, size_t rounds, int tls,
-                     const owner_tls_files_t *files, int measured, size_t repetition) {
+                     const owner_tls_files_t *files, int measured, size_t repetition,
+                     int peer_pool) {
   owner_run_t run = {0};
   owner_worker_t workers[OWNER_MAX_THREADS] = {0};
   cmeta_thread_t threads[OWNER_MAX_THREADS] = {0};
@@ -274,6 +306,7 @@ static int owner_run(size_t owners, size_t payload_bytes, size_t rounds, int tls
   cmeta_mutex_init(&run.mutex);
   cmeta_cond_init(&run.changed);
   run.tls = tls;
+  run.peer_pool = peer_pool;
   run.payload_bytes = payload_bytes;
   run.rounds = rounds;
   run.files = files;
@@ -326,8 +359,8 @@ measurement_finished:
   }
   status = atomic_load(&run.error);
   if (status != SALTS_OK) {
-    fprintf(stderr, "OWNER_FAILED_CASE,transport=%s,bytes=%zu,owners=%zu,repeat=%zu\n",
-            tls ? "tls" : "tcp", payload_bytes, owners, repetition);
+    fprintf(stderr, "OWNER_FAILED_CASE,transport=%s,bytes=%zu,owners=%zu,repeat=%zu,pool=%d\n",
+            tls ? "tls" : "tcp", payload_bytes, owners, repetition, peer_pool);
     for (size_t i = 0u; i < created; ++i)
       fprintf(stderr,
               "OWNER_ERROR,owner=%zu,phase=%s,operation=%s,samples=%zu,"
@@ -343,11 +376,11 @@ measurement_finished:
     const size_t p99 =
         (samples * OWNER_PERCENTILE + OWNER_PERCENT_SCALE - 1u) / OWNER_PERCENT_SCALE - 1u;
     qsort(latencies, samples, sizeof(*latencies), owner_compare_ns);
-    printf("OWNER_RESULT,%s,%zu,%zu,%zu,%zu,%.6f,%.0f,%.2f,%.2f,%.3f,%.2f,%zu\n",
+    printf("OWNER_RESULT,%s,%zu,%zu,%zu,%zu,%.6f,%.0f,%.2f,%.2f,%.3f,%.2f,%zu,%d\n",
            tls ? "tls" : "tcp", payload_bytes, owners, repetition, messages, seconds,
            (double)messages / seconds, (double)messages * payload_bytes / seconds / OWNER_MIB,
            (double)latencies[p99] / OWNER_NS_PER_US, cpu_seconds,
-           (double)after.peak_rss_bytes / OWNER_MIB, retries);
+           (double)after.peak_rss_bytes / OWNER_MIB, retries, peer_pool);
   }
   cmeta_cond_destroy(&run.changed);
   cmeta_mutex_destroy(&run.mutex);
@@ -367,6 +400,35 @@ static int owner_env_count(const char *name, size_t default_value, size_t maximu
   if (errno != 0 || *end != '\0' || parsed == 0u || parsed > maximum) return SALTS_EINVAL;
   *out = (size_t)parsed;
   return SALTS_OK;
+}
+
+static void owner_scaling(int tls, size_t bytes, const owner_tls_files_t *files,
+                           int compare_pool) {
+  const size_t default_rounds = bytes == OWNER_SMALL_BYTES
+                                    ? (tls ? OWNER_SMALL_ROUNDS : OWNER_TCP_SMALL_ROUNDS)
+                                    : (tls ? OWNER_LARGE_ROUNDS : OWNER_TCP_LARGE_ROUNDS);
+  size_t rounds, repeats;
+  check_equal(owner_env_count("FLOWMQ_OWNER_BENCH_REPEATS", OWNER_REPEATS,
+                              OWNER_MAX_REPEATS, &repeats), SALTS_OK);
+  check_equal(owner_env_count("FLOWMQ_OWNER_BENCH_ROUNDS", default_rounds,
+                              OWNER_MAX_ROUNDS, &rounds), SALTS_OK);
+  printf("OWNER_CONFIG,pairs=%d,window=%d,parts=2,logical_cpus=%d,affinity=unbound,"
+         "pool_comparison=%d,rounds=%zu,repeats=%zu\n",
+         OWNER_PAIRS, OWNER_WINDOW, cmeta_cpu_count(), compare_pool, rounds, repeats);
+  printf("OWNER_COLUMNS,transport,payload_bytes,owners,repeat,messages,seconds,"
+         "messages_per_second,MiB_per_second,p99_us,process_cpu_seconds,"
+         "process_lifetime_peak_RSS_MiB,admission_retries,pool_enabled\n");
+  for (size_t repeat = 0u; repeat < repeats; ++repeat) {
+    for (size_t lane = 0u; lane < OWNER_SCALE_STEPS; ++lane) {
+      /* Rotate owner count and alternate paired pool modes to reduce order
+       * bias. Total pairs, messages, payloads and HWM are identical. */
+      const size_t owners = (size_t)1u << ((lane + repeat) % OWNER_SCALE_STEPS);
+      for (size_t mode = 0u; mode < (compare_pool ? 2u : 1u); ++mode) {
+        const int pool = compare_pool ? (int)((repeat + mode) % 2u) : 0;
+        check_equal(owner_run(owners, bytes, rounds, tls, files, 1, repeat, pool), SALTS_OK);
+      }
+    }
+  }
 }
 
 spec("FlowMQ independent owners") {
@@ -407,8 +469,9 @@ spec("FlowMQ independent owners") {
     for (int tls = 0; tls <= 1; ++tls)
       for (size_t size = 0u; size < sizeof(sizes) / sizeof(sizes[0]); ++size)
         for (size_t owners = 1u; owners <= OWNER_MAX_THREADS; owners *= 2u) {
-          check_equal(owner_run(owners, sizes[size], OWNER_CHECK_ROUNDS, tls, &files, 0, 0u),
-                      SALTS_OK);
+          for (int pool = 0; pool <= 1; ++pool)
+            check_equal(owner_run(owners, sizes[size], OWNER_CHECK_ROUNDS, tls,
+                                  &files, 0, 0u, pool), SALTS_OK);
         }
   }
 
@@ -416,27 +479,10 @@ spec("FlowMQ independent owners") {
     const size_t sizes[] = {OWNER_SMALL_BYTES, OWNER_LARGE_BYTES};
     for (size_t size = 0u; size < sizeof(sizes) / sizeof(sizes[0]); ++size) {
       bench("scaling: %s %zu-byte fixed-total workload", tls ? "tls" : "tcp", sizes[size]) {
-        const size_t default_rounds = size == 0u
-                                          ? (tls ? OWNER_SMALL_ROUNDS : OWNER_TCP_SMALL_ROUNDS)
-                                          : (tls ? OWNER_LARGE_ROUNDS : OWNER_TCP_LARGE_ROUNDS);
-        size_t rounds, repeats;
-        check_equal(owner_env_count("FLOWMQ_OWNER_BENCH_REPEATS", OWNER_REPEATS, OWNER_MAX_REPEATS,
-                                    &repeats),
-                    SALTS_OK);
-        printf("OWNER_CONFIG,pairs=%d,window=%d,parts=2,logical_cpus=%d,affinity=unbound\n",
-               OWNER_PAIRS, OWNER_WINDOW, cmeta_cpu_count());
-        printf("OWNER_COLUMNS,transport,payload_bytes,owners,repeat,messages,seconds,"
-               "messages_per_second,MiB_per_second,p99_us,process_cpu_seconds,"
-               "process_lifetime_peak_RSS_MiB,admission_retries\n");
-        check_equal(
-            owner_env_count("FLOWMQ_OWNER_BENCH_ROUNDS", default_rounds, OWNER_MAX_ROUNDS, &rounds),
-            SALTS_OK);
-        for (size_t repeat = 0u; repeat < repeats; ++repeat)
-          for (size_t lane = 0u; lane < OWNER_SCALE_STEPS; ++lane) {
-            /* Rotate 1/2/4 order to reduce systematic thermal/order bias. */
-            const size_t owners = (size_t)1u << ((lane + repeat) % OWNER_SCALE_STEPS);
-            check_equal(owner_run(owners, sizes[size], rounds, tls, &files, 1, repeat), SALTS_OK);
-          }
+        owner_scaling(tls, sizes[size], &files, 0);
+      }
+      bench("peer pool: %s %zu-byte fixed-total workload", tls ? "tls" : "tcp", sizes[size]) {
+        owner_scaling(tls, sizes[size], &files, 1);
       }
     }
   }

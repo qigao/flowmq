@@ -542,13 +542,15 @@ $env:FLOWMQ_LOCAL_SALTS_ROOT = (Resolve-Path ../salts/stage/sdk/windows-x64).Pat
 cmake --preset win-release-local-sdk -DBUILD_TESTS=ON
 cmake --build --preset win-release-local-sdk
 ctest --preset win-release-local-sdk -LE benchmark --output-on-failure
-ctest --preset win-release-local-sdk -R '^bench_flowmq_socket_owners_' -V --output-log build/Msvc-Release-LocalSDK/owner-scaling.log
+ctest --preset bench-win-release-local-sdk -R '^bench_flowmq_socket_owners_' -V --output-log build/Msvc-Release-LocalSDK/owner-scaling.log
 ```
 
 `win-release-local-sdk` 使用独立 build/install 目录，不替换发布 SDK 的链接；
 `FLOWMQ_LOCAL_SALTS_ROOT` 必须指向完整 SDK，缺失时配置失败。
-发布包验证仍使用 `win-release-user`；Linux 对应使用 `linux-release-user`，
-但下述修复尚未发布，不能假设 restore 得到的包已包含它。
+发布包验证仍使用 `win-release-user`；Linux 对应使用 `linux-release-user`。
+下文 Salts 2.1.0 本地修复版 SDK 的数字保留为历史记录；CNet 2.3 peer pool
+对照使用已发布的 RC SDK，见后文。普通 test preset 排除 benchmark，性能
+测量必须选 `bench-*` test preset。
 基准同样保留为正式 CTest 项，失败不会被跳过或标记成预期成功。
 每批 16 条消息，每条含两个等长 part，总 payload 为 64 B 或 64 KiB。
 所有消息检查长度、内容、连接身份、序号和 `RCVMORE`；预热同时验证发送 HWM
@@ -560,13 +562,25 @@ ctest --preset win-release-local-sdk -R '^bench_flowmq_socket_owners_' -V --outp
 可用父环境 `FLOWMQ_OWNER_BENCH_ROUNDS`（1–4096）覆盖批数，
 `FLOWMQ_OWNER_BENCH_REPEATS`（1–9）覆盖重复次数；非法值直接失败。
 
-只汇总成功用例的 `OWNER_RESULT` CSV 行：吞吐按完整应用消息及 payload
+只汇总成功用例的 `OWNER_RESULT` CSV 行（末列 `pool_enabled` 为 0/1）：吞吐按完整应用消息及 payload
 计一次，不计协议/TLS 头；墙钟从统一放行到最后一个 owner 完成，排除建连、
 握手、预热和关闭，包含 FlowMQ 编解码及消息校验成本。
 P99 是从每条消息首次发送尝试到收齐最后一个 part 的实测延迟，包含排队，
 不把批次平均耗时冒充单消息延迟。CPU 为该测量阶段整个进程的 CPU 秒数；
 RSS 为进程生命周期峰值，不是每行独立的内存增量。线程未绑核，Windows
 CPU 时间存在计量粒度限制。诊断适配仅在 benchmark 中使用系统统计 API。
+
+可选 peer pool 的同负载关闭/启用对照使用独立 CTest 项：
+
+```powershell
+ctest --preset bench-win-release-user -R '^bench_flowmq_peer_pool_' -V --output-log build/peer-pool-comparison.log
+```
+
+每轮交替两种模式的先后顺序；启用时每 socket 的 physical/connecting 容量为 1，
+预热后及关闭前检查真实 READY lease。默认回归中的
+`test_flowmq_socket_owners` 同时覆盖两种模式，benchmark 不进入默认回归。
+当前 Windows 实测、原始数据及安装 SDK 的 C11/C++17 验收入口见
+[peer pool 验收记录](docs/PEER_POOL_QUALIFICATION.md)。
 
 2026-10-07 合并主线前（`f3192c1`）的本机测量：Windows Release、Salts 2.1.0 加本地 CNet TLS 缓冲区修复、
 Ryzen 9 7940HX（16 核 / 32 逻辑处理器），四类负载三轮吞吐中位数如下。

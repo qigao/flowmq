@@ -269,6 +269,7 @@ ctest --preset win-release-user -R "^test_flowmq_" --output-on-failure
 ctest --preset win-release-user -R "^test_flowmq_(peer_pool|owner_fault_pool)$" --repeat until-fail:20 --output-on-failure
 ```
 
-#123 尚需跨平台安装包资格验证及 TCP/TLS 1/2/4 Owners 性能对照；上述行为
-测试不证明吞吐或分配成本改善。安装包 C11/C++17 consumer 已同步调用新 API，
-本次本地结果仅覆盖 Windows build-tree shared-library ABI。
+#123 的 Windows 安装 SDK C11/C++17 consumer、TCP/TLS 1/2/4 progress owners
+对照现已执行；原始数据、波动与复测、复现命令和剩余范围见
+[peer pool 验收记录](PEER_POOL_QUALIFICATION.md)。跨平台 CI 实跑与独立的
+retained-byte/分配成本证据仍待完成，当前测量不证明普遍性能收益。

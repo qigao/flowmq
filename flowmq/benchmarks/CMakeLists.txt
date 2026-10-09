@@ -32,6 +32,17 @@ if(BUILD_TESTS)
   endif()
   foreach(transport IN ITEMS tcp tls)
     foreach(payload_bytes IN ITEMS 64 65536)
+      set(pool_benchmark_name bench_flowmq_peer_pool_${transport}_${payload_bytes})
+      add_test(NAME ${pool_benchmark_name}
+               COMMAND bench_flowmq_socket_owners --filter
+                       "peer pool: ${transport} ${payload_bytes}-byte")
+      set_tests_properties(${pool_benchmark_name}
+                           PROPERTIES LABELS "flowmq;benchmark" RUN_SERIAL TRUE TIMEOUT 1200)
+      if(WIN32)
+        set_tests_properties(${pool_benchmark_name}
+                             PROPERTIES ENVIRONMENT_MODIFICATION
+                                        "${FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS}")
+      endif()
       set(benchmark_name bench_flowmq_socket_owners_${transport}_${payload_bytes})
       add_test(NAME ${benchmark_name}
                COMMAND bench_flowmq_socket_owners --filter
