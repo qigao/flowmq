@@ -898,6 +898,7 @@ jobs:
               <PackageReference Include="FlowMQ.Native" Version="[${{ needs.metadata.outputs.version }}]" />
               <PackageReference Include="Salts.Native" Version="2.3.0-*" />
               <PackageReference Include="SaltsUtils.Native" Version="4.3.0-*" />
+              <PackageReference Update="Salts.Native" Version="${{ needs.metadata.outputs.salts_release_version }}" />
             </ItemGroup>
           </Project>
           "@ | Set-Content -LiteralPath $project
