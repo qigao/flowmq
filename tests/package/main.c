@@ -80,6 +80,23 @@ int main(void)
                           sizeof(policy)) != 0)
         goto cleanup;
 
+    /* Installed C11 client-policy ABI: host snapshot, no network fallback. */
+    {
+        flowmq_destination_endpoint_t endpoint = {
+            .endpoint_id = 42u, .authority_id = 7u,
+            .uri = "tcp://127.0.0.1:12345",
+            .weight = 1u, .eligible = 1};
+        flowmq_destination_selection_t selection =
+            FLOWMQ_DESTINATION_SELECTION_INIT;
+        flowmq_destination_result_t chosen = FLOWMQ_DESTINATION_RESULT_INIT;
+        selection.snapshot_generation = 9u;
+        selection.explicit_endpoint_id = 42u;
+        if (flowmq_destination_choose(&endpoint, 1u, &selection, &chosen) !=
+            SALTS_OK || chosen.endpoint_id != 42u ||
+            chosen.snapshot_generation != 9u || chosen.index != 0u)
+            goto cleanup;
+    }
+
     /* installed public struct + function ABI; no peer exists yet */
     if (flowmq_router_peer_status(router, identity, strlen(identity),
                                   &peer_status) != SALTS_ENOENT)
