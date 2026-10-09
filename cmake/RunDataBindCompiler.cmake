@@ -25,8 +25,14 @@ execute_process(
   COMMAND "${FLOWMQ_SALTS_IDLC_EXECUTABLE}"
           "${FLOWMQ_DATABIND_SCHEMA}"
           --lang c
+          --binary-codec
           --output "${FLOWMQ_DATABIND_OUTPUT}"
-  RESULT_VARIABLE _flowmq_databind_status)
+  RESULT_VARIABLE _flowmq_databind_status
+  OUTPUT_VARIABLE _flowmq_databind_stdout
+  ERROR_VARIABLE _flowmq_databind_stderr)
 if(NOT _flowmq_databind_status EQUAL 0)
-  message(FATAL_ERROR "FlowMQ salts-idlc failed with status ${_flowmq_databind_status}")
+  message(FATAL_ERROR
+          "FlowMQ binary FMP/1 salts-idlc failed with status ${_flowmq_databind_status}\n"
+          "stdout:\n${_flowmq_databind_stdout}\n"
+          "stderr:\n${_flowmq_databind_stderr}")
 endif()
