@@ -20,8 +20,10 @@ FlowMQ 是 C11 的 pattern-oriented messaging library。它提供 FMQ/6 wire cod
 
 > Branch/release boundary: `v1.2.1` 在 `v1.2.0` 的 owner-lane、reuse-port、retained TLS、producer-owned/segmented receive 与公开 `flowmq_recv_slicev()` 基础上，包含 #101/#102 的 atomic retained PUB/XPUB fanout、#104 的 generated DataBind ChannelPlan/ServicePlan qualification，以及 #111/#112 的 CMeta ownership、最新 Salts SDK 适配与显式多 owner 验证。除非显式标记 release，下面的行为描述以 current `main` 为准。
 
-安装包不固定 Salts/SaltsUtils 版本，始终消费 latest published stable SDK；公开链接依赖是
-`Salts::Core` 与 SaltsUtils 提供的 `Salts::DataBind`；`Salts::CNet`、`Salts::CNetManager`、`Salts::NativeIO`、
+当前开发分支的 NuGet restore 使用 `Salts.Native Version="2.3.0-*"` 与
+`SaltsUtils.Native Version="4.3.0-*"`：选择对应的最新 RC（正式版发布后选择同版本正式版），
+而不是回退到 2.2.x / 4.2.x。公开链接依赖是
+`Salts::Core` 与 SaltsUtils 提供的 `Salts::DataBind`；`Salts::CNet`、`Salts::NativeIO`、
 `Salts::CSTL` 和 `Salts::CMeta` 都是实现私有依赖。FMP/1 保持现有 header-only wire view/builder ABI，
 但生成入口统一使用 DataBind `salts-idlc`，不再依赖已废止的 TBE producer target/tool。
 
@@ -30,19 +32,19 @@ FlowMQ 通过 `Salts::CNet` 使用 TCP/TLS；manifest 声明 `zeromq` 以及已�
 导出配置所需的 `lua`、`quickjs-ng`，证书及主机名
 校验继续由 CNet 负责。
 
-本集成分支要求 Salts #1001 候选 SDK 提供 `Salts::CNetManager` 和
-`<cnet/manager.h>`，尚不能仅用 latest published stable 构建。每个 socket
-client 使用固定容量的 owner-local manager，接管 connect/adopt 的绑定与终态记录，
-queued parts 消费结束后才释放额外 context hold。外部 owner 通过有界 `advance`
-提交关闭，仍由既有 NativeIO/CNet 路径观察真实终态。消息、路由、重连、TLS 策略和
-peer 协议状态继续归 FlowMQ；没有新增跨线程队列或改变 wire/API。
-部署时需带上候选 SDK 的 `cnet_manager` 共享库。回滚只需撤销内部适配及私有链接依赖，
-无需数据迁移。`test_flowmq_socket` 额外覆盖 64 次断开后消费排队消息、再复用 peer 的循环。
+Salts 2.3.0-rc.1 已发布统一的 `Salts::CNet` SDK，`<cnet/manager.h>` 中的
+`cnet_manager_*` 不再需要单独链接 `Salts::CNetManager` DSO。
+每个 socket client 仍使用固定容量的 owner-local manager，接管
+connect/adopt 的绑定与终态记录，queued parts 消费结束后才释放额外
+context hold。外部 owner 通过有界 `advance` 提交关闭，继续由唯一的
+NativeIO/CNet observe 路径处理真实终态。消息、路由、重连与 TLS
+协议状态归 FlowMQ；无 Actor、第二线程或消息重放 fallback。
+升级时需要清理旧的分离 manager SDK/DSO 并用统一 Salts CNet 重新编译。
 
-候选 SDK 主机验收通过 `native-sdk-release.yml` 的手动入口运行，同时指定
-`salts_candidate_run_id` 和完整的 `salts_candidate_sha`。生产任务必须是成功完成、
-保留 SDK artifacts 的 Salts CI 手动任务。Linux、Windows、macOS 消费该候选包并运行
-正式 CTest，SaltsUtils 继续解析最新发布包。此入口跳过交叉编译、性能脚本、打包及发布。
+常规 PR/发布使用 GitHub NuGet 的 2.3.0-* / 4.3.0-* 浮动依赖。
+手动 `workflow_dispatch.salts_candidate_sha` 只用于单独的宿主候选 SDK
+资格验证；该模式显式跳过 Android、NuGet pack/qualify/publish。
+没有配置候选 SHA 时不再隐式使用历史候选 pin。
 
 ## Caller-driven transport
 
@@ -390,9 +392,11 @@ ctest --preset win-release-user --output-on-failure
 Linux 使用 `pwsh -File cmake/ci/restore-native-sdk.ps1 -Rid linux-x64`，随后运行
 `linux-release-user` 的 configure/build/test preset。
 
-Salts.Native 与 SaltsUtils.Native 均使用 `Version="*"`，每次 restore 通过
-`--no-cache --force-evaluate` 解析最新稳定版；不限制版本、不回退旧包。
-NuGet assets 是版本和路径的事实源，包默认存放于 `stage/nuget`，可通过
+Salts.Native 使用 `Version="2.3.0-*"`，SaltsUtils.Native 使用
+`Version="4.3.0-*"`，每次 restore 通过 `--no-cache --force-evaluate`
+重新解析对应 RC 或正式版；不会静默回退到旧版稳定 SDK。
+NuGet assets 是版本和路径的事实源，本地脚本默认使用 `stage/nuget`，CI 缓存位于
+`build/nuget-packages`；可通过
 `QIGAO_NUGET_PACKAGES` 指定缓存位置。Release presets 消费
 `stage/dependencies/salts/<RID>` 与 `stage/dependencies/salts-utils/<RID>` 的稳定链接；configure 本身不下载 SDK，
 且清除旧的包路径缓存。恢复步骤只更新链接，拒绝覆盖已有的普通 SDK 目录。
@@ -552,15 +556,14 @@ Linux/macOS 与并发 sanitizer 尚未验证。
 详细所有权和关闭顺序见 [架构说明](docs/ARCHITECTURE.md)，wire 契约见
 [FMQ/6 协议](docs/FMQ_WIRE_PROTOCOL.md)。
 
-### #1001 candidate CI
+### Salts 2.3 / SaltsUtils 4.3 NuGet SDK CI
 
-Until CNetManager is published, `cmake/ci/salts-candidate.json` pins the Salts commit used by branch/PR host qualification. CI resolves a
-successful producer run for that exact SHA; dispatch accepts a SHA override.
-The selected run must retain all three host SDK artifacts. Missing successful
-SDK runs fail explicitly; prepare them using Salts CI with `prepare_release=true`
-(which retains packages without publishing). The restore action validates run
-provenance and the SDK manifest before use. Linux, Windows
-and macOS build the full configured graph, run CTest and install the SDK.
-Candidate runs skip cross packaging and publication; tags cannot select a
-candidate. Remove the temporary pin after the required SDK is published and
-validate the ordinary released dependency graph before releasing this project.
+普通 PR、main 和 tag 通过 NuGet 自动选择 `Salts.Native 2.3.0-*` 与
+`SaltsUtils.Native 4.3.0-*` 的最新可匹配版本。NuGet 每次重新求解依赖，
+CI 从 `project.assets.json` 记录解析出的身份，不允许混合旧 DSO。
+缺少可解析包、所需 RID 的 SDK 文件或缓存 binary closure 时直接失败。
+
+可通过手动工作流输入 `salts_candidate_sha` 检查一个尚未发布的 Salts
+SDK producer；输入必须是完整 SHA，需存在带 Linux/Windows/macOS
+产物的成功 CI run。此模式仅验证宿主，不执行 Android、打包或发布。
+正常 tag 只可使用发布的 NuGet 包，不接受候选 SDK。
