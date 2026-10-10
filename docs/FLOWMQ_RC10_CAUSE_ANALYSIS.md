@@ -140,3 +140,18 @@ CTest 全部通过。三个 native host 的安装后 C/C++ consumer 各两项通
 通过；Android 仅编译/链接资格验证。CSV 核对配置/重复次数、吞吐公式、消息数和
 在途窗口上限 128；正式 benchmark 校验 payload、FIFO 和保活释放等适用契约。
 本次未重跑 sanitizer，未发布新的 FlowMQ release。
+
+## 后续候选：有进展时有界重扫
+
+基于上述等待证据，后续候选在 `flowmq_poll()` 中使用此前丢弃的 completion
+进展计数：有进展且尚无请求的 readiness 时，立即再扫描完整 socket 列表。
+最多连续 32 个有进展的扫描，然后恢复既有休眠；无进展也立即恢复休眠。
+每轮仍检查同一个调用 deadline；零超时仍只有一轮；错误和 readiness 返回不变。
+每轮为 O(item_count) 加各 socket 的既有推进成本，额外空间 O(1)，无分配或线程。
+
+选择这一小改动，是为了先验证 completion 后的重复休眠是否值得消除；没有将
+永久 spin、listener 禁用或整个 external-owner 迁移混入同一次实验。预算 32 是
+有界候选，尚无证据证明它是最优值。现有 heartbeat、重连和 socket 测试继续覆盖
+协议进展；增加 handshake 不误报 readiness、列表后部接收和连接空闲 CPU 对照。
+空闲组每配置四次、每次 250 ms，对比 poll 0/1 ms，输出进程 CPU/墙钟之比。
+最终是否保留由三平台功能和性能结果决定，回滚只需撤销本节对应候选改动。

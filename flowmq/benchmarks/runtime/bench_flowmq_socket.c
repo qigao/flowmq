@@ -1105,6 +1105,43 @@ spec("FlowMQ direct socket benchmark") {
         check_equal(bench_pair_close(&pair), SALTS_OK);
       }
     }
+    bench("wait-policy comparison: connected idle CPU with zero or one millisecond poll") {
+      unsigned char payload[BENCH_PAYLOAD_BYTES] = {0};
+      printf("WAIT_IDLE_HEADER,repeat,wait_ms,poll_calls,wall_ns,cpu_ns,cpu_cores\n");
+      for (size_t repeat = 0u; repeat < 4u; ++repeat)
+        for (uint32_t order = 0u; order < 2u; ++order) {
+          const uint32_t wait_ms = (order + (uint32_t)repeat) % 2u;
+          flowmq_bench_metrics_t before = {0}, after = {0};
+          flowmq_pollitem_t items[2];
+          uint64_t start, elapsed;
+          size_t calls = 0u, ready = 0u;
+          int status = SALTS_OK;
+          bench_progress_wait_ms = 0u;
+          check_equal(bench_pair_open(&pair), SALTS_OK);
+          for (size_t warmup = 0u; warmup < 16u; ++warmup)
+            check_equal(bench_exchange(&pair, payload, sizeof(payload)), SALTS_OK);
+          items[0] = (flowmq_pollitem_t){.socket = pair.sender, .events = FLOWMQ_POLLIN};
+          items[1] = (flowmq_pollitem_t){.socket = pair.receiver, .events = FLOWMQ_POLLIN};
+          check_equal(flowmq_bench_metrics_read(&before), SALTS_OK);
+          benchmark_ops("connected idle window", 1u, 1u) {
+            start = cmeta_hrtime();
+            do {
+              status = flowmq_poll(items, 2u, wait_ms, &ready);
+              ++calls;
+              elapsed = cmeta_hrtime() - start;
+            } while (status == SALTS_OK && ready == 0u && elapsed < UINT64_C(250000000));
+          }
+          check_equal(flowmq_bench_metrics_read(&after), SALTS_OK);
+          check_equal(status, SALTS_OK);
+          check_equal(ready, 0u);
+          check_greater_equal(elapsed, UINT64_C(250000000));
+          printf("WAIT_IDLE_RESULT,%zu,%u,%zu,%llu,%llu,%.6f\n",
+                 repeat + 1u, wait_ms, calls, (unsigned long long)elapsed,
+                 (unsigned long long)(after.cpu_ns - before.cpu_ns),
+                 (double)(after.cpu_ns - before.cpu_ns) / elapsed);
+          check_equal(bench_pair_close(&pair), SALTS_OK);
+        }
+    }
     bench("wait-policy comparison: identical exchange with zero or one millisecond poll") {
       static unsigned char payload[BENCH_LARGE_PAYLOAD_BYTES];
       const size_t sizes[] = {BENCH_PAYLOAD_BYTES, BENCH_LARGE_PAYLOAD_BYTES};
