@@ -1,0 +1,91 @@
+platform,source_commit,engine,case,repeat,samples,ops_per_sample,bytes_per_sample,average_ns_per_op,messages_per_second,mib_per_second
+linux,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-byte one-way,1,100000,1,64,10876.819,91939,5.61
+linux,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-KiB one-way,1,5000,1,65536,38226.578,26160,1634.99
+linux,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-message queued batch,1,10000,64,4096,577.911,1730370,105.61
+linux,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-byte one-way,1,100000,1,64,29433.426,33975,2.07
+linux,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-KiB one-way,1,5000,1,65536,41768.986,23941,1496.33
+linux,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-message queued batch,1,10000,64,4096,572.523,1746653,106.61
+linux,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-byte one-way,2,100000,1,64,11030.053,90661,5.53
+linux,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-KiB one-way,2,5000,1,65536,37005.571,27023,1688.93
+linux,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-message queued batch,2,10000,64,4096,577.491,1731628,105.69
+linux,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-byte one-way,2,100000,1,64,32074.334,31178,1.90
+linux,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-KiB one-way,2,5000,1,65536,44006.679,22724,1420.24
+linux,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-message queued batch,2,10000,64,4096,567.858,1761002,107.48
+linux,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-byte one-way,3,100000,1,64,10710.798,93364,5.70
+linux,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-KiB one-way,3,5000,1,65536,36116.710,27688,1730.50
+linux,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-message queued batch,3,10000,64,4096,575.190,1738556,106.11
+linux,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-byte one-way,3,100000,1,64,29528.149,33866,2.07
+linux,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-KiB one-way,3,5000,1,65536,41567.492,24057,1503.58
+linux,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-message queued batch,3,10000,64,4096,563.714,1773950,108.27
+linux,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-byte one-way,4,100000,1,64,10697.836,93477,5.71
+linux,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-KiB one-way,4,5000,1,65536,36376.463,27490,1718.14
+linux,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-message queued batch,4,10000,64,4096,582.438,1716921,104.79
+linux,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-byte one-way,4,100000,1,64,29065.246,34405,2.10
+linux,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-KiB one-way,4,5000,1,65536,42049.816,23781,1486.33
+linux,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-message queued batch,4,10000,64,4096,571.831,1748769,106.74
+linux,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-byte one-way,5,100000,1,64,10643.044,93958,5.73
+linux,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-KiB one-way,5,5000,1,65536,35288.532,28338,1771.11
+linux,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-message queued batch,5,10000,64,4096,581.692,1719123,104.93
+linux,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-byte one-way,5,100000,1,64,29111.288,34351,2.10
+linux,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-KiB one-way,5,5000,1,65536,46075.819,21703,1356.46
+linux,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-message queued batch,5,10000,64,4096,592.094,1688921,103.08
+windows,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-byte one-way,1,100000,1,64,13173.599,75909,4.63
+windows,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-KiB one-way,1,5000,1,65536,44520.460,22462,1403.85
+windows,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-message queued batch,1,10000,64,4096,940.275,1063519,64.91
+windows,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-byte one-way,1,100000,1,64,61493.669,16262,0.99
+windows,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-KiB one-way,1,5000,1,65536,98498.380,10152,634.53
+windows,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-message queued batch,1,10000,64,4096,1189.056,841003,51.33
+windows,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-byte one-way,2,100000,1,64,13109.869,76278,4.66
+windows,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-KiB one-way,2,5000,1,65536,45354.760,22048,1378.03
+windows,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-message queued batch,2,10000,64,4096,965.385,1035856,63.22
+windows,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-byte one-way,2,100000,1,64,61607.795,16232,0.99
+windows,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-KiB one-way,2,5000,1,65536,100830.260,9918,619.85
+windows,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-message queued batch,2,10000,64,4096,1186.119,843086,51.46
+windows,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-byte one-way,3,100000,1,64,13001.689,76913,4.69
+windows,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-KiB one-way,3,5000,1,65536,30111.640,33210,2075.61
+windows,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-message queued batch,3,10000,64,4096,923.562,1082765,66.09
+windows,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-byte one-way,3,100000,1,64,61969.880,16137,0.98
+windows,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-KiB one-way,3,5000,1,65536,129435.320,7726,482.87
+windows,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-message queued batch,3,10000,64,4096,1215.190,822916,50.23
+windows,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-byte one-way,4,100000,1,64,13073.870,76488,4.67
+windows,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-KiB one-way,4,5000,1,65536,30143.280,33175,2073.43
+windows,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-message queued batch,4,10000,64,4096,924.298,1081902,66.03
+windows,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-byte one-way,4,100000,1,64,60980.019,16399,1.00
+windows,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-KiB one-way,4,5000,1,65536,130298.520,7675,479.67
+windows,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-message queued batch,4,10000,64,4096,1203.533,830887,50.71
+windows,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-byte one-way,5,100000,1,64,13183.847,75850,4.63
+windows,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-KiB one-way,5,5000,1,65536,30588.120,32692,2043.28
+windows,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-message queued batch,5,10000,64,4096,928.040,1077540,65.77
+windows,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-byte one-way,5,100000,1,64,62441.474,16015,0.98
+windows,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-KiB one-way,5,5000,1,65536,132463.180,7549,471.83
+windows,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-message queued batch,5,10000,64,4096,1213.478,824077,50.30
+macos,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-byte one-way,1,100000,1,64,202905.870,4928,0.30
+macos,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-KiB one-way,1,5000,1,65536,274426.800,3644,227.75
+macos,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-message queued batch,1,10000,64,4096,4743.016,210836,12.87
+macos,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-byte one-way,1,100000,1,64,83406.910,11989,0.73
+macos,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-KiB one-way,1,5000,1,65536,133992.600,7463,466.44
+macos,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-message queued batch,1,10000,64,4096,1733.766,576779,35.20
+macos,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-byte one-way,2,100000,1,64,217255.790,4603,0.28
+macos,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-KiB one-way,2,5000,1,65536,305076.800,3278,204.87
+macos,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-message queued batch,2,10000,64,4096,4631.520,215912,13.18
+macos,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-byte one-way,2,100000,1,64,83966.450,11910,0.73
+macos,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-KiB one-way,2,5000,1,65536,144566.400,6917,432.33
+macos,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-message queued batch,2,10000,64,4096,1648.716,606533,37.02
+macos,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-byte one-way,3,100000,1,64,200372.680,4991,0.30
+macos,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-KiB one-way,3,5000,1,65536,200103.600,4997,312.34
+macos,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-message queued batch,3,10000,64,4096,4781.634,209134,12.76
+macos,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-byte one-way,3,100000,1,64,95940.710,10423,0.64
+macos,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-KiB one-way,3,5000,1,65536,159553.400,6267,391.72
+macos,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-message queued batch,3,10000,64,4096,1831.367,546040,33.33
+macos,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-byte one-way,4,100000,1,64,207177.840,4827,0.29
+macos,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-KiB one-way,4,5000,1,65536,303593.000,3294,205.87
+macos,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-message queued batch,4,10000,64,4096,4825.583,207229,12.65
+macos,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-byte one-way,4,100000,1,64,97140.540,10294,0.63
+macos,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-KiB one-way,4,5000,1,65536,140539.400,7115,444.72
+macos,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-message queued batch,4,10000,64,4096,1898.072,526850,32.16
+macos,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-byte one-way,5,100000,1,64,233705.480,4279,0.26
+macos,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-KiB one-way,5,5000,1,65536,246560.400,4056,253.49
+macos,4eb1afa220937297b14b331fca9eded35cfb718e,FlowMQ copy,PAIR 64-message queued batch,5,10000,64,4096,4907.728,203760,12.44
+macos,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-byte one-way,5,100000,1,64,97315.170,10276,0.63
+macos,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-KiB one-way,5,5000,1,65536,152875.800,6541,408.83
+macos,4eb1afa220937297b14b331fca9eded35cfb718e,libzmq copy,PAIR 64-message queued batch,5,10000,64,4096,1870.650,534574,32.63
