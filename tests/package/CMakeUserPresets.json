@@ -35,6 +35,9 @@
       "name": "package-host-release",
       "inherits": "package-base",
       "binaryDir": "$env{FLOWMQ_SOURCE_ROOT}/build/package-host",
+      "cacheVariables": {
+        "VCPKG_HOST_TRIPLET": "$env{FLOWMQ_TRIPLET}"
+      },
       "environment": {
         "PATH": "$env{FLOWMQ_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{FLOWMQ_SOURCE_ROOT}/vcpkg_installed/$penv{FLOWMQ_TRIPLET}/bin${pathListSep}$penv{PATH}",
         "LD_LIBRARY_PATH": "$env{FLOWMQ_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{FLOWMQ_SOURCE_ROOT}/vcpkg_installed/$penv{FLOWMQ_TRIPLET}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
