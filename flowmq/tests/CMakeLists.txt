@@ -98,6 +98,15 @@ cmake_add_test(
   FOLDER "flowmq/tests/transport")
 
 cmake_add_test(
+  test_flowmq_listener_external
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/transport/test_flowmq_listener_external.c
+  LIBS FlowMQ::Transport Salts::TinyTest
+  INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/transport/cnet
+           ${PROJECT_SOURCE_DIR}/flowmq/src/runtime
+  FOLDER "flowmq/tests/transport")
+set_tests_properties(test_flowmq_listener_external PROPERTIES TIMEOUT 30)
+
+cmake_add_test(
   test_flowmq_socket
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/test_flowmq_socket.c
   LIBS FlowMQ::Transport Salts::TinyTest
@@ -210,6 +219,7 @@ set(FLOWMQ_CORE_TESTS
     test_flowmq_tls_identity_map)
 set(FLOWMQ_TRANSPORT_TESTS
     test_flowmq_transport
+    test_flowmq_listener_external
     test_flowmq_socket
     test_flowmq_destination
     test_flowmq_peer_pool

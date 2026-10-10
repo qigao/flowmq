@@ -40,7 +40,7 @@ queue、scatter/gather、stream partition 和 circuit breaker 不再编入主库
 
 ## Acceptor–Connector 接入决策（2026-10-10）
 
-**状态：设计候选，尚未扩展公开 owner 契约。** 本次只添加私有诊断及测量结果。
+**状态：设计候选；Windows SDK 接纳生命周期已通过下述正式测试，尚未扩展公开 owner 契约。**
 现有 `flowmq_owner_socket()` 明确排除 listener bind；`flowmq_bind()` 对 external backend
 仍返回 `SALTS_ENOTSUP`。启用服务端能力需要单独审查公开行为及下面的生命周期验证。
 
@@ -134,6 +134,49 @@ drain、pending accept 取消及 late completion、关闭一个 socket 时邻接
 保留现有 payload/FIFO/HWM/retained 生命周期回归；比较相同 TCP workload 下 ordinary 与
 owner listener 的吞吐、进程 CPU、P99、接纳延迟与峰值资源，按目标平台分别测量。
 本次固定拓扑 ablation 不覆盖这些门槛，也不代表上述接入已实现或已获得性能收益。
+
+### SDK 接纳生命周期验证（2026-10-10）
+
+**事实：**新增正式 CTest
+[`test_flowmq_listener_external`](../flowmq/tests/transport/test_flowmq_listener_external.c)，
+使用上述发布版 SDK、真实 loopback TCP 和 NativeIO completion，复用 FlowMQ 的 CNet
+配置适配器及 `flowmq_owner_batch_route()`。10 个用例覆盖：
+
+- 重复 submit 保持同一个 request；attach 后禁止独立 listener wait；pending close 返回
+  EBUSY，终态路由前 destroy 仍被拒绝。
+- request slot 复用时 generation 改变，旧 cancellation completion 不会消费新 request。
+- endpoint 满导致 attach 失败、request 满导致 accept 提交失败后，释放容量即可重试。
+- manager 的单 record/connection 容量拒绝额外预留；取消预留先归还 admission credit，
+  context hold 释放后才 recycle；旧 managed identity 不能访问复用后的 record。
+- accept terminal 待消费时 submit 返回 EALREADY；detached child 成功 move 到 manager 后，
+  listener 可关闭并销毁，已有 session 仍完整接收 64 B，retained payload 恰好释放一次。
+- 成功 accept 已 observe、尚未 route 时调用 close，仍须路由实际成功完成，随后由 listener
+  销毁未 move 的 child；sealed-manager adopt 失败也会消费 child，且不伪造 state callback。
+- 两个真实 cancellation 完成、以及真实 accept/client 混合完成，经有界收集交给同一个
+  FlowMQ batch router。首个事件被真实消费者消费后注入错误，余下事件仍各被消费一次。
+  这是对已观察事件的组合路由验证，不声称它们必然来自同一次 OS observe。
+
+所有用例在 teardown 中 drain 并销毁 listener/manager/client，再检查 backend 的 active
+requests 和 endpoint count 均为零，最后销毁 backend；这些计数不等价于 OS handle 泄漏检测。
+Windows x64 / MSVC Release 连续 20 轮通过（200 个用例执行）；相邻 transport、peer pool、
+owner、owner batch、owner fault 及其 pool 变体共 6 个 CTest 通过。
+
+复现入口（Windows 从 VsDevCmd 环境运行）：
+
+```text
+cmake --build --preset win-release-user
+ctest --preset win-release-user -R "^test_flowmq_listener_external$" --repeat until-fail:20 --output-on-failure
+ctest --preset win-release-user -R "^test_flowmq_(transport|owner|owner_batch|owner_fault|owner_fault_pool|peer_pool)$" --output-on-failure
+```
+
+本地日志：`build/listener-sdk-build.log`、`build/listener-sdk-repeat.log`、
+`build/listener-sdk-adjacent.log`。
+
+**未验证范围 / HIGH：**这组测试确认 SDK 边界，尚未把 listener 接入 FlowMQ socket 的
+peer/pool 预留、FSM、credit、重连及 owner shutdown。上节的 FlowMQ 满 peer/pool 恢复、
+突发公平性、邻接 socket 关闭隔离及完整失败回滚仍是开放 bind 前的门槛。
+**MED：**尚无共享 listener 的吞吐、CPU、P99 或接纳延迟结果；Linux/macOS 也未运行。
+因此这一步不计作生产性能优化，不将此前省略 listener 的 ablation 收益归给当前实现。
 
 ## 执行模型
 
