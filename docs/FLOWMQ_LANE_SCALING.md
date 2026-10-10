@@ -266,3 +266,129 @@ CSV 另核对总消息数、等额连接分配、worker 汇总、引擎/位置�
 ZMQ 关闭配置的构建未另行重跑。
 
 完整日志：`build/lane-zmq-build.log`、`build/lane-zmq-correctness.log`、`build/lane-zmq.log`。
+
+
+## 每线程独立 shared owner（2026-10-10）
+
+### 所有权与测量协议
+
+复用 `bench_flowmq_socket_owners.c` 的固定总量 workload，加入 explicit shared owner
+变体。每个 worker 线程独立创建一个 context、一个 `flowmq_owner_t` 和其全部 sockets；
+创建、bind/connect、warmup、收发、poll、关闭均在该线程完成，控制线程只负责启动屏障、
+结果汇总和 join。线程间不共享 socket/owner/backend，不迁移连接或 payload，也不引入
+逐消息队列。多个线程并行时，每线程仍只有一条 lane。
+
+总量固定为八条 TCP PAIR 连接，每连接两端在同一个 lane，平均分到 1/2/4/8 个线程；
+每个 owner 的硬 socket capacity 为 `2 * pairs_per_lane`，分别为 16/8/4/2，全局合计
+始终为 16。listener 使用内部 `flowmq_socket_internal_bind_external()`，不是公开 bind
+契约扩展，也不是统一端口的 accept 分配实验。
+
+ordinary 与 shared 复用同一 128-message copy burst、序号/连接 ID/完整内容检查、
+收发消息 HWM=128、背压重试、30 s deadline 和每轮末两次 credit progress；区别只有
+socket 所属 execution domain 及对应的创建、bind、poll、关闭入口。接纳后源 buffer
+可立即复用，接收必须按每连接 FIFO 校验；busy/full 由所属 lane 推进后重试，不丢消息。
+
+任何 worker 错误通过已有 atomic first-error 通知其他 worker；所有已启动线程必须
+抵达完成屏障并 join。完成较早的线程休眠，直到控制线程完成 CPU/时间采样，再在
+原线程逐一 `flowmq_owner_close_socket()`，最后 `flowmq_owner_term()`、context term。
+部分初始化也在原线程清理；join 失败沿用现有测试进程 fail-fast，不能释放仍在使用的
+栈上 worker/gate。benchmark 计时循环不新增动态分配或跨线程可变状态，latency 存储仍按固定总量预分配。
+
+
+### 八轮配对结果
+
+环境沿用本文 Windows 11 10.0.26200、Ryzen 9 7940HX、MSVC 14.44.35207 Release、
+Salts 2.3.0-rc.1 SDK（源码 `58ff08fc95b4aa1dc493c0b7080426b2c11d4959`）。
+生产 runtime 仍为 `05287e2`；本轮在 `a578359` 基础上只改 benchmark/CTest 和报告。
+线程不固定 CPU 亲和，测试进程内无其他并行 benchmark/build；未控制机器上其他进程
+或 CPU 频率，因此报告完整八轮，保留波动与反转。
+
+每组 2,048 轮 × 8 连接 × 128 消息 = **2,097,152 条消息**；共 128 组、
+**268,435,456 条计时内消息**。64 B/1 KiB 交替领先，lane 数轮转，两种执行模式在每个
+lane-order 位置各领先一次。原始数据见
+[128 组结果](flowmq-shared-lanes-windows-20261010.csv)和
+[480 个 worker 结果](flowmq-shared-lanes-workers-windows-20261010.csv)。
+
+下表吞吐为各自八轮中位数，单位 **Mmsg/s**。配对变化逐轮计算 `shared/ordinary−1`
+再取中位数，因此不等于吞吐中位数直接相除；“胜出”只指吞吐，不代表 P99 同样胜出。
+
+| payload | 线程/lane 数 | ordinary | shared owner | 配对吞吐变化 | shared 胜出 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 64 B | 1 | 1.560 | 1.661 | +11.9% | 6/8 |
+| 64 B | 2 | 2.413 | 2.725 | +18.0% | 7/8 |
+| 64 B | 4 | 3.959 | 4.657 | +15.2% | 8/8 |
+| 64 B | 8 | 6.884 | 7.329 | +7.9% | 7/8 |
+| 1 KiB | 1 | 0.582 | 0.719 | +24.0% | 6/8 |
+| 1 KiB | 2 | 0.908 | 1.142 | +21.4% | 8/8 |
+| 1 KiB | 4 | 1.845 | 2.249 | +20.9% | 8/8 |
+| 1 KiB | 8 | 3.363 | 3.982 | +19.3% | 8/8 |
+
+CPU 成本和 burst P99 同样列各自八轮中位数；P99 的样本是**一个连接的 128 条消息
+从首次发送到最后一条接收完成的时间**，包含同 lane 其他连接的排队与内容校验，不能
+称为单消息 P99 或直接除以 128。CPU 数据为测试进程 user+kernel CPU 增量。
+
+| payload | lanes | ordinary CPU ns/条 | shared CPU ns/条 | ordinary burst P99 µs | shared burst P99 µs |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 64 B | 1 | 640.75 | 599.77 | 1019.90 | 914.25 |
+| 64 B | 2 | 812.11 | 737.61 | 576.30 | 542.90 |
+| 64 B | 4 | 976.03 | 834.46 | 371.50 | 295.40 |
+| 64 B | 8 | 1121.31 | 1054.26 | 238.50 | 218.85 |
+| 1 KiB | 1 | 1713.63 | 1370.91 | 2612.50 | 2178.35 |
+| 1 KiB | 2 | 2171.84 | 1728.53 | 1724.80 | 1335.90 |
+| 1 KiB | 4 | 2115.97 | 1717.36 | 858.80 | 681.25 |
+| 1 KiB | 8 | 2257.53 | 1903.62 | 426.10 | 367.05 |
+
+**事实：**shared 的 CPU/wall 中位数随 1/2/4/8 lanes 分别为：
+64 B **0.994 / 1.975 / 3.895 / 7.648**；1 KiB **0.990 / 1.975 / 3.859 / 7.656**。
+每组所有 worker 的运行区间均有共同交集，等额完成自己的连接和消息，说明多个 owner
+在并行运行，而非多个线程轮流操作一个 owner。
+
+**计算：**按上表吞吐中位数相除，shared 从 1→8 lanes 提高约 **4.41× / 5.54×**
+（64 B / 1 KiB）。若逐轮计算 8-lane/1-lane 再取中位数则为 4.59× / 7.18×；
+两个统计量不同，尤其 1 KiB 各组波动较大，不将任何一个值声称为固定加速比。
+八 lane 相对同批 ordinary 的配对 CPU/条下降 **5.0% / 16.1%**，burst P99 下降
+**5.2% / 16.7%**。但增加 lane 并非免费：shared 自身 8/1 的配对 CPU/条中位数仍增加
+66.5% / 7.3%，吞吐、尾延迟和 CPU 效率需要分别看。
+
+**事实与推论：**同 payload/lane 下两种模式的 poll 调用数完全一致，发送接纳重试
+均为零。64 B 总 poll 数依次为 8,192/16,384/32,768/65,536，1 KiB 为
+22,528/45,056/90,112/180,224。本轮没有靠减少调用者的 credit progress 获得收益；
+差别来自 execution domain 的推进/等待/完成分发实现。但这不是只替换 listener 的
+单变量实验，不能把全部收益归因于某一个系统调用，也不能从零发送重试推断无背压。
+
+**MED：**收益存在反转和明显波动。八 lane shared 的范围为 64 B **6.642–8.496 Mmsg/s**、
+1 KiB **3.645–5.806 Mmsg/s**；相应 ordinary 为 **6.403–7.519 / 3.049–5.264 Mmsg/s**。
+小消息八 lane 有一轮不胜 ordinary，单 lane 两种 payload 各有两轮反转。八轮配对支持
+继续使用固定 lane 的 shared wait 方向，但不构成统计显著性、所有负载或线性扩展保证。
+进程生命周期 peak RSS 最大约 30.40 MiB；这是整个进程的历史高水位，不能归因到某组
+或据此比较单个 owner 的内存峰值。
+
+### 验证、边界与复现
+
+- 完整 Release build 通过；`test_flowmq_shared_lanes` 连续十轮通过，覆盖两种 payload、
+  四种 lane 数和 pool 开关，共 160 个配置运行。关闭错误会传播为失败，不能将未关闭的
+  owner 当作成功测量。现有 owner、batch、fault、listener 和 `test_flowmq_socket_owners`
+  九个相邻 CTest 全部通过（8.97 s），后者还回归旧 ordinary/TLS/multipart/ZMQ 路径。
+- `bench_flowmq_shared_lanes` 完成全部 128 组；每条计时消息均核对长度、完整内容、
+  连接 ID 和 FIFO 序号。CSV 核对了唯一组、等额分配、位置平衡、worker 消息/poll/retry
+  汇总、共同运行区间和组结束时间，无缺组或短跑。
+- 未修改生产 runtime 或公开接口；未重复完整 core/transport suite，未运行 sanitizer、
+  Linux/macOS。listener 仍使用内部 TCP 入口，不能把该 benchmark 当作公开 owner bind
+  已完成发布门槛。
+- 本轮只验证固定连接、每连接两端同 lane 的 TCP PAIR。尚未测跨 lane 两端、远程端点、
+  统一监听端口分配、非 PAIR 多 lane、TLS shared listener、动态负载迁移或跨线程投递。
+  未在本批次重测 ZMQ 性能；不能拿本轮 shared 数值直接除以上一批 ZMQ 数值。
+
+在 VS developer environment 使用已有 Release user preset：
+
+```powershell
+cmake --build --preset win-release-user
+ctest --preset win-release-user -R "^test_flowmq_shared_lanes$" --repeat until-fail:10 -V
+ctest --preset win-release-user -R "^test_flowmq_(socket_owners|owner|owner_batch|owner_fault|owner_fault_pool|owner_listener|owner_listener_pool|owner_listener_fault|owner_listener_fault_pool)$" --output-on-failure
+ctest --preset bench-win-release-user -R "^bench_flowmq_shared_lanes$" -V
+```
+
+benchmark 默认 2,048 rounds、8 repeats；沿用 `FLOWMQ_LANE_BENCH_ROUNDS`（1–4096）和
+`FLOWMQ_LANE_BENCH_REPEATS`（1–9），完整位置平衡需要 8 repeats。日志为
+`build/shared-lanes-build-final.log`、`build/shared-lanes-correctness.log`、
+`build/shared-lanes-regression.log`、`build/shared-lanes-comparison.log`。

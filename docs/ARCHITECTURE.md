@@ -283,7 +283,7 @@ prototype 的固定 10ms wait。routed completion batch 后不立即执行第二
 ordinary `flowmq_poll()`，不能直接 `flowmq_close()`，也不能迁移到另一个 owner。
 该 API 仍只产品化 TCP client-side shared-wait progress。
 
-listener/same-endpoint multicore 使用独立的 ordinary-socket composition，而不是把 listener
+公开的 listener/same-endpoint multicore 使用独立的 ordinary-socket composition，而不是把 listener
 塞进 `flowmq_owner_t`：
 
 ```text
@@ -311,6 +311,11 @@ TCP PAIR 连接、batch=128，连接两端固定在同一 ordinary owner 线程�
 8 lane 对 1 lane 的吞吐加速中位数为 64 B **5.032×**、1 KiB **6.576×**，进程 CPU/wall
 约 7.8；对应 CPU/条增加约 54.9% 和 17.2%。该结果验证独立 owner 多核分片，不是
 `flowmq_owner_t` listener shared wait、统一端口 accept 分配或跨机网络性能的测量。
+
+随后新增了每线程一个 `flowmq_owner_t` 的 1/2/4/8 lane 配对验证，所有 lane 各自创建、
+推进和销毁 context/owner/sockets，共用同一固定八连接 workload 与 ordinary 对照。
+完整结果及 CPU/P99 见 [每线程 shared owner 报告](FLOWMQ_LANE_SCALING.md#每线程独立-shared-owner2026-10-10)。
+该实验使用内部 TCP listener 入口，不扩展公开 bind 契约，也未验证非 PAIR 多 lane。
 
 每个 live peer 独占 heartbeat deadline、pending-PONG 和双向累计 credit 状态。
 peer 的可变协议状态拆成三个独立维度，而不是一个乘积型大 FSM：

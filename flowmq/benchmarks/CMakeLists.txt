@@ -15,12 +15,24 @@ cmake_add_benchmark(
   bench_flowmq_socket_owners
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_socket_owners.c
   LIBS FlowMQ::Transport Salts::TinyTest
-  INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/tests/runtime
+  INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/tests/runtime ${PROJECT_SOURCE_DIR}/flowmq/src/runtime
   FOLDER "flowmq/benchmarks/runtime")
 if(WIN32)
   target_link_libraries(bench_flowmq_socket_owners PRIVATE psapi)
 endif()
 if(BUILD_TESTS)
+  add_test(NAME bench_flowmq_shared_lanes
+           COMMAND bench_flowmq_socket_owners --filter "shared lanes:")
+  set_tests_properties(bench_flowmq_shared_lanes PROPERTIES
+    LABELS "flowmq;benchmark" RUN_SERIAL TRUE TIMEOUT 1200)
+  add_test(NAME test_flowmq_shared_lanes
+           COMMAND bench_flowmq_socket_owners --filter "correctness: shared owner lanes")
+  set_tests_properties(test_flowmq_shared_lanes PROPERTIES
+    LABELS "flowmq;flowmq-transport" RUN_SERIAL TRUE TIMEOUT 120)
+  if(WIN32)
+    set_tests_properties(bench_flowmq_shared_lanes test_flowmq_shared_lanes PROPERTIES
+      ENVIRONMENT_MODIFICATION "${FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS}")
+  endif()
   add_test(NAME bench_flowmq_lane_scaling
            COMMAND bench_flowmq_socket_owners --filter "lane scaling:")
   set_tests_properties(bench_flowmq_lane_scaling
