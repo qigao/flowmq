@@ -521,3 +521,163 @@ ctest --preset win-release-user -R "^test_(flowmq_(socket_owners|shared_lanes|pa
 影响。最终日志为 `build/paced-lanes-build-final.log`、`build/paced-lanes-repeat.log`、
 `build/paced-lanes-cycles.log`、`build/paced-lanes-regression.log`。早期
 `build/paced-lanes-comparison.log` 没有 cycle/计划完成 P99，不与最终 CSV 混合统计。
+
+## Disruptor retained mailbox 与 CNet SG（2026-10-10）
+
+### 路径、所有权与边界
+
+本轮内部验证将应用提交与 owner 的 I/O wait 接通：
+
+```text
+producer owned buffer → Disruptor slice descriptor → lane owner
+    → flowmq_send_slice → FMQ framing + payload ranges
+    → cnet_send_slicev → NativeIO SG → flowmq_recv_slicev
+```
+
+复用 Salts 的有界 Disruptor，不新增队列库或隐藏线程。每 lane 一个 owner 和一条
+TCP PAIR 连接，两端同 lane；两个独立 producer 向该 lane 的 MPSC mailbox 提交，
+唯一 consumer 是 owner。比较 1/8 lanes，因此对应 3/24 个工作线程，另有一个等待
+汇总的控制线程；不绑核，不等同于八个物理核或此前只有八个 owner 线程的 workload。
+连接数和总消息数随 lane 数增加，本轮只比较同 lane 数/负载下的策略，不声称固定
+总连接数下的多核加速比。
+
+每 mailbox 128 个槽位，entry 仅含一个拥有引用的 `mem_slice_t`；每 producer
+预分配 64 个 buffer，源 backing 预算为 `lanes * 2 * 64 * payload_bytes`，最大
+64 MiB。这个上限不包含 FlowMQ/CNet 的内部缓存。producer 永久保留一个基础引用，
+仅在引用数回到 1 且没有其他线程能从裸指针重新 retain 时允许重写。此限制是协议
+的一部分，不能将引用数查询推广为任意共享对象的并发写锁。
+
+producer 先准备最多 16 个 slice，再 claim/publish 一个范围，成功后所有权移入
+mailbox；满时在 30 s 总 deadline 内 yield 重试，不丢弃、不扩容。发布后每批最多
+一次 native wake；失败不能重投已经提交的批次。consumer 持有当前 slot，只有发送
+接纳成功才释放 slice 和 slot；busy/full 时继续推进 I/O。retained 发送由 CNet
+继续保活原 buffer，基础引用不能因此提前允许重写。copy 对照也使用同一 retained
+mailbox，仅 consumer 调用 `flowmq_send()`，隔离队列交接方式的差异。
+
+接收统一使用 `flowmq_recv_slicev()`，直接遍历多段，校验跨段 header、lane/producer
+ID、每 producer FIFO、长度和完整内容，再逐段 release；没有接收 coalesce 或复制
+到第二个完整 payload。关闭必须先 join 所有 producer/wake 调用者，再清理 owner
+和剩余 queue 引用，检查所有源 buffer 回到基础引用数，最终释放回调恰好执行一次。
+取消路径同样检查引用归还。资格验证覆盖固定连接，不支持生产者动态注册或连接迁移。
+
+内部新增 `flowmq_owner_internal_step/wake`，复用既有 CNet advance/observe/route
+顺序。step 是单次推进，纯控制 wake 后返回给 mailbox 循环；空 owner 也观察 backend，
+不调用不可唤醒的 sleep。已有公开 owner poll 和 close 继续走原入口和行为；这两个
+内部入口不安装，不构成公开线程安全 admission/shutdown API。只有队列确认暂无
+可消费项、无 pending slot、所有已接纳消息已接收时，owner 才允许最长 1 s 的 wait；
+队列或网络还有工作时仍零等待推进。NativeIO 的持久 wake 衔接检查队列与进入等待
+的竞态，不用近似 empty 查询省略通知。
+
+### 测量口径
+
+比较 send=`copy`/`sg`（后者指 retained admission）、wait=`spin`/`wake`、
+64 B/64 KiB、1/8 lanes，以及 producer 连续提交和每批前 sleep(5 ms) 两种负载。
+每个配置四轮，四种策略循环换位，使每种策略各在每个位置运行一次。小消息连续
+提交用 2,048 rounds，其他用 32 rounds；每 producer 每 round 发布 16 条。CPU
+采样前等待所有 producer 和 owner 到达启动屏障，采样后 join producer，再允许
+owner 关闭。源 buffer/queue 预分配不计入计时，payload 构造、逐字节校验、引用操作、
+背压和所有工作线程的 CPU 均计入，不能当成纯 CNet 网络带宽。
+
+`prepare_receive_p99_ns` 从取得可重写 buffer 后、填充 payload 前计时，直到接收
+校验完成；包含随后准备同批消息、入队与网络排队，不包含取得该 buffer 之前的等待，
+也不包含 producer 的 sleep。buffer 等待次数另列，吞吐和 CPU 包含这部分成本。
+低负载 sleep 的实际间隔受 Windows 调度影响，不声明固定 offered rate，也不与
+前一节“按 5 ms 计划释放”的 P99 混用。CPU cycles 是测试进程全部工作线程的原始
+计数，CPU 时间的零/离散读数继续保留，不据此宣称零成本。
+
+**MED：**高负载 producer 在 buffer/queue 满时使用有界 yield 重试，仍会消耗 CPU；
+原型没有验证 producer 侧空间/引用归还的阻塞通知。copy 与 retained 的可接纳队列、
+实际在途数据量和收包分段也不同，因此收益不能全部归因于少一次 memcpy。此实验
+证明的是完整调用路径的差异，不是等窗口、等内存预算下的单个 SG 系统调用 A/B。
+
+**事实：**FlowMQ 的 retained PAIR 选择 peer 时先检查 write-idle 和 outbound queue，
+已有写入时返回 busy；复制发送可以排队并在后续推进中合批。这里的 `sg` 标签不表示
+copy 对照完全不用 SG：其内部复制出的 buffer 后续也会进入 CNet retained/SG 路径。
+首要优化边界因此在 FlowMQ admission 与跨消息 batching，而非再引入一层 ring。
+不得用 SNDMORE 合并独立消息来获得不等价的“batch 吞吐”。
+
+### 四轮完整结果
+
+环境沿用 Windows 11、Ryzen 9 7940HX、MSVC Release 和 pinned Salts 2.3 SDK。
+[128 组原始 CSV](flowmq-mailbox-sg-windows-20261010.csv) 对应最后一次完整运行，合计
+**9,879,552 条消息、19,940,769,792 字节 payload**。每组持续约 67.6–1,131.5 ms。
+四种策略位置、配置唯一性、消息总数、每批一次 wake 数和非零 cycle 计数均核对通过。
+下面吞吐列为各自四轮中位数，单位 **kmsg/s**；变化是逐轮计算 `retained/copy - 1`
+后取中位数，不能用两个吞吐中位数相除替代配对计算。
+
+| payload | lanes | 等待策略 | copy 吞吐 | retained 吞吐 | 配对吞吐变化 | 配对 CPU cycles/条变化 |
+| --- | ---: | --- | ---: | ---: | ---: | ---: |
+| 64 B | 1 | spin | 678.817 | 93.281 | −85.2% | +570.4% |
+| 64 B | 1 | wake | 741.005 | 98.954 | −87.1% | +681.3% |
+| 64 B | 8 | spin | 3277.874 | 504.696 | −84.2% | +544.9% |
+| 64 B | 8 | wake | 3859.755 | 495.789 | −87.2% | +679.7% |
+| 64 KiB | 1 | spin | 6.328 | 8.229 | +23.7% | −13.7% |
+| 64 KiB | 1 | wake | 6.151 | 6.899 | +11.5% | −2.9% |
+| 64 KiB | 8 | spin | 20.866 | 41.064 | +101.4% | −47.2% |
+| 64 KiB | 8 | wake | 22.443 | 40.013 | +79.0% | −40.2% |
+
+大消息八 lane 的两种等待模式均四轮吞吐胜出；单 lane spin 四轮胜出，wake 三轮
+胜出。小消息所有配置 retained 均零轮胜出。大消息八 lane wake 的准备到接收完成
+P99 中位数从 **88.349 ms → 26.593 ms**，配对下降 **69.7%**；spin 从
+**101.556 ms → 27.709 ms**，配对下降 **73.1%**。这些是带 producer 构造和消费者
+完整校验的队列 workload，不是单包网络延迟或 SDK 的极限吞吐。
+
+**事实与推论：**小消息八 lane wake 每组 524,288 条消息时，retained 的 send busy
+和 owner step 次数中位数分别为 **560,971 / 560,984**，copy 对照为
+**20,444 / 53,231**。结合 write-idle admission 检查，主要可见限制是逐消息发送与
+推进，Disruptor 的 16 条批量发布并未自动成为网络 batch。此处未采集 native syscall
+或硬件 cache-miss，不能把所有 CPU 差异归因到某一系统调用或引用计数。
+
+在每批 sleep(5 ms) 的低负载下，比较**同一种发送方式**的 wake 相对 spin：
+
+| payload | lanes | copy 配对 cycles/条下降 | retained 配对 cycles/条下降 | retained P99 spin→wake（ms） |
+| --- | ---: | ---: | ---: | ---: |
+| 64 B | 1 | 97.9% | 96.1% | 0.582 → 0.804 |
+| 64 B | 8 | 97.8% | 94.8% | 0.886 → 0.890 |
+| 64 KiB | 1 | 59.6% | 71.8% | 5.165 → 4.144 |
+| 64 KiB | 8 | 18.7% | 58.2% | 6.880 → 5.887 |
+
+这里的 wake 由真正发布的 mailbox 命令触发，owner 的最大 wait 虽为 1 s，也不要求
+等超时才发现数据。它与上节依赖定时 timeout 释放数据的实验不同。小消息单 lane 的
+P99 仍有上升，不能声称唤醒零成本或所有尾延迟都会改善。低负载组 buffer 等待计数
+均为零；高负载 producer 的 yield 重试仍需单独优化。
+
+### 选择、验证与剩余工作
+
+本轮选择为**大消息优先保留源 buffer、接收保留分段、小消息保留复制合批**，不加入
+未经测量的自动阈值，也不将所有应用调用强制改成 send_slice。下一项有证据支撑的
+优化是利用既有有界 outbound 结构合并多个 retained FMQ frame，再提交 CNet vector：
+必须同时限定消息数、总字节和 range 数，保留每条消息的 wire 边界、credit/FIFO、
+背压和失败释放。第一条 idle 消息不应为凑批而等待固定 timer。只有完成同语义 A/B
+和取消/部分完成测试后，才能考虑扩大公开 admission 契约。
+
+当前只交付内部 qualification seam 和正式 benchmark/test，不发布 mailbox API。
+现有公开 owner poll、send/recv、listener bind 和默认等待策略均保持原行为；回滚可
+移除内部测试接入及 step/wake 入口，无协议或持久数据迁移。
+
+验证结果：
+
+- 完整 Release build 通过，新增 benchmark 编译无 warning。
+- 四个 mailbox 正式测试连续十轮通过：满队列引用归属/发布缺口，空 owner 的等待前
+  与等待中 wake，1/8 lanes 和两种 payload 的 MPSC 复用收发，以及 producer 并发时
+  取消并回收所有 retained 引用。最终版本每条发送还核对 retained admission 持有源
+  引用、copy admission 不额外持有源引用；所有 backing 最终回调恰好一次。
+- 33 个 `flowmq-transport` CTest 全部通过（210.21 s），覆盖普通/池化 socket、owner、
+  fault/listener、public C/C++ 和现有多核示例。随后最终 benchmark/test-only 的启动
+  屏障、引用断言和测量时长调整经重新完整 build、十轮 mailbox 测试和全部 128 组
+  benchmark 验证（57.12 s）；runtime 在两批验证间未再修改。
+- 尚未覆盖原生 wake 失败注入、跨机、Linux/macOS、sanitizer、TLS mailbox 路径或
+  retained 跨消息 batching。未与 ZMQ 同批比较；无 8 个物理核 affinity 结论。
+
+在 VS developer environment 复现：
+
+```powershell
+cmake --build --preset win-release-user
+ctest --preset win-release-user -R "^test_flowmq_owner_mailbox$" --repeat until-fail:10 -V
+ctest --preset bench-win-release-user -R "^bench_flowmq_owner_mailbox$" -V
+ctest --preset win-release-user -L "flowmq-transport" --output-on-failure
+```
+
+最终日志：`build/mailbox-sg-build-qualified.log`、`build/mailbox-sg-qualified.log`、
+`build/mailbox-sg-qualified-comparison.log`、`build/mailbox-sg-transport-regression.log`。
+早期短时长的 `build/mailbox-sg-comparison.log` 不进入最终 CSV，也不与本表混合统计。

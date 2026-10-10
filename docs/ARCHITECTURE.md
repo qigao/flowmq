@@ -325,6 +325,43 @@ CPU cycles，但 Windows 上计划释放到完成的 P99 增加到约 16–18 ms
 低 CPU 场景只等待真正需要的 POLLIN/待发送 POLLOUT，并使用最近的应用 deadline；
 严格定时场景还需验证平台等待精度，不能用平均完成速率掩盖迟到。
 
+### 内部 Disruptor mailbox qualification
+
+内部验证采用每 lane 一个有界 MPSC mailbox：业务 producer 只向预先绑定的 lane 发布
+拥有引用的 slice，唯一 consumer 是该 lane 的 owner。socket/context/backend 始终在 owner
+线程创建、推进和销毁。队列使用 Salts Disruptor worker 模式但只有一个 consumer，
+不让多个 owner 竞争同一连接的操作。资格验证代码不安装，不增加公开 mailbox API。
+
+协议先限定为最大 64 KiB 消息、128 个槽位、一次最多发布 16 条。每个 producer
+预分配 64 个独立 backing buffer 并持有一份基础引用；仅在引用数回到 1（唯一 producer
+持有，且无其他线程可凭裸指针重新 retain）时才允许重写。入队前创建 slice，成功
+claim 后必须移动 slice 并 publish 恰好一次；claim 失败仍由 producer 释放 slice。
+consumer 对照 FlowMQ copy-send 与 retained send_slice，接纳后释放自己的 slice 和
+slot；SG 下 CNet 保持源引用直到终态，slot 释放不代表 backing 可以复用。busy/full 时 consumer 持有当前
+slot 并继续网络进度，不丢弃，不另开无界 pending 队列。每 producer 保留 FIFO，
+不同 producer 不承诺业务上的全局顺序。队列容量与 socket HWM 分别计入资源上限。
+
+发布一批后唤醒对应 native backend；wake 失败发生在发布之后，不能把它当成未接纳
+并重新提交同一批。单次内部 progress 必须返回给 mailbox 调度循环，避免公开 owner
+poll 在无 socket readiness 时再次等待。空 owner 也须能等待并被唤醒。使用底层已有
+持久、合并的 wake 信号衔接“检查队列→进入等待”的窗口，不以近似 empty 查询决定
+是否通知；首轮不添加未经验证的软件 wake 去重。每轮有界消费后推进 I/O，避免大队列
+饿死网络完成和控制 deadline。连接和队列同时空闲时才允许正超时等待。
+
+关闭先停止并 join 全部 producer/wake 调用者，consumer drain 已发布数据及网络接收，
+最后停止 owner，再销毁队列和 backing；错误路径先通知停止，join producer 后释放剩余
+slots 的 slice。生产者注册/撤销、动态 socket 迁移、公开 shutdown API 仍不在
+本次范围。验证要求覆盖满队列、引用归还与安全复用、乱序发布缺口、等待前/等待中唤醒和停止唤醒，
+并对比同一 mailbox workload 的忙轮询与通知等待，记录完整内容、序号、CPU 和尾延迟。
+
+SG 的实际接入使用现有 `flowmq_send_slice()`：FlowMQ 将 framing 与原 payload 分段，
+交给 `cnet_send_slicev()`，由 CNet 管理 retained vector 的终态寿命。接收使用
+`flowmq_recv_slicev()` 并直接遍历 ranges，不先 coalesce。复制 API 对照的后续发送
+也可能使用 CNet SG，故对照比较的是 payload admission 方式，而不是有无系统 SG。
+当前 retained PAIR 即时发送仍要求 peer write idle，不能由 Disruptor 批量发布推导出
+网络也批量提交。后续跨消息 retained batching 必须保留每条 FMQ 消息边界、credit、
+HWM、FIFO 与终态释放，不能用 SNDMORE 将独立消息合成一个 multipart 来替代。
+
 每个 live peer 独占 heartbeat deadline、pending-PONG 和双向累计 credit 状态。
 peer 的可变协议状态拆成三个独立维度，而不是一个乘积型大 FSM：
 

@@ -17,6 +17,30 @@ cmake_add_benchmark(
   LIBS FlowMQ::Transport Salts::TinyTest
   INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/tests/runtime ${PROJECT_SOURCE_DIR}/flowmq/src/runtime
   FOLDER "flowmq/benchmarks/runtime")
+
+cmake_add_benchmark(
+  bench_flowmq_owner_mailbox
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_owner_mailbox.c
+  LIBS FlowMQ::Transport Salts::Concurrency Salts::TinyTest
+  INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/runtime
+  FOLDER "flowmq/benchmarks/runtime")
+if(WIN32)
+  target_link_libraries(bench_flowmq_owner_mailbox PRIVATE psapi)
+endif()
+if(BUILD_TESTS)
+  add_test(NAME test_flowmq_owner_mailbox
+           COMMAND bench_flowmq_owner_mailbox --filter "mailbox correctness:")
+  add_test(NAME bench_flowmq_owner_mailbox
+           COMMAND bench_flowmq_owner_mailbox --filter "mailbox comparison:")
+  set_tests_properties(test_flowmq_owner_mailbox PROPERTIES
+    LABELS "flowmq;flowmq-transport" RUN_SERIAL TRUE TIMEOUT 120)
+  set_tests_properties(bench_flowmq_owner_mailbox PROPERTIES
+    LABELS "flowmq;benchmark" RUN_SERIAL TRUE TIMEOUT 600)
+  if(WIN32)
+    set_tests_properties(test_flowmq_owner_mailbox bench_flowmq_owner_mailbox PROPERTIES
+      ENVIRONMENT_MODIFICATION "${FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS}")
+  endif()
+endif()
 if(WIN32)
   target_link_libraries(bench_flowmq_socket_owners PRIVATE psapi)
 endif()

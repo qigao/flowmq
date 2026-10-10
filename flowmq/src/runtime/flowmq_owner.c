@@ -89,9 +89,9 @@ static int flowmq_owner_route_completion_slot(
       socket, completion, consumed, events);
 }
 
-int flowmq_owner_internal_progress_once(
+static int flowmq_owner_progress_impl(
     flowmq_owner_t *owner, uint32_t max_wait_ms,
-    flowmq_owner_internal_batch_fn dispatch, void *user) {
+    flowmq_owner_internal_batch_fn dispatch, void *user, bool wait_when_empty) {
   uint32_t wait_ms = max_wait_ms;
   size_t active_count = 0u;
   size_t completion_count = 0u;
@@ -117,7 +117,7 @@ int flowmq_owner_internal_progress_once(
     if (socket_wait < wait_ms) wait_ms = socket_wait;
   }
 
-  if (active_count == 0u) {
+  if (active_count == 0u && !wait_when_empty) {
     if (max_wait_ms != 0u) cmeta_sleep_ms(max_wait_ms);
     return SALTS_OK;
   }
@@ -153,6 +153,23 @@ int flowmq_owner_internal_progress_once(
       first_error = status;
   }
   return first_error;
+}
+
+int flowmq_owner_internal_progress_once(
+    flowmq_owner_t *owner, uint32_t max_wait_ms,
+    flowmq_owner_internal_batch_fn dispatch, void *user) {
+  return flowmq_owner_progress_impl(owner, max_wait_ms, dispatch, user, false);
+}
+
+int flowmq_owner_internal_step(flowmq_owner_t *owner, uint32_t max_wait_ms) {
+  return flowmq_owner_progress_impl(owner, max_wait_ms, NULL, NULL, true);
+}
+
+int flowmq_owner_internal_wake(flowmq_owner_t *owner) {
+  if (owner == NULL) return SALTS_EINVAL;
+  /* Lifecycle is externally quiesced; do not read owner-thread mutable flags
+   * here. NativeIO owns concurrent wake coalescing and its admission check. */
+  return native_io_backend_wake(&owner->backend);
 }
 
 static int flowmq_owner_progress_once(flowmq_owner_t *owner,
