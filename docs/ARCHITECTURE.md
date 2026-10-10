@@ -40,7 +40,7 @@ queue、scatter/gather、stream partition 和 circuit breaker 不再编入主库
 
 ## Acceptor–Connector 接入决策（2026-10-10）
 
-**状态：设计候选；Windows SDK 接纳生命周期已通过下述正式测试，尚未扩展公开 owner 契约。**
+**状态：内部 TCP shared-listener 已接入并进入验证；尚未扩展公开 owner 契约。**
 现有 `flowmq_owner_socket()` 明确排除 listener bind；`flowmq_bind()` 对 external backend
 仍返回 `SALTS_ENOTSUP`。启用服务端能力需要单独审查公开行为及下面的生命周期验证。
 
@@ -54,7 +54,7 @@ queue、scatter/gather、stream partition 和 circuit breaker 不再编入主库
 
 | 方案 | 适配性与决定 |
 | --- | --- |
-| Acceptor–Connector，listener 与连接共享固定 owner 的 backend | 优先候选；分离连接接纳与协议会话，复用 CNet 现有能力，目标是合并等待 |
+| Acceptor–Connector，listener 与连接共享固定 owner 的 backend | 内部实现已采用；分离连接接纳与协议会话，复用 CNet 现有能力，合并等待 |
 | 每隔 N 次 progress 检查 listener | 会改变新连接接纳延迟与公平性；固定拓扑测量不足以选择 N，不采用 |
 | Leader/Followers，多线程轮流等待和处理 | 当前没有线程竞争或 worker 不均衡证据；任意线程处理当前 CNet 状态违反 owner 亲和，不直接套用 |
 | 保持 ordinary socket + SO_REUSEPORT 多 owner | 保留现有部署方式；平台不支持时仍返回 ENOTSUP，不以隐藏 accept 线程补足 |
@@ -82,7 +82,7 @@ queue、scatter/gather、stream partition 和 circuit breaker 不再编入主库
   交接，也不引入逐消息 MPSC 队列。TLS 的 detached adoption 存在，但 FlowMQ external
   runtime 当前仅支持 TCP；首版范围限定 TCP，不推导为 TLS shared wait 已可用。
 
-### 候选 progress 与容量协议
+### 内部 progress 与容量协议
 
 ```text
 固定 owner，所有调用串行：
@@ -94,11 +94,12 @@ queue、scatter/gather、stream partition 和 circuit breaker 不再编入主库
   下一 owner cycle 才推进刚接纳的连接；不追加第二次 CNet advance
 ```
 
-提交 accept 前，先预留一个 peer、可选 pool lease 和 manager admission record；
+提交 accept 前，先预留一个 peer、可选 pool connecting slot 和 manager admission record；
 每个 listener 最多持有一组预留，计入现有四 peer 的硬上限。无容量则不提交新 accept，
 连接留在内核 backlog；进度循环仍推进已有连接。预留成功而 submit 失败时，走 manager
 cancel、context hold release、pool/peer release 的明确回滚，不能泄漏 credit。
 预留阶段尚无业务 DATA、decoder 输出或协议 READY；成功 adopt 才开始正常会话生命周期。
+pool 的长生命周期 lease 仍在协议 READY 后获取，TCP accept 不提前发放 lease。
 
 listener request 保存完整 slot/generation。在现有 socket 路由中先匹配该 identity，再交给
 listener router；未匹配才尝试该 socket 的 client router，不按裸 slot 或 native handle 判定。
@@ -107,9 +108,10 @@ listener router；未匹配才尝试该 socket 的 client router，不按裸 slo
 最终返回首个错误。每个 listener 每 cycle 最多接纳一个 child，避免连接突发占尽会话处理。
 
 设 owner 的 socket 上限为 S、listener 上限 L≤S、peer 上限 P=4、每 socket 原 request
-预算为 R。现有 backend 预算为 endpoints=2PS、requests=RS、completion batch=RS。
-候选保守预算为 endpoints=2PS+2L（listener 与 accepted-child 余量）、requests=RS+L、
-completion batch=RS+L；乘加均 checked，超限返回 ERANGE。listener 的 child 最多一个，
+预算为 R。旧 backend 预算为 endpoints=2PS、requests=RS、completion batch=RS。
+内部实现按 L=S 预留保守预算：endpoints=2PS+2S（listener 与 accepted-child 余量）、
+requests=RS+S、completion batch=RS+S；乘加均 checked，超限返回 ERANGE。
+这也增加 client-only owner 的预分配容量，没有改变每 socket 的四 peer 上限。listener 的 child 最多一个，
 已经包含在其预留 peer 内，不能当作可无限增长的额外连接池。具体 backend 对 child escrow
 的资源计数仍须通过容量耗尽测试核实，预算公式不是容量测试通过的证明。
 
@@ -133,7 +135,7 @@ TCP owner bind 能力，不安装占位 API。迁移由应用显式选择 owner 
 drain、pending accept 取消及 late completion、关闭一个 socket 时邻接 socket 继续传输。
 保留现有 payload/FIFO/HWM/retained 生命周期回归；比较相同 TCP workload 下 ordinary 与
 owner listener 的吞吐、进程 CPU、P99、接纳延迟与峰值资源，按目标平台分别测量。
-本次固定拓扑 ablation 不覆盖这些门槛，也不代表上述接入已实现或已获得性能收益。
+此前固定拓扑 ablation 不覆盖这些门槛，其省略 listener 的结果不能替代实际 shared-listener 测量。
 
 ### SDK 接纳生命周期验证（2026-10-10）
 
@@ -172,11 +174,50 @@ ctest --preset win-release-user -R "^test_flowmq_(transport|owner|owner_batch|ow
 本地日志：`build/listener-sdk-build.log`、`build/listener-sdk-repeat.log`、
 `build/listener-sdk-adjacent.log`。
 
-**未验证范围 / HIGH：**这组测试确认 SDK 边界，尚未把 listener 接入 FlowMQ socket 的
-peer/pool 预留、FSM、credit、重连及 owner shutdown。上节的 FlowMQ 满 peer/pool 恢复、
-突发公平性、邻接 socket 关闭隔离及完整失败回滚仍是开放 bind 前的门槛。
-**MED：**尚无共享 listener 的吞吐、CPU、P99 或接纳延迟结果；Linux/macOS 也未运行。
-因此这一步不计作生产性能优化，不将此前省略 listener 的 ablation 收益归给当前实现。
+这组测试仅确认 SDK 边界。后续 FlowMQ 内部集成的覆盖及限制见下节；SDK 测试不能替代
+FlowMQ socket 的 peer/pool、FSM、credit、重连与 owner shutdown 联动验证。
+
+### FlowMQ 内部 shared-listener 集成（2026-10-10）
+
+`flowmq_socket_internal_bind_external()` 位于不安装的私有 header，只供集成测试和
+benchmark 使用；要求 owner-created socket，只接纳 TCP。公开 `flowmq_bind()` 仍按原契约
+返回 ENOTSUP。实现复用普通 bind 的初始化、endpoint 和 listener options，不引入第二套
+session 或后台线程；不把 qualification 入口安装为不完整的公开 API。
+
+socket 保存最多一个预留 peer、完整 accept request identity 和待消费标记。
+accept prepare 在 CNet advance 后、共享 observe 前执行；终态路由后，在一次 local progress
+中 adopt，随后普通协议 callback、pool READY、credit、decoder、FIFO 和 retained 路径保持
+原有归属。无 peer/pool 容量时不申请 child；submit 的 EBUSY/ENOBUFS 释放预留后等待下一轮。
+回滚先 cancel manager record，再释放 context hold 和 pool/peer，不能用 release 代替 terminal。
+
+关闭把 `external_client_stopped` 与整个 socket 的 `external_stopped` 分开。
+client 已停止但 listener cancel 尚未消费时，socket 继续留在 owner registry，只路由剩余
+listener 完成；成功但未 move 的 child 由 listener 销毁。整个 socket 停止后才允许释放存储。
+
+正式集成测试为 `test_flowmq_owner_listener` 及 `_pool`，各 8 个用例：公开契约/TCP 范围与
+预算溢出、空闲等待与八次取消后重建、listener/connector 共存及关闭隔离、同 owner 两端通信、
+四 peer 满额后接纳第五个、pool 单 slot 恢复、双 listener 突发传输、max_connecting 在协议
+READY 前保持占用。复用现有 fault suite 生成 `test_flowmq_owner_listener_fault` 及 `_pool`，
+在服务端 owner 上覆盖真实 DATA 完成批次出错后的继续路由、retained 释放、credit 和邻接
+socket 存活。四个 target 连续 10 轮通过，共 200 次用例执行。
+完整 core/transport 回归 35/35 通过（7 core、28 transport，含公开 C11/C++17 consumer
+和 1/4/16-lane REQ/REP 示例），用时 219.88 秒。复现：
+
+```text
+cmake --build --preset win-release-user
+ctest --preset win-release-user -R "^test_flowmq_owner_listener" --repeat until-fail:10 --output-on-failure
+ctest --preset win-release-user -L "flowmq-(core|transport)" --output-on-failure
+```
+
+日志为 `build/listener-runtime-{build,repeat,regression}.log`。
+实际 shared-listener 的九场景配对结果见
+[pattern 性能报告](FLOWMQ_PATTERN_ROUTING.md#实际-shared-listener-内部实现2026-10-10)。
+
+**剩余门槛 / HIGH：**尚未在 FlowMQ 层注入 attach/submit/adopt 资源失败，SDK 层的失败测试
+不足以证明整个 socket 回滚链；SDK late-success close 已覆盖，但 FlowMQ 层尚未定点重放
+同一时序。突发测试证明各 listener 能完成传输，不等于接纳公平性或 P99 的测量。
+**MED：**CPU、接纳延迟及峰值资源仍待测；Linux/macOS 未运行。这些门槛满足后再审查开放
+公开 bind，当前不把内部入口当作可部署的 API。
 
 ## 执行模型
 

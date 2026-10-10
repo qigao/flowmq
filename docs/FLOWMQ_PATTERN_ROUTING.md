@@ -183,3 +183,68 @@ ctest --preset bench-win-release-user -R "^bench_flowmq_pattern_no_listener$" -V
 后三个目标为诊断工具。计数、阶段时钟和普通无探针程序的绝对耗时不能混作同一性能
 总体；本轮尚未测量真实 shared-listener 集成、生产接纳延迟、Linux/macOS 或 libzmq 的
 非 PAIR 对照，也没有把已撤回的路由候选重新纳入生产实现。
+
+## 实际 shared-listener 内部实现（2026-10-10）
+
+此节是上述 ablation 之后的实际接入验证。新增
+`bench_flowmq_pattern_shared_listener`，与普通 `bench_flowmq_pattern_dispatch` 复用同一
+fixture、pattern 操作、payload/identity/credit 检查和计时循环。两者均链接无探针的
+生产 transport；新目标通过不安装的 `flowmq_socket_internal_bind_external()` 接入
+listener，仍可接纳新连接，未设置省略 listener 的诊断开关。
+
+每个 fixture 的全部 2–5 个 sockets 放在一个显式 owner 中，owner 容量固定为 5。
+普通版依次 poll 各 socket；共享版通过一次 owner poll 推进同组 sockets。两者均为调用者
+单线程驱动、不创建 worker；TCP loopback、64 B、network 场景 20,000 samples、readiness
+场景 1,000,000 samples。PUB/PUSH 每轮 4 个消息，过滤 PUB 和 REQ/REP 每轮 2 个消息，
+ROUTER 每轮 1 个消息；表中单位是 µs/sample，不把多消息 sample 称作单消息延迟。
+关闭路径现在也检查 socket、owner 和 context 的返回值。
+
+环境延续本报告的 Windows x64/MSVC Release、Salts 2.3.0-rc.1。先单独通过共享版的
+9 场景资格运行，再按 ordinary/shared、shared/ordinary 交替顺序串行做四轮配对；测量时
+不并行运行 build 或回归测试。原始 72 行见
+[shared-listener CSV](flowmq-pattern-shared-listener-windows-20261010.csv)。下表前两列是
+四轮 avg/sample 中位数，变化率是逐轮 `shared/ordinary−1` 的中位数，使用 CSV 的输出精度。
+
+| 场景 | ordinary µs/sample | shared owner µs/sample | 配对耗时变化 | shared 更快轮数 |
+| --- | ---: | ---: | ---: | ---: |
+| PUB 四 peer | 51.707 | 36.823 | −28.3% | 4/4 |
+| PUSH 四 peer | 103.404 | 42.093 | −58.8% | 4/4 |
+| ROUTER 定向 | 16.394 | 9.588 | −41.7% | 4/4 |
+| REQ/REP | 26.959 | 16.427 | −39.2% | 4/4 |
+| PUB 过滤 | 26.871 | 18.529 | −30.2% | 4/4 |
+| ROUTER 隔离 | 17.962 | 10.812 | −39.1% | 4/4 |
+| POLLOUT PUSH | 0.493 | 1.343 | +169.3% | 0/4 |
+| POLLOUT PAIR credit 耗尽 | 0.435 | 0.643 | +49.2% | 0/4 |
+| POLLOUT REP | 1.472 | 0.630 | −57.0% | 4/4 |
+
+**事实：**六个网络场景均四轮更快；共享版保留真实 listener 和取消/接纳逻辑。
+**推论：**结果支持继续验证固定 owner 的共享等待。相较 ordinary，不仅 listener wait
+改变，client 的多个 backend observe 也合并了，完成路由及 local progress 顺序随 domain
+改变；因此这不是仅替换 listener 的单变量实验，不能把全部收益归因于消除 WSAPoll。
+四轮一致也不构成统计显著性或跨平台收益证明。
+
+**MED / 事实：**PUSH、PAIR 的单 socket readiness 四轮均更慢。`bench_pollout()` 在普通版
+只推进该 socket；owner 版按既有契约推进整条 lane，即使 poll items 仅含一个 socket。
+PUSH 带 5 个 sockets、PAIR/REP 带 2 个；这部分是实际 API 工作范围及成本的差别，不是
+相同工作量的 selector 微基准。REP 同时省去独立 listener readiness，实测总成本下降。
+后续应评估应用是否反复轮询单 socket，不能通过跳过其他 owner sockets 来改变 progress
+保证。原有 route-selection 候选仍未恢复。
+
+验证：新内部集成/fault 四个 target 连续 10 轮通过，完整 core/transport 35/35 通过；
+benchmark 首次资格运行及四轮配对全部通过。普通/probe/profile 使用同一改造后的 fixture。
+改造后的 probe/profile 两个完整 benchmark 2/2 通过，production/probe/profile 三个 batch
+correctness 测试 3/3 通过（日志 `build/listener-pattern-probes.log`、
+`build/listener-pattern-batch.log`）。
+复现入口：
+
+```text
+cmake --build --preset win-release-user
+ctest --preset bench-win-release-user -R "^bench_flowmq_pattern_dispatch$" -V
+ctest --preset bench-win-release-user -R "^bench_flowmq_pattern_shared_listener$" -V
+```
+
+日志：`build/listener-pattern-qualification.log`、
+`build/listener-pattern-{1,2,3,4}-{dispatch,shared_listener}.log`。
+该结果不包含进程 CPU、P99、接纳延迟或峰值资源；没有新的 ZMQ 非 PAIR 对照。
+公开 owner bind 仍不开放，剩余失败注入和平台验证见
+[架构门槛](ARCHITECTURE.md#flowmq-内部-shared-listener-集成2026-10-10)。

@@ -31,6 +31,12 @@ int flowmq_socket_internal_attach_owner_backend(
     flowmq_socket_t *socket, native_io_backend *backend,
     const void *owner_token);
 
+/* Internal TCP listener qualification only; never installed. Requires an
+ * owner-created socket and permanently shares that lane's wait. Public bind
+ * remains unsupported until the architecture's integration gates pass. */
+int flowmq_socket_internal_bind_external(flowmq_socket_t *socket,
+                                         const char *endpoint);
+
 int flowmq_socket_internal_owned_by(
     const flowmq_socket_t *socket, const void *owner_token);
 

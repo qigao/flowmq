@@ -161,6 +161,25 @@ cmake_add_benchmark(
   INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/core/pattern
   FOLDER "flowmq/benchmarks/runtime")
 
+cmake_add_benchmark(
+  bench_flowmq_pattern_shared_listener
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_pattern_dispatch.c
+  LIBS FlowMQ::Transport Salts::TinyTest
+  INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/runtime
+  DEFS FLOWMQ_BENCH_SHARED_LISTENER=1
+  FOLDER "flowmq/benchmarks/runtime")
+if(BUILD_TESTS)
+  add_test(NAME bench_flowmq_pattern_shared_listener
+           COMMAND bench_flowmq_pattern_shared_listener)
+  set_tests_properties(bench_flowmq_pattern_shared_listener PROPERTIES
+    LABELS "flowmq;benchmark" RUN_SERIAL TRUE TIMEOUT 600
+    ENVIRONMENT "FLOWMQ_BENCH_SMOKE=0")
+  if(WIN32)
+    set_tests_properties(bench_flowmq_pattern_shared_listener PROPERTIES
+      ENVIRONMENT_MODIFICATION "${FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS}")
+  endif()
+endif()
+
 # Reuse the same private transport copies for pattern and PAIR diagnostics.
 # Neither the counters nor phase clocks enter the production transport target.
 foreach(probe_kind IN ITEMS probe profile)

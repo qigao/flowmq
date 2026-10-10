@@ -7,6 +7,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(FLOWMQ_BENCH_SHARED_LISTENER)
+#include "flowmq_owner.h"
+#include "flowmq_socket_external_internal.h"
+#endif
+
 #if defined(FLOWMQ_BATCH_PROBE)
 #include "flowmq_socket_batch_probe.h"
 #include <stdio.h>
@@ -44,12 +49,37 @@ typedef struct bench_socket_group_s {
   flowmq_ctx_t *ctx;
   flowmq_socket_t *sockets[BENCH_PATTERN_PEERS + 1u];
   size_t count;
+#if defined(FLOWMQ_BENCH_SHARED_LISTENER)
+  flowmq_owner_t *owner;
+#endif
 #if defined(FLOWMQ_BATCH_PROBE)
   flowmq_socket_batch_probe_t before;
   uint64_t started_ns;
   int omit_listener;
 #endif
 } bench_socket_group_t;
+
+static flowmq_socket_t *bench_group_socket(bench_socket_group_t *group, int type) {
+#if defined(FLOWMQ_BENCH_SHARED_LISTENER)
+  if (group->owner == NULL) {
+    flowmq_owner_config_t config = FLOWMQ_OWNER_CONFIG_INIT;
+    config.socket_capacity = BENCH_PATTERN_PEERS + 1u;
+    group->owner = flowmq_owner_new(group->ctx, &config);
+    if (group->owner == NULL) return NULL;
+  }
+  return flowmq_owner_socket(group->owner, type);
+#else
+  return flowmq_socket(group->ctx, type);
+#endif
+}
+
+static int bench_group_bind(flowmq_socket_t *socket) {
+#if defined(FLOWMQ_BENCH_SHARED_LISTENER)
+  return flowmq_socket_internal_bind_external(socket, "tcp://127.0.0.1:0");
+#else
+  return flowmq_bind(socket, "tcp://127.0.0.1:0");
+#endif
+}
 
 static int bench_group_progress(bench_socket_group_t *group) {
   flowmq_pollitem_t items[BENCH_PATTERN_PEERS + 1u] = {0};
@@ -59,7 +89,11 @@ static int bench_group_progress(bench_socket_group_t *group) {
     return SALTS_EINVAL;
   for (size_t i = 0u; i < group->count; ++i)
     items[i].socket = group->sockets[i];
+#if defined(FLOWMQ_BENCH_SHARED_LISTENER)
+  return flowmq_owner_poll(group->owner, items, group->count, 0u, &ready);
+#else
   return flowmq_poll(items, group->count, 0u, &ready);
+#endif
 }
 
 static int bench_group_progress_many(bench_socket_group_t *group,
@@ -165,10 +199,18 @@ static int bench_probe_end(const bench_socket_group_t *group, const char *name,
 static void bench_group_close(bench_socket_group_t *group) {
   if (group == NULL) return;
   for (size_t i = 0u; i < group->count; ++i) {
-    if (group->sockets[i] != NULL)
-      (void)flowmq_close(group->sockets[i]);
+    if (group->sockets[i] != NULL) {
+#if defined(FLOWMQ_BENCH_SHARED_LISTENER)
+      check_equal(flowmq_owner_close_socket(group->owner, group->sockets[i]), SALTS_OK);
+#else
+      check_equal(flowmq_close(group->sockets[i]), SALTS_OK);
+#endif
+    }
   }
-  if (group->ctx != NULL) (void)flowmq_ctx_term(group->ctx);
+#if defined(FLOWMQ_BENCH_SHARED_LISTENER)
+  if (group->owner != NULL) check_equal(flowmq_owner_term(group->owner), SALTS_OK);
+#endif
+  if (group->ctx != NULL) check_equal(flowmq_ctx_term(group->ctx), SALTS_OK);
   memset(group, 0, sizeof(*group));
 }
 
@@ -244,18 +286,18 @@ static int bench_pub_open(bench_pub_t *fixture) {
   fixture->group.ctx = flowmq_ctx_new();
   if (fixture->group.ctx == NULL) return SALTS_ENOMEM;
 
-  fixture->pub = flowmq_socket(fixture->group.ctx, FLOWMQ_PUB);
+  fixture->pub = bench_group_socket(&fixture->group, FLOWMQ_PUB);
   if (fixture->pub == NULL) return SALTS_ENOMEM;
   fixture->group.sockets[fixture->group.count++] = fixture->pub;
 
-  if (flowmq_bind(fixture->pub, "tcp://127.0.0.1:0") != SALTS_OK)
+  if (bench_group_bind(fixture->pub) != SALTS_OK)
     return SALTS_EIO;
   if (flowmq_last_endpoint(fixture->pub, endpoint, sizeof(endpoint),
                            &endpoint_size) != SALTS_OK)
     return SALTS_EIO;
 
   for (size_t i = 0u; i < BENCH_PATTERN_PEERS; ++i) {
-    fixture->subs[i] = flowmq_socket(fixture->group.ctx, FLOWMQ_SUB);
+    fixture->subs[i] = bench_group_socket(&fixture->group, FLOWMQ_SUB);
     if (fixture->subs[i] == NULL) return SALTS_ENOMEM;
     fixture->group.sockets[fixture->group.count++] = fixture->subs[i];
     if (flowmq_setsockopt(fixture->subs[i], FLOWMQ_SUBSCRIBE, NULL, 0u) !=
@@ -329,17 +371,17 @@ static int bench_push_open(bench_push_t *fixture) {
   memset(fixture, 0, sizeof(*fixture));
   fixture->group.ctx = flowmq_ctx_new();
   if (fixture->group.ctx == NULL) return SALTS_ENOMEM;
-  fixture->push = flowmq_socket(fixture->group.ctx, FLOWMQ_PUSH);
+  fixture->push = bench_group_socket(&fixture->group, FLOWMQ_PUSH);
   if (fixture->push == NULL) return SALTS_ENOMEM;
   fixture->group.sockets[fixture->group.count++] = fixture->push;
 
   for (size_t i = 0u; i < BENCH_PATTERN_PEERS; ++i) {
     char endpoint[128] = {0};
     size_t endpoint_size = 0u;
-    fixture->pulls[i] = flowmq_socket(fixture->group.ctx, FLOWMQ_PULL);
+    fixture->pulls[i] = bench_group_socket(&fixture->group, FLOWMQ_PULL);
     if (fixture->pulls[i] == NULL) return SALTS_ENOMEM;
     fixture->group.sockets[fixture->group.count++] = fixture->pulls[i];
-    if (flowmq_bind(fixture->pulls[i], "tcp://127.0.0.1:0") != SALTS_OK)
+    if (bench_group_bind(fixture->pulls[i]) != SALTS_OK)
       return SALTS_EIO;
     if (flowmq_last_endpoint(fixture->pulls[i], endpoint, sizeof(endpoint),
                              &endpoint_size) != SALTS_OK)
@@ -391,8 +433,8 @@ static int bench_router_open(bench_router_t *fixture) {
 
   fixture->group.ctx = flowmq_ctx_new();
   if (fixture->group.ctx == NULL) return SALTS_ENOMEM;
-  fixture->router = flowmq_socket(fixture->group.ctx, FLOWMQ_ROUTER);
-  fixture->dealer = flowmq_socket(fixture->group.ctx, FLOWMQ_DEALER);
+  fixture->router = bench_group_socket(&fixture->group, FLOWMQ_ROUTER);
+  fixture->dealer = bench_group_socket(&fixture->group, FLOWMQ_DEALER);
   if (fixture->router == NULL || fixture->dealer == NULL) return SALTS_ENOMEM;
   fixture->group.sockets[fixture->group.count++] = fixture->router;
   fixture->group.sockets[fixture->group.count++] = fixture->dealer;
@@ -400,7 +442,7 @@ static int bench_router_open(bench_router_t *fixture) {
   if (flowmq_setsockopt(fixture->dealer, FLOWMQ_IDENTITY,
                         fixture->identity, fixture->identity_size) != SALTS_OK)
     return SALTS_EIO;
-  if (flowmq_bind(fixture->router, "tcp://127.0.0.1:0") != SALTS_OK)
+  if (bench_group_bind(fixture->router) != SALTS_OK)
     return SALTS_EIO;
   if (flowmq_last_endpoint(fixture->router, endpoint, sizeof(endpoint),
                            &endpoint_size) != SALTS_OK)
@@ -464,12 +506,12 @@ static int bench_reqrep_open(bench_reqrep_t *fixture) {
   memset(fixture, 0, sizeof(*fixture));
   fixture->group.ctx = flowmq_ctx_new();
   if (fixture->group.ctx == NULL) return SALTS_ENOMEM;
-  fixture->req = flowmq_socket(fixture->group.ctx, FLOWMQ_REQ);
-  fixture->rep = flowmq_socket(fixture->group.ctx, FLOWMQ_REP);
+  fixture->req = bench_group_socket(&fixture->group, FLOWMQ_REQ);
+  fixture->rep = bench_group_socket(&fixture->group, FLOWMQ_REP);
   if (fixture->req == NULL || fixture->rep == NULL) return SALTS_ENOMEM;
   fixture->group.sockets[fixture->group.count++] = fixture->req;
   fixture->group.sockets[fixture->group.count++] = fixture->rep;
-  if (flowmq_bind(fixture->rep, "tcp://127.0.0.1:0") != SALTS_OK)
+  if (bench_group_bind(fixture->rep) != SALTS_OK)
     return SALTS_EIO;
   if (flowmq_last_endpoint(fixture->rep, endpoint, sizeof(endpoint),
                            &endpoint_size) != SALTS_OK)
@@ -498,10 +540,18 @@ static int bench_reqrep_roundtrip(bench_reqrep_t *fixture,
 
 /* Adversarial policy edges ------------------------------------------------ */
 
-static int bench_pollout(flowmq_socket_t *socket, int expected_ready) {
+static int bench_pollout(bench_socket_group_t *group, flowmq_socket_t *socket,
+                         int expected_ready) {
   flowmq_pollitem_t item = {.socket = socket, .events = FLOWMQ_POLLOUT};
   size_t ready = 0u;
+#if defined(FLOWMQ_BENCH_SHARED_LISTENER)
+  /* Owner poll always progresses the entire lane, including sockets outside
+   * items. Its readiness cost is not an isolated one-socket ordinary poll. */
+  int status = flowmq_owner_poll(group->owner, &item, 1u, 0u, &ready);
+#else
   int status = flowmq_poll(&item, 1u, 0u, &ready);
+  (void)group;
+#endif
   if (status != SALTS_OK) return status;
   if (expected_ready)
     return ready == 1u && item.revents == FLOWMQ_POLLOUT
@@ -528,10 +578,10 @@ static int bench_pub_filtered_open(bench_pub_filtered_t *fixture,
   memset(fixture, 0, sizeof(*fixture));
   fixture->group.ctx = flowmq_ctx_new();
   if (fixture->group.ctx == NULL) return SALTS_ENOMEM;
-  fixture->pub = flowmq_socket(fixture->group.ctx, FLOWMQ_PUB);
+  fixture->pub = bench_group_socket(&fixture->group, FLOWMQ_PUB);
   if (fixture->pub == NULL) return SALTS_ENOMEM;
   fixture->group.sockets[fixture->group.count++] = fixture->pub;
-  if (flowmq_bind(fixture->pub, "tcp://127.0.0.1:0") != SALTS_OK)
+  if (bench_group_bind(fixture->pub) != SALTS_OK)
     return SALTS_EIO;
   if (flowmq_last_endpoint(fixture->pub, endpoint, sizeof(endpoint),
                            &endpoint_size) != SALTS_OK)
@@ -541,7 +591,7 @@ static int bench_pub_filtered_open(bench_pub_filtered_t *fixture,
     const char *prefix = (i & 1u) == 0u ? orders : payments;
     size_t prefix_size = (i & 1u) == 0u ? sizeof(orders) - 1u
                                          : sizeof(payments) - 1u;
-    fixture->subs[i] = flowmq_socket(fixture->group.ctx, FLOWMQ_SUB);
+    fixture->subs[i] = bench_group_socket(&fixture->group, FLOWMQ_SUB);
     if (fixture->subs[i] == NULL) return SALTS_ENOMEM;
     fixture->group.sockets[fixture->group.count++] = fixture->subs[i];
     if (flowmq_setsockopt(fixture->subs[i], FLOWMQ_SUBSCRIBE,
@@ -630,9 +680,9 @@ static int bench_router_isolation_open(bench_router_isolation_t *fixture,
 
   fixture->group.ctx = flowmq_ctx_new();
   if (fixture->group.ctx == NULL) return SALTS_ENOMEM;
-  fixture->router = flowmq_socket(fixture->group.ctx, FLOWMQ_ROUTER);
-  fixture->slow = flowmq_socket(fixture->group.ctx, FLOWMQ_DEALER);
-  fixture->healthy = flowmq_socket(fixture->group.ctx, FLOWMQ_DEALER);
+  fixture->router = bench_group_socket(&fixture->group, FLOWMQ_ROUTER);
+  fixture->slow = bench_group_socket(&fixture->group, FLOWMQ_DEALER);
+  fixture->healthy = bench_group_socket(&fixture->group, FLOWMQ_DEALER);
   if (fixture->router == NULL || fixture->slow == NULL ||
       fixture->healthy == NULL)
     return SALTS_ENOMEM;
@@ -650,7 +700,7 @@ static int bench_router_isolation_open(bench_router_isolation_t *fixture,
                         &slow_window, sizeof(slow_window)) != SALTS_OK)
     return SALTS_EIO;
 
-  if (flowmq_bind(fixture->router, "tcp://127.0.0.1:0") != SALTS_OK)
+  if (bench_group_bind(fixture->router) != SALTS_OK)
     return SALTS_EIO;
   if (flowmq_last_endpoint(fixture->router, endpoint, sizeof(endpoint),
                            &endpoint_size) != SALTS_OK)
@@ -691,7 +741,7 @@ static int bench_router_isolation_cycle(bench_router_isolation_t *fixture,
                        FLOWMQ_DONTWAIT);
   if (status != SALTS_ENOBUFS) return SALTS_EPROTO;
 
-  status = bench_pollout(fixture->router, 1);
+  status = bench_pollout(&fixture->group, fixture->router, 1);
   if (status != SALTS_OK) return status;
 
   status = flowmq_send(fixture->router, fixture->healthy_identity,
@@ -722,8 +772,8 @@ static int bench_pair_blocked_open(bench_pair_blocked_t *fixture,
   memset(fixture, 0, sizeof(*fixture));
   fixture->group.ctx = flowmq_ctx_new();
   if (fixture->group.ctx == NULL) return SALTS_ENOMEM;
-  fixture->sender = flowmq_socket(fixture->group.ctx, FLOWMQ_PAIR);
-  fixture->receiver = flowmq_socket(fixture->group.ctx, FLOWMQ_PAIR);
+  fixture->sender = bench_group_socket(&fixture->group, FLOWMQ_PAIR);
+  fixture->receiver = bench_group_socket(&fixture->group, FLOWMQ_PAIR);
   if (fixture->sender == NULL || fixture->receiver == NULL)
     return SALTS_ENOMEM;
   fixture->group.sockets[fixture->group.count++] = fixture->sender;
@@ -732,7 +782,7 @@ static int bench_pair_blocked_open(bench_pair_blocked_t *fixture,
   if (flowmq_setsockopt(fixture->receiver, FLOWMQ_RCVHWM_BYTES,
                         &receive_window, sizeof(receive_window)) != SALTS_OK)
     return SALTS_EIO;
-  if (flowmq_bind(fixture->receiver, "tcp://127.0.0.1:0") != SALTS_OK)
+  if (bench_group_bind(fixture->receiver) != SALTS_OK)
     return SALTS_EIO;
   if (flowmq_last_endpoint(fixture->receiver, endpoint, sizeof(endpoint),
                            &endpoint_size) != SALTS_OK)
@@ -745,7 +795,7 @@ static int bench_pair_blocked_open(bench_pair_blocked_t *fixture,
   if (status != SALTS_OK) return status;
   if (bench_group_progress_many(&fixture->group, 32u) != SALTS_OK)
     return SALTS_EIO;
-  return bench_pollout(fixture->sender, 0);
+  return bench_pollout(&fixture->group, fixture->sender, 0);
 }
 
 static int bench_reqrep_prepare_reply(bench_reqrep_t *fixture,
@@ -877,11 +927,11 @@ spec("FlowMQ pattern dispatch benchmark") {
       bench_push_t poll_push;
       status = bench_push_open(&poll_push);
       check_equal(status, SALTS_OK);
-      check_equal(bench_pollout(poll_push.push, 1), SALTS_OK);
+      check_equal(bench_pollout(&poll_push.group, poll_push.push, 1), SALTS_OK);
       BENCH_PROBE_BEGIN(&poll_push.group);
       benchmark_ops("POLLOUT PUSH ready", poll_samples, 1u) {
         if (status == SALTS_OK)
-          status = bench_pollout(poll_push.push, 1);
+          status = bench_pollout(&poll_push.group, poll_push.push, 1);
       }
       check_equal(status, SALTS_OK);
       BENCH_PROBE_END(&poll_push.group, "pollout_push", poll_samples, 0u);
@@ -895,7 +945,7 @@ spec("FlowMQ pattern dispatch benchmark") {
       BENCH_PROBE_BEGIN(&blocked.group);
       benchmark_ops("POLLOUT PAIR credit-exhausted", poll_samples, 1u) {
         if (status == SALTS_OK)
-          status = bench_pollout(blocked.sender, 0);
+          status = bench_pollout(&blocked.group, blocked.sender, 0);
       }
       check_equal(status, SALTS_OK);
       BENCH_PROBE_END(&blocked.group, "pollout_blocked_pair", poll_samples, 0u);
@@ -909,11 +959,11 @@ spec("FlowMQ pattern dispatch benchmark") {
       status = bench_reqrep_prepare_reply(&reply_ready, payload,
                                           sizeof(payload));
       check_equal(status, SALTS_OK);
-      check_equal(bench_pollout(reply_ready.rep, 1), SALTS_OK);
+      check_equal(bench_pollout(&reply_ready.group, reply_ready.rep, 1), SALTS_OK);
       BENCH_PROBE_BEGIN(&reply_ready.group);
       benchmark_ops("POLLOUT REP reply-peer ready", poll_samples, 1u) {
         if (status == SALTS_OK)
-          status = bench_pollout(reply_ready.rep, 1);
+          status = bench_pollout(&reply_ready.group, reply_ready.rep, 1);
       }
       check_equal(status, SALTS_OK);
       BENCH_PROBE_END(&reply_ready.group, "pollout_rep", poll_samples, 0u);

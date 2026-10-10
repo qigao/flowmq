@@ -176,6 +176,26 @@ cmake_add_test(
   FOLDER "flowmq/tests/runtime")
 target_compile_definitions(test_flowmq_owner_fault_pool PRIVATE FLOWMQ_TEST_PEER_POOL=1)
 
+foreach(test_suffix IN ITEMS listener listener_pool listener_fault listener_fault_pool)
+  if(test_suffix MATCHES "fault")
+    set(listener_test_source runtime/test_flowmq_owner_fault.c)
+  else()
+    set(listener_test_source runtime/test_flowmq_owner_listener.c)
+  endif()
+  cmake_add_test(
+    test_flowmq_owner_${test_suffix}
+    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/${listener_test_source}
+    LIBS FlowMQ::Transport Salts::TinyTest
+    INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/runtime
+    DEFS FLOWMQ_TEST_OWNER_LISTENER=1
+    FOLDER "flowmq/tests/runtime")
+  if(test_suffix MATCHES "pool$")
+    target_compile_definitions(test_flowmq_owner_${test_suffix}
+                               PRIVATE FLOWMQ_TEST_PEER_POOL=1)
+  endif()
+  set_tests_properties(test_flowmq_owner_${test_suffix} PROPERTIES TIMEOUT 60)
+endforeach()
+
 cmake_add_test(
   test_flowmq_socket_option
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/test_flowmq_socket_option.c
@@ -229,6 +249,10 @@ set(FLOWMQ_TRANSPORT_TESTS
     test_flowmq_owner
     test_flowmq_owner_fault
     test_flowmq_owner_fault_pool
+    test_flowmq_owner_listener
+    test_flowmq_owner_listener_pool
+    test_flowmq_owner_listener_fault
+    test_flowmq_owner_listener_fault_pool
     test_flowmq_owner_batch
     test_flowmq_socket_option
     test_flowmq_peer_state)

@@ -1,0 +1,73 @@
+trial,order,variant,scenario,samples,ops_per_sample,bytes_per_sample,avg_op_ns,avg_sample_us,min_sample_us,max_sample_us,ops_per_second,mib_per_second,log
+1,1,dispatch,PUB 4-peer fanout,20000,4,256,12499.893,50.000,46.700,749.100,80001,4.88,build/listener-pattern-1-dispatch.log
+1,1,dispatch,PUSH 4-peer round-robin,20000,4,256,25363.875,101.456,95.100,1349.000,39426,2.41,build/listener-pattern-1-dispatch.log
+1,1,dispatch,ROUTER identity one-way,20000,1,64,16197.320,16.197,14.300,773.900,61739,3.77,build/listener-pattern-1-dispatch.log
+1,1,dispatch,REQ/REP roundtrip,20000,2,128,13620.540,27.241,23.900,263.400,73419,4.48,build/listener-pattern-1-dispatch.log
+1,1,dispatch,PUB 2-of-4 filtered fanout,20000,2,128,13092.970,26.186,23.500,1778.300,76377,4.66,build/listener-pattern-1-dispatch.log
+1,1,dispatch,ROUTER slow-peer isolation,20000,1,64,18079.815,18.080,15.600,128.000,55310,3.38,build/listener-pattern-1-dispatch.log
+1,1,dispatch,POLLOUT PUSH ready,1000000,1,-,493.462,0.493,0.400,672.500,2026498,-,build/listener-pattern-1-dispatch.log
+1,1,dispatch,POLLOUT PAIR credit-exhausted,1000000,1,-,460.853,0.461,0.300,63.700,2169891,-,build/listener-pattern-1-dispatch.log
+1,1,dispatch,POLLOUT REP reply-peer ready,1000000,1,-,1502.459,1.502,1.200,711.400,665575,-,build/listener-pattern-1-dispatch.log
+1,2,shared_listener,PUB 4-peer fanout,20000,4,256,8979.119,35.916,34.400,268.500,111370,6.80,build/listener-pattern-1-shared_listener.log
+1,2,shared_listener,PUSH 4-peer round-robin,20000,4,256,10558.094,42.232,39.600,2730.300,94714,5.78,build/listener-pattern-1-shared_listener.log
+1,2,shared_listener,ROUTER identity one-way,20000,1,64,9582.810,9.583,9.100,39.700,104354,6.37,build/listener-pattern-1-shared_listener.log
+1,2,shared_listener,REQ/REP roundtrip,20000,2,128,8276.633,16.553,15.700,1837.900,120822,7.37,build/listener-pattern-1-shared_listener.log
+1,2,shared_listener,PUB 2-of-4 filtered fanout,20000,2,128,9294.183,18.588,17.900,92.500,107594,6.57,build/listener-pattern-1-shared_listener.log
+1,2,shared_listener,ROUTER slow-peer isolation,20000,1,64,10713.090,10.713,10.300,60.100,93344,5.70,build/listener-pattern-1-shared_listener.log
+1,2,shared_listener,POLLOUT PUSH ready,1000000,1,-,1285.646,1.286,1.100,172.900,777819,-,build/listener-pattern-1-shared_listener.log
+1,2,shared_listener,POLLOUT PAIR credit-exhausted,1000000,1,-,629.680,0.630,0.500,71.400,1588108,-,build/listener-pattern-1-shared_listener.log
+1,2,shared_listener,POLLOUT REP reply-peer ready,1000000,1,-,620.275,0.620,0.500,72.300,1612187,-,build/listener-pattern-1-shared_listener.log
+2,1,shared_listener,PUB 4-peer fanout,20000,4,256,9338.601,37.354,34.600,555.500,107082,6.54,build/listener-pattern-2-shared_listener.log
+2,1,shared_listener,PUSH 4-peer round-robin,20000,4,256,10488.652,41.955,40.400,113.700,95341,5.82,build/listener-pattern-2-shared_listener.log
+2,1,shared_listener,ROUTER identity one-way,20000,1,64,9591.900,9.592,9.100,1535.500,104255,6.36,build/listener-pattern-2-shared_listener.log
+2,1,shared_listener,REQ/REP roundtrip,20000,2,128,8120.485,16.241,15.600,60.400,123145,7.52,build/listener-pattern-2-shared_listener.log
+2,1,shared_listener,PUB 2-of-4 filtered fanout,20000,2,128,9214.335,18.429,17.700,80.800,108527,6.62,build/listener-pattern-2-shared_listener.log
+2,1,shared_listener,ROUTER slow-peer isolation,20000,1,64,10761.805,10.762,10.200,1747.400,92921,5.67,build/listener-pattern-2-shared_listener.log
+2,1,shared_listener,POLLOUT PUSH ready,1000000,1,-,1373.333,1.373,1.100,78.800,728155,-,build/listener-pattern-2-shared_listener.log
+2,1,shared_listener,POLLOUT PAIR credit-exhausted,1000000,1,-,625.529,0.626,0.500,75.700,1598646,-,build/listener-pattern-2-shared_listener.log
+2,1,shared_listener,POLLOUT REP reply-peer ready,1000000,1,-,622.581,0.623,0.500,70.400,1606217,-,build/listener-pattern-2-shared_listener.log
+2,2,dispatch,PUB 4-peer fanout,20000,4,256,12956.033,51.824,47.900,505.200,77184,4.71,build/listener-pattern-2-dispatch.log
+2,2,dispatch,PUSH 4-peer round-robin,20000,4,256,25663.134,102.653,95.900,1499.900,38966,2.38,build/listener-pattern-2-dispatch.log
+2,2,dispatch,ROUTER identity one-way,20000,1,64,16170.545,16.171,14.900,511.700,61841,3.77,build/listener-pattern-2-dispatch.log
+2,2,dispatch,REQ/REP roundtrip,20000,2,128,13338.335,26.677,23.600,304.600,74972,4.58,build/listener-pattern-2-dispatch.log
+2,2,dispatch,PUB 2-of-4 filtered fanout,20000,2,128,13390.385,26.781,23.400,843.800,74680,4.56,build/listener-pattern-2-dispatch.log
+2,2,dispatch,ROUTER slow-peer isolation,20000,1,64,17637.635,17.638,15.800,84.400,56697,3.46,build/listener-pattern-2-dispatch.log
+2,2,dispatch,POLLOUT PUSH ready,1000000,1,-,507.592,0.508,0.400,75.900,1970085,-,build/listener-pattern-2-dispatch.log
+2,2,dispatch,POLLOUT PAIR credit-exhausted,1000000,1,-,437.570,0.438,0.300,61.100,2285349,-,build/listener-pattern-2-dispatch.log
+2,2,dispatch,POLLOUT REP reply-peer ready,1000000,1,-,1467.899,1.468,1.200,680.700,681246,-,build/listener-pattern-2-dispatch.log
+3,1,dispatch,PUB 4-peer fanout,20000,4,256,13472.529,53.890,48.900,976.300,74225,4.53,build/listener-pattern-3-dispatch.log
+3,1,dispatch,PUSH 4-peer round-robin,20000,4,256,26352.149,105.409,95.400,1501.300,37948,2.32,build/listener-pattern-3-dispatch.log
+3,1,dispatch,ROUTER identity one-way,20000,1,64,19701.125,19.701,14.700,1054.200,50759,3.10,build/listener-pattern-3-dispatch.log
+3,1,dispatch,REQ/REP roundtrip,20000,2,128,15001.997,30.004,24.100,366.500,66658,4.07,build/listener-pattern-3-dispatch.log
+3,1,dispatch,PUB 2-of-4 filtered fanout,20000,2,128,13480.892,26.962,23.800,3149.200,74179,4.53,build/listener-pattern-3-dispatch.log
+3,1,dispatch,ROUTER slow-peer isolation,20000,1,64,17870.045,17.870,16.200,736.200,55960,3.42,build/listener-pattern-3-dispatch.log
+3,1,dispatch,POLLOUT PUSH ready,1000000,1,-,493.411,0.493,0.400,261.300,2026710,-,build/listener-pattern-3-dispatch.log
+3,1,dispatch,POLLOUT PAIR credit-exhausted,1000000,1,-,433.171,0.433,0.300,56.700,2308558,-,build/listener-pattern-3-dispatch.log
+3,1,dispatch,POLLOUT REP reply-peer ready,1000000,1,-,1475.149,1.475,1.200,3159.500,677898,-,build/listener-pattern-3-dispatch.log
+3,2,shared_listener,PUB 4-peer fanout,20000,4,256,9655.317,38.621,35.200,483.300,103570,6.32,build/listener-pattern-3-shared_listener.log
+3,2,shared_listener,PUSH 4-peer round-robin,20000,4,256,11004.216,44.017,40.300,3392.400,90874,5.55,build/listener-pattern-3-shared_listener.log
+3,2,shared_listener,ROUTER identity one-way,20000,1,64,9691.465,9.691,9.000,29.200,103184,6.30,build/listener-pattern-3-shared_listener.log
+3,2,shared_listener,REQ/REP roundtrip,20000,2,128,8577.580,17.155,15.900,1536.600,116583,7.12,build/listener-pattern-3-shared_listener.log
+3,2,shared_listener,PUB 2-of-4 filtered fanout,20000,2,128,9541.715,19.083,18.000,69.900,104803,6.40,build/listener-pattern-3-shared_listener.log
+3,2,shared_listener,ROUTER slow-peer isolation,20000,1,64,10861.365,10.861,10.200,58.200,92069,5.62,build/listener-pattern-3-shared_listener.log
+3,2,shared_listener,POLLOUT PUSH ready,1000000,1,-,1362.929,1.363,1.100,355.600,733714,-,build/listener-pattern-3-shared_listener.log
+3,2,shared_listener,POLLOUT PAIR credit-exhausted,1000000,1,-,672.965,0.673,0.500,90.800,1485962,-,build/listener-pattern-3-shared_listener.log
+3,2,shared_listener,POLLOUT REP reply-peer ready,1000000,1,-,646.161,0.646,0.500,84.900,1547602,-,build/listener-pattern-3-shared_listener.log
+4,1,shared_listener,PUB 4-peer fanout,20000,4,256,9073.366,36.293,33.200,846.600,110213,6.73,build/listener-pattern-4-shared_listener.log
+4,1,shared_listener,PUSH 4-peer round-robin,20000,4,256,10423.950,41.696,39.800,2555.800,95933,5.86,build/listener-pattern-4-shared_listener.log
+4,1,shared_listener,ROUTER identity one-way,20000,1,64,9539.725,9.540,9.100,62.700,104825,6.40,build/listener-pattern-4-shared_listener.log
+4,1,shared_listener,REQ/REP roundtrip,20000,2,128,8150.565,16.301,15.300,1564.400,122691,7.49,build/listener-pattern-4-shared_listener.log
+4,1,shared_listener,PUB 2-of-4 filtered fanout,20000,2,128,9234.637,18.469,17.400,845.400,108288,6.61,build/listener-pattern-4-shared_listener.log
+4,1,shared_listener,ROUTER slow-peer isolation,20000,1,64,11175.490,11.175,10.100,383.400,89482,5.46,build/listener-pattern-4-shared_listener.log
+4,1,shared_listener,POLLOUT PUSH ready,1000000,1,-,1323.337,1.323,1.100,678.000,755665,-,build/listener-pattern-4-shared_listener.log
+4,1,shared_listener,POLLOUT PAIR credit-exhausted,1000000,1,-,656.187,0.656,0.500,61.700,1523956,-,build/listener-pattern-4-shared_listener.log
+4,1,shared_listener,POLLOUT REP reply-peer ready,1000000,1,-,637.432,0.637,0.500,674.800,1568794,-,build/listener-pattern-4-shared_listener.log
+4,2,dispatch,PUB 4-peer fanout,20000,4,256,12897.439,51.590,48.400,1524.200,77535,4.73,build/listener-pattern-4-dispatch.log
+4,2,dispatch,PUSH 4-peer round-robin,20000,4,256,26038.747,104.155,96.600,960.300,38404,2.34,build/listener-pattern-4-dispatch.log
+4,2,dispatch,ROUTER identity one-way,20000,1,64,16590.810,16.591,14.600,687.400,60274,3.68,build/listener-pattern-4-dispatch.log
+4,2,dispatch,REQ/REP roundtrip,20000,2,128,13335.278,26.671,24.600,1046.100,74989,4.58,build/listener-pattern-4-dispatch.log
+4,2,dispatch,PUB 2-of-4 filtered fanout,20000,2,128,13720.403,27.441,24.700,92.700,72884,4.45,build/listener-pattern-4-dispatch.log
+4,2,dispatch,ROUTER slow-peer isolation,20000,1,64,18053.710,18.054,16.300,1632.600,55390,3.38,build/listener-pattern-4-dispatch.log
+4,2,dispatch,POLLOUT PUSH ready,1000000,1,-,492.636,0.493,0.400,55.600,2029897,-,build/listener-pattern-4-dispatch.log
+4,2,dispatch,POLLOUT PAIR credit-exhausted,1000000,1,-,419.362,0.419,0.300,62.400,2384573,-,build/listener-pattern-4-dispatch.log
+4,2,dispatch,POLLOUT REP reply-peer ready,1000000,1,-,1459.696,1.460,1.200,101.600,685074,-,build/listener-pattern-4-dispatch.log

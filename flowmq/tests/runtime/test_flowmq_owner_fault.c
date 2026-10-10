@@ -1,4 +1,5 @@
 #include "flowmq_owner_internal.h"
+#include "flowmq_socket_external_internal.h"
 #include "flowmq_peer_pool.h"
 #include "tinytest.h"
 #include "cmeta_error.h"
@@ -150,10 +151,18 @@ static void owner_fault_open(owner_fault_fixture *f) {
                                  &quantum, sizeof(quantum)), SALTS_OK);
     check_equal(flowmq_setsockopt(f->peers[lane], FLOWMQ_FLOW_UPDATE_IVL,
                                  &update_ms, sizeof(update_ms)), SALTS_OK);
+#if defined(FLOWMQ_TEST_OWNER_LISTENER)
+    check_equal(flowmq_socket_internal_bind_external(
+                    f->clients[lane], "tcp://127.0.0.1:0"), SALTS_OK);
+    check_equal(flowmq_last_endpoint(f->clients[lane], endpoint, sizeof(endpoint),
+                                     &endpoint_size), SALTS_OK);
+    check_equal(flowmq_connect(f->peers[lane], endpoint), SALTS_OK);
+#else
     check_equal(flowmq_bind(f->peers[lane], "tcp://127.0.0.1:0"), SALTS_OK);
     check_equal(flowmq_last_endpoint(f->peers[lane], endpoint, sizeof(endpoint),
                                      &endpoint_size), SALTS_OK);
     check_equal(flowmq_connect(f->clients[lane], endpoint), SALTS_OK);
+#endif
   }
   for (size_t step = 0u; step < FAULT_PROGRESS_LIMIT && !all_ready; ++step) {
     owner_fault_progress(f, false);
