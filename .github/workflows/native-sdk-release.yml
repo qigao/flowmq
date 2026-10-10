@@ -438,8 +438,12 @@ jobs:
             logical_processors = [Environment]::ProcessorCount
             affinity = 'unbound'
             configuration = 'Release'
-            paired_runs = 5
-            lane_runs_per_configuration = 5
+            paired_runs = ${{ inputs.run_benchmarks && 5 || 0 }}
+            lane_runs_per_configuration = ${{ inputs.run_benchmarks && 5 || 0 }}
+            wait_policy_runs_per_configuration = ${{ inputs.run_diagnostics && 4 || 0 }}
+            sg_sweep_runs_per_configuration = ${{ inputs.run_diagnostics && 10 || 0 }}
+            progress_phase_runs_per_configuration = ${{ inputs.run_diagnostics && 3 || 0 }}
+            progress_ablation_runs_per_configuration = ${{ inputs.run_diagnostics && 6 || 0 }}
           }
           $evidence | ConvertTo-Json | Set-Content build/flowmq-zmq-provenance.json
       - name: Attribute progress and retained costs on Unix hosts

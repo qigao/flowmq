@@ -1292,6 +1292,9 @@ ctest --preset bench-win-release-user -R "^bench_flowmq_lane_sg_sweep$" -V
 
 ## Salts rc.10 三平台消费端基线（2026-10-11）
 
+后续 [wait、listener 与 SG 归因实验](FLOWMQ_RC10_CAUSE_ANALYSIS.md) 给出了
+同平台干预对照和原始 CSV；下面保留原基线，不将不同 CI run 的绝对数值混合。
+
 本轮从 FlowMQ `d532a27` 主线建立独立工作树，使用已发布的 Salts
 `2.3.0-rc.10`。不包含其他工作树未提交的 retained 分配或 owner progress 优化，
 不能与上文不同 SDK、机器和源码的绝对数值相减来声称升级收益。
