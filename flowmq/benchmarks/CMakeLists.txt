@@ -140,8 +140,23 @@ cmake_add_benchmark(
 target_include_directories(
   bench_flowmq_socket
   PRIVATE ${PROJECT_SOURCE_DIR}/flowmq/tests/runtime)
+if(WIN32)
+  target_link_libraries(bench_flowmq_socket PRIVATE psapi)
+endif()
 
 if(BUILD_TESTS)
+  add_test(NAME test_flowmq_wait_policy
+           COMMAND bench_flowmq_socket --filter "wait-policy correctness:")
+  add_test(NAME bench_flowmq_wait_policy
+           COMMAND bench_flowmq_socket --filter "wait-policy comparison:")
+  set_tests_properties(test_flowmq_wait_policy PROPERTIES
+    LABELS "flowmq;flowmq-transport" RUN_SERIAL TRUE TIMEOUT 120)
+  set_tests_properties(bench_flowmq_wait_policy PROPERTIES
+    LABELS "flowmq;benchmark" RUN_SERIAL TRUE TIMEOUT 600)
+  if(WIN32)
+    set_tests_properties(test_flowmq_wait_policy bench_flowmq_wait_policy PROPERTIES
+      ENVIRONMENT_MODIFICATION "${FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS}")
+  endif()
   add_test(NAME test_flowmq_owned_rx_evidence
            COMMAND bench_flowmq_socket --filter "receive evidence:")
   set_tests_properties(test_flowmq_owned_rx_evidence
