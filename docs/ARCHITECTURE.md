@@ -325,17 +325,27 @@ CPU cycles，但 Windows 上计划释放到完成的 P99 增加到约 16–18 ms
 低 CPU 场景只等待真正需要的 POLLIN/待发送 POLLOUT，并使用最近的应用 deadline；
 严格定时场景还需验证平台等待精度，不能用平均完成速率掩盖迟到。
 
-### 内部 Disruptor mailbox qualification
+### 固定 lane 直通与应用层边界
 
-数据路径按调用线程选择：业务已经位于 socket 的固定 owner lane 时，直接调用
-send/recv 并在同一线程推进 CNet，不要求再经过 Actor、mailbox 或 executor。
-owner 是状态与 I/O 归属，不隐含独立消费线程。只有确实跨线程的 producer 才需要
-有界 owning handoff；它不能成为普通同 lane 调用的必经层。跨线程路径保留原有
-背压、FIFO 和 shutdown 契约，不允许由外部 producer 直接操作 owner socket。
-应用可以合并准备与 I/O 来减少 worker 和空转，也可以显式保留并行准备；两者的
-吞吐/CPU 取舍由 [直通与 mailbox 对照](FLOWMQ_LANE_SCALING.md#同-lane-直通与跨线程-mailbox-对照2026-10-10)
-验证，不把消除 mailbox 等同于所有负载都会提高吞吐。此约束复用现有 API，
-不引入新的调度器、自动线程迁移或公开 mailbox 接口。
+项目选择固定 owner/lane 内直接收发作为 FlowMQ 数据路径：业务在该 lane 调用
+send/recv，并由同一线程推进 CNet。owner 负责状态与 I/O 归属，不隐含独立消费
+线程。FlowMQ 不采用 Actor、应用 mailbox 或 executor 转交来执行每条消息的收发；
+这类调度由消费方应用按自身需求组织，不进入 FlowMQ 生产 runtime 或公开接口。
+
+多核扩展通过独立 context/owner 和连接分片实现。跨线程业务使用各自的 socket
+进行消息通信或在应用层组织任务；外部线程不能直接操作已有 owner 的 socket，
+互斥 Token 也不改变固定线程亲和。已有连接接纳 handoff 只承担连接进入最终 owner
+的控制职责，不演变为逐消息的应用 mailbox。
+
+有界协议收发队列、HWM/credit、retained buffer 和 CNet SG 批量提交继续归各自
+owner 管理。这些能力承担协议顺序、背压与异步生命周期，不能因不采用应用
+mailbox 而移除。[直通与 mailbox 对照](FLOWMQ_LANE_SCALING.md#同-lane-直通与跨线程-mailbox-对照2026-10-10)
+保存选择依据和吞吐/CPU 取舍；本选择是项目边界，不是所有 Actor 应用的性能结论。
+
+### 历史 mailbox qualification 的范围
+
+下述 mailbox 仅用于内部测试和性能对照，不安装、不作为产品架构候选继续推进。
+之前讨论的 Monitor 与 buffer credit 等待方案也不纳入 FlowMQ 的应用转交层。
 
 内部验证采用每 lane 一个有界 MPSC mailbox：业务 producer 只向预先绑定的 lane 发布
 拥有引用的 slice，唯一 consumer 是该 lane 的 owner。socket/context/backend 始终在 owner
@@ -364,6 +374,8 @@ slots 的 slice。生产者注册/撤销、动态 socket 迁移、公开 shutdow
 本次范围。验证要求覆盖满队列、引用归还与安全复用、乱序发布缺口、等待前/等待中唤醒和停止唤醒，
 并对比同一 mailbox workload 的忙轮询与通知等待，记录完整内容、序号、CPU 和尾延迟。
 
+### owner 内 retained SG 合批
+
 SG 的实际接入使用现有 `flowmq_send_slice()`：FlowMQ 将 framing 与原 payload 分段，
 交给 `cnet_send_slicev()`，由 CNet 管理 retained vector 的终态寿命。接收使用
 `flowmq_recv_slicev()` 并直接遍历 ranges，不先 coalesce。复制 API 对照的后续发送
@@ -382,7 +394,7 @@ queued release 和 native terminal drain。公开 immediate slice 和 fanout 契
 原行为；私有 queued send 只接受 owner 上的 TCP PAIR 单部消息。
 
 模式归属：NativeIO/CNet 是 Proactor 的完成事实源，FlowMQ owner 串行管理协议状态，
-mailbox 是有界 owning handoff；不引入 Leader/Followers、第二个 ACT 终态表或隐藏
+历史 mailbox 只用于测量应用交接成本；不引入 Leader/Followers、第二个 ACT 终态表或隐藏
 executor。CMeta 继续提供已有类型/接口契约，本轮没有新增反射或动态策略需求，
 不把运行时队列算法塞进 metadata/schema。RC2 skill 是审查指引，实际编译仍依据
 当前 pinned SDK，不将 RC2 的头文件或测试清单视为已完成 SDK 升级。

@@ -1033,12 +1033,16 @@ progress、负载与计时口径的结果必须分开。
 
 ### 设计选择、验证与限制
 
-同 lane 数据路径继续直接调用现有 send/recv 与 owner progress，不添加强制
-Actor/mailbox 层。跨线程 producer 保留有界 handoff；如果业务必须保留这种拓扑，
-后续应单独验证有通知的 buffer 归还/等待协议，避免持续全表扫描，而不是绕过
-owner 亲和或无界扩大 source 池。小 retained 合批与大消息 byte-budget 扫描仍是
-独立问题。生产库本来就允许 direct，本轮没有需要回滚的生产默认值、公开 ABI、
-wire protocol 或依赖变更；实验实现限于 benchmark，正式规则补入 ARCHITECTURE。
+最终项目选择固定 lane 内直接调用现有 send/recv 与 owner progress，不在 FlowMQ
+采用 Actor 或应用 mailbox 数据路径。多核通过独立 context/owner 与连接分片
+扩展，跨线程应用使用独立 socket 通信或自行组织应用调度，并保持既有 owner
+亲和。先前提出的 Monitor/buffer credit 归还方案未实现，不再作为 FlowMQ 应用
+转交层的后续工作；此决策不将原生完成、协议 credit 或 retained 生命周期删除。
+
+本节 mailbox harness 与原始 CSV 保留为实验依据，不作为生产功能。小 retained
+合批与大消息 byte-budget 扫描仍是独立优化方向。生产 runtime 本来就支持 direct，
+没有需要回滚的生产默认值、公开 ABI、wire protocol 或依赖变更；正式边界补入
+ARCHITECTURE。本选择不把实验中的 CPU 开销推广为所有 Actor 应用的性能结论。
 
 新增两个正式 direct 用例：一项强制仅三个 source 可用，证明半批准备会返回、
 恢复后 FIFO/内容保持正确并归还所有引用；另一项覆盖 1/8 lane、64 B/64 KiB、
