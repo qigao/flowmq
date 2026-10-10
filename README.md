@@ -20,6 +20,14 @@ FlowMQ 是 C11 的 pattern-oriented messaging library。它提供 FMQ/6 wire cod
 
 > Branch/release boundary: `v1.2.1` 在 `v1.2.0` 的 owner-lane、reuse-port、retained TLS、producer-owned/segmented receive 与公开 `flowmq_recv_slicev()` 基础上，包含 #101/#102 的 atomic retained PUB/XPUB fanout、#104 的 generated DataBind ChannelPlan/ServicePlan qualification，以及 #111/#112 的 CMeta ownership、最新 Salts SDK 适配与显式多 owner 验证。除非显式标记 release，下面的行为描述以 current `main` 为准。
 
+`v1.3.0` 迁移到 Salts 2.3 / SaltsUtils 4.3 的 RC/stable SDK 系列，加入可选有界
+CNet peer pool、FMQ/6 READY 后才重置 reconnect backoff、完整 owner completion
+batch 的错误结算，以及有界小消息 copy coalesce。固定 owner 线程归属和既有
+wire protocol 保持不变；独立 lane、共享 Guard 与 retained SG 的测试数据见
+[lane scaling](docs/FLOWMQ_LANE_SCALING.md)。Actor、应用 mailbox 与 queued SG
+扫描属于私有性能资格验证，不作为本版本的公开数据路径。macOS 发布 profile
+使用 AppleClang，匹配当前 Salts SDK 的 TinyTest native Mach-O TLS ABI。
+
 当前开发分支的 NuGet restore 使用 `Salts.Native Version="2.3.0-*"` 与
 `SaltsUtils.Native Version="4.3.0-*"`：选择对应的最新 RC（正式版发布后选择同版本正式版），
 而不是回退到 2.2.x / 4.2.x。公开链接依赖是

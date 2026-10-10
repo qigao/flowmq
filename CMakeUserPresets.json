@@ -301,8 +301,9 @@
         },
         {
             "name": "mac-release-ci",
-            "displayName": "macOS SDK release with the published GNU toolchain",
+            "displayName": "macOS SDK release with the published AppleClang TLS ABI",
             "inherits": [
+                "AppleClang",
                 "vcpkg-cache-ci",
                 "release-mac-ninja"
             ],
