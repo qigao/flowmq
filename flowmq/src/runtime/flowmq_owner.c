@@ -172,6 +172,13 @@ int flowmq_owner_internal_wake(flowmq_owner_t *owner) {
   return native_io_backend_wake(&owner->backend);
 }
 
+int flowmq_owner_internal_native_stats(
+    const flowmq_owner_t *owner, native_io_backend_stats *stats) {
+  if (owner == NULL || stats == NULL || !owner->backend_initialized || owner->backend_closed)
+    return SALTS_EINVAL;
+  return native_io_backend_get_stats(&owner->backend, stats) ? SALTS_OK : SALTS_EIO;
+}
+
 static int flowmq_owner_progress_once(flowmq_owner_t *owner,
                                       uint32_t max_wait_ms) {
   return flowmq_owner_internal_progress_once(owner, max_wait_ms, NULL, NULL);

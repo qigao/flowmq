@@ -21,7 +21,7 @@ cmake_add_benchmark(
 cmake_add_benchmark(
   bench_flowmq_owner_mailbox
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_owner_mailbox.c
-  LIBS FlowMQ::Transport Salts::Concurrency Salts::CMeta Salts::TinyTest
+  LIBS FlowMQ::Transport Salts::Concurrency Salts::CMeta Salts::CNet Salts::TinyTest
   INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/runtime
   FOLDER "flowmq/benchmarks/runtime")
 if(WIN32)
@@ -40,14 +40,21 @@ if(BUILD_TESTS)
            COMMAND bench_flowmq_owner_mailbox --filter "token correctness:")
   add_test(NAME bench_flowmq_lane_token
            COMMAND bench_flowmq_owner_mailbox --filter "token comparison:")
-  set_tests_properties(test_flowmq_owner_mailbox test_flowmq_lane_direct test_flowmq_lane_token PROPERTIES
+  add_test(NAME test_flowmq_lane_sg_sweep
+           COMMAND bench_flowmq_owner_mailbox --filter "SG sweep correctness:")
+  add_test(NAME bench_flowmq_lane_sg_sweep
+           COMMAND bench_flowmq_owner_mailbox --filter "SG sweep comparison:")
+  set_tests_properties(test_flowmq_owner_mailbox test_flowmq_lane_direct test_flowmq_lane_token
+                      test_flowmq_lane_sg_sweep PROPERTIES
     LABELS "flowmq;flowmq-transport" RUN_SERIAL TRUE TIMEOUT 120)
-  set_tests_properties(bench_flowmq_owner_mailbox bench_flowmq_lane_handoff bench_flowmq_lane_token PROPERTIES
+  set_tests_properties(bench_flowmq_owner_mailbox bench_flowmq_lane_handoff bench_flowmq_lane_token
+                      bench_flowmq_lane_sg_sweep PROPERTIES
     LABELS "flowmq;benchmark" RUN_SERIAL TRUE TIMEOUT 600)
   if(WIN32)
     set_tests_properties(test_flowmq_owner_mailbox bench_flowmq_owner_mailbox
                         test_flowmq_lane_direct bench_flowmq_lane_handoff
-                        test_flowmq_lane_token bench_flowmq_lane_token PROPERTIES
+                        test_flowmq_lane_token bench_flowmq_lane_token
+                        test_flowmq_lane_sg_sweep bench_flowmq_lane_sg_sweep PROPERTIES
       ENVIRONMENT_MODIFICATION "${FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS}")
   endif()
 endif()

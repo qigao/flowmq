@@ -6,6 +6,7 @@
 #include <salts/disruptor.h>
 #include <salts/thread.h>
 #include <cmeta/ace_synchronization.h>
+#include <cnet/cnet.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -61,6 +62,8 @@ struct mail_lane_s {
   uint64_t *latencies;
   size_t received, admitted, polls, send_busy, segments, app_full, peak_inflight, event_checks;
   flowmq_retained_queue_stats_t sg_stats;
+  native_io_backend_stats native_before, native_after;
+  unsigned native_sampled;
   cmeta_mutex_t token_mutex;
   mem_buffer_t *token_buffers[TOKEN_POOL_PER_LANE];
   size_t token_next, token_calls;
@@ -80,6 +83,7 @@ struct mail_run_s {
   cmeta_mutex_t token_mutex;
   mem_buffer_t *token_buffers[MAIL_LANES * TOKEN_POOL_PER_LANE];
   size_t token_count, token_next;
+  size_t sg_batch_messages;
   uint32_t pause_ms;
 };
 
@@ -390,7 +394,8 @@ static int mail_open(mail_lane *lane) {
   if (lane->sender == NULL || lane->receiver == NULL) return SALTS_ENOMEM;
   if (lane->run->retained >= 2) {
     status = flowmq_socket_internal_retained_queue(
-        lane->sender, lane->run->retained == 2 ? 1u : MAIL_BATCH);
+        lane->sender, lane->run->retained == 2 ? 1u :
+        lane->run->sg_batch_messages != 0u ? lane->run->sg_batch_messages : MAIL_BATCH);
     if (status != SALTS_OK) return status;
   }
   flowmq_socket_t *sockets[] = {lane->sender, lane->receiver};
@@ -520,6 +525,9 @@ static void mail_consume(void *arg) {
   mail_local_batch local = {0};
   int status = mail_open(lane);
   if (status == SALTS_OK) status = mail_warmup(lane);
+  if (status == SALTS_OK && run->sg_batch_messages != 0u)
+    status = flowmq_owner_internal_native_stats(lane->owner, &lane->native_before);
+  if (status == SALTS_OK && run->sg_batch_messages != 0u) lane->native_sampled = 1u;
   mail_error(run, status);
   cmeta_mutex_lock(&run->mutex);
   ++run->ready;
@@ -594,6 +602,11 @@ static void mail_consume(void *arg) {
     status = mail_progress(lane, wait);
   }
   lane->finished_ns = cmeta_hrtime();
+  if (lane->native_sampled == 1u) {
+    const int snapshot = flowmq_owner_internal_native_stats(lane->owner, &lane->native_after);
+    if (snapshot == SALTS_OK) lane->native_sampled = 2u;
+    if (status == SALTS_OK) status = snapshot;
+  }
   if (status == SALTS_OK)
     for (size_t i = 0u; i < MAIL_PRODUCERS; ++i)
       if (expected[i] != run->rounds * MAIL_BATCH) status = SALTS_EPROTO;
@@ -604,6 +617,14 @@ static void mail_consume(void *arg) {
   if (status == SALTS_OK && (run->retained == 2 || run->retained == 3) &&
       (lane->sg_stats.messages != total || lane->sg_stats.max_ranges > 32u ||
        lane->sg_stats.max_messages > (run->retained == 2 ? 1u : MAIL_BATCH)))
+    status = SALTS_EPROTO;
+  if (status == SALTS_OK && run->sg_batch_messages != 0u &&
+      (lane->native_after.submitted <= lane->native_before.submitted ||
+       lane->native_after.completed < lane->native_before.completed ||
+       lane->native_after.failed != lane->native_before.failed ||
+       lane->native_after.rejected_full != lane->native_before.rejected_full ||
+       lane->native_after.native_submit_errors != lane->native_before.native_submit_errors ||
+       (run->retained == 3 && lane->sg_stats.max_messages > run->sg_batch_messages)))
     status = SALTS_EPROTO;
   mail_error(run, status);
   cmeta_mutex_lock(&run->mutex);
@@ -638,9 +659,9 @@ static void mail_join(cmeta_thread_t *thread) {
   if (cmeta_thread_join(thread) != SALTS_OK) abort();
 }
 
-static int mail_run_path(size_t lanes, size_t bytes, size_t rounds, uint32_t pause_ms,
+static int mail_run_path_config(size_t lanes, size_t bytes, size_t rounds, uint32_t pause_ms,
                          int retained, int notify, size_t repeat, int measured, size_t cancel_after,
-                         int direct) {
+                         int direct, size_t sg_batch_messages) {
   mail_run run = {0};
   mail_lane workers[MAIL_LANES] = {0};
   cmeta_thread_t consumers[MAIL_LANES] = {0}, producers[MAIL_LANES * MAIL_PRODUCERS] = {0};
@@ -654,6 +675,7 @@ static int mail_run_path(size_t lanes, size_t bytes, size_t rounds, uint32_t pau
   size_t token_calls = 0u;
   uint64_t token_enter_ns = 0u, token_enter_max_ns = 0u;
   flowmq_retained_queue_stats_t sg_stats = {0};
+  uint64_t native_submitted = 0u, native_completed = 0u;
   int status = SALTS_OK;
   if (lanes == 0u || lanes > MAIL_LANES || bytes < sizeof(mail_header) ||
       bytes > MAIL_MAX_BYTES || rounds == 0u || rounds > MAIL_SATURATED_ROUNDS) return SALTS_EINVAL;
@@ -661,6 +683,8 @@ static int mail_run_path(size_t lanes, size_t bytes, size_t rounds, uint32_t pau
   if (direct && pause_ms != 0u) return SALTS_EINVAL;
   if (direct < 0 || direct > TOKEN_BATCHED_SHARED_GUARD ||
       (direct >= TOKEN_LOCAL && retained >= MAIL_ZMQ_COPY)) return SALTS_EINVAL;
+  if (sg_batch_messages > MAIL_BATCH || (sg_batch_messages != 0u &&
+      (direct != 1 || (retained != 0 && retained != 1 && retained != 3)))) return SALTS_EINVAL;
 #if !defined(FLOWMQ_BENCH_WITH_ZMQ)
   if (retained >= MAIL_ZMQ_COPY) return SALTS_ENOTSUP;
 #endif
@@ -670,6 +694,7 @@ static int mail_run_path(size_t lanes, size_t bytes, size_t rounds, uint32_t pau
   run.bytes = bytes; run.rounds = rounds; run.pause_ms = pause_ms;
   run.retained = retained; run.notify = notify;
   run.direct = direct;
+  run.sg_batch_messages = sg_batch_messages;
   run.cancel_after = cancel_after;
   cmeta_mutex_init(&run.mutex); cmeta_cond_init(&run.changed);
   if (direct >= TOKEN_LOCAL) {
@@ -749,6 +774,10 @@ measured_done:
     sg_stats.writes += lane->sg_stats.writes;
     sg_stats.messages += lane->sg_stats.messages;
     sg_stats.ranges += lane->sg_stats.ranges;
+    if (lane->native_sampled == 2u) {
+      native_submitted += lane->native_after.submitted - lane->native_before.submitted;
+      native_completed += lane->native_after.completed - lane->native_before.completed;
+    }
     if (sg_stats.max_messages < lane->sg_stats.max_messages) sg_stats.max_messages = lane->sg_stats.max_messages;
     if (sg_stats.max_ranges < lane->sg_stats.max_ranges) sg_stats.max_ranges = lane->sg_stats.max_ranges;
     if (lane->finished_ns > finish) finish = lane->finished_ns;
@@ -778,7 +807,19 @@ measured_done:
     qsort(latencies, total, sizeof(*latencies), mail_compare);
     const char *send_names[] = {"copy", "sg", "queued_sg", "batch_sg", "zmq_copy", "zmq_owned",
                                 "zmq_copy_events", "zmq_owned_events"};
-    if (direct >= TOKEN_LOCAL) {
+    if (sg_batch_messages != 0u) {
+      printf("SG_SWEEP_RESULT,%zu,%zu,%zu,%s,%zu,%zu,%llu,%.3f,%.3f,%d,%.3f,%llu,%zu,%zu,%zu,%zu,%llu,%llu,%llu,%zu,%zu,%llu,%llu,%zu,%zu,%zu\n",
+             bytes, lanes, repeat, send_names[retained], retained == 3 ? sg_batch_messages : 0u,
+             total, (unsigned long long)(finish - start), (double)total * 1e9 / (finish - start),
+             (double)(after.cpu_ns - before.cpu_ns) / total, after.cpu_cycles_available,
+             (double)(after.cpu_cycles - before.cpu_cycles) / total,
+             (unsigned long long)latencies[(total * 99u + 99u) / 100u - 1u],
+             polls, busy, buffer_probes, buffer_waits,
+             (unsigned long long)sg_stats.writes, (unsigned long long)sg_stats.messages,
+             (unsigned long long)sg_stats.ranges, sg_stats.max_messages, sg_stats.max_ranges,
+             (unsigned long long)native_submitted, (unsigned long long)native_completed,
+             segments, peak_inflight, created);
+    } else if (direct >= TOKEN_LOCAL) {
       const char *paths[] = {"local", "local_guard", "shared_guard"};
       printf("TOKEN_RESULT,%zu,%zu,%zu,%s,%s,%zu,%zu,%llu,%.3f,%.3f,%d,%.3f,%llu,%zu,%llu,%llu,%zu,%zu,%zu,%zu\n",
              bytes, lanes, repeat, send_names[retained], paths[(direct - TOKEN_LOCAL) % 3],
@@ -807,6 +848,13 @@ measured_done:
   cmeta_cond_destroy(&run.changed); cmeta_mutex_destroy(&run.mutex); free(latencies);
   if (direct >= TOKEN_LOCAL) cmeta_mutex_destroy(&run.token_mutex);
   return status;
+}
+
+static int mail_run_path(size_t lanes, size_t bytes, size_t rounds, uint32_t pause_ms,
+                         int retained, int notify, size_t repeat, int measured, size_t cancel_after,
+                         int direct) {
+  return mail_run_path_config(lanes, bytes, rounds, pause_ms, retained, notify,
+                             repeat, measured, cancel_after, direct, 0u);
 }
 
 static int mail_run_case(size_t lanes, size_t bytes, size_t rounds, uint32_t pause_ms,
@@ -1138,6 +1186,35 @@ static int mail_zmq_rejection_case(void) {
 #endif
 
 spec("FlowMQ internal SG mailbox") {
+  it("SG sweep correctness: every batch bound preserves FIFO and retained lifetime on success and cancel") {
+    const size_t sizes[] = {64u, MAIL_MAX_BYTES}, counts[] = {1u, MAIL_LANES};
+    const size_t batches[] = {1u, 2u, 4u, 8u, MAIL_BATCH};
+    for (size_t size = 0u; size < 2u; ++size)
+      for (size_t lane = 0u; lane < 2u; ++lane)
+        for (size_t batch = 0u; batch < 5u; ++batch) {
+          check_equal(mail_run_path_config(counts[lane], sizes[size], 8u, 0u,
+                    3, 0, 0u, 0, 0u, 1, batches[batch]), SALTS_OK);
+          check_equal(mail_run_path_config(counts[lane], sizes[size], 8u, 0u,
+                    3, 0, 0u, 0, MAIL_BATCH, 1, batches[batch]), SALTS_ECANCELED);
+        }
+  }
+  bench("SG sweep comparison: retained batches and native operation counts") {
+    const size_t sizes[] = {64u, MAIL_MAX_BYTES}, counts[] = {1u, MAIL_LANES};
+    const size_t batches[] = {1u, 2u, 4u, 8u, MAIL_BATCH};
+    printf("SG_SWEEP_CONFIG,workers=one_per_lane,source_buffers_per_lane=128,staging=16,application_window=128,native_vector_limit=%u,retained_vector_limit=%u,affinity=unbound,load=saturated\n", NATIVE_IO_VECTOR_MAX, CNET_RETAINED_VECTOR_MAX);
+    printf("SG_SWEEP_HEADER,payload_bytes,lanes,repeat,send,batch_messages,messages,wall_ns,messages_per_second,cpu_ns_per_message,cpu_cycles_available,cpu_cycles_per_message,prepare_receive_p99_ns,poll_calls,send_busy,buffer_probes,buffer_waits,sg_writes,sg_messages,sg_ranges,sg_max_messages,sg_max_ranges,native_submitted,native_completed,receive_segments,peak_inflight_per_lane,application_workers\n");
+    for (size_t repeat = 0u; repeat < MAIL_REPEATS * 2u; ++repeat)
+      for (size_t size = 0u; size < 2u; ++size)
+        for (size_t lane = 0u; lane < 2u; ++lane)
+          for (size_t order = 0u; order < 7u; ++order) {
+            const size_t policy = (order + repeat) % 7u;
+            const size_t bytes = sizes[(size + repeat) % 2u];
+            const int send = policy == 0u ? 0 : policy == 1u ? 1 : 3;
+            check_equal(mail_run_path_config(counts[(lane + repeat) % 2u], bytes,
+                bytes == 64u ? MAIL_SATURATED_ROUNDS : MAIL_ROUNDS, 0u,
+                send, 0, repeat + 1u, 1, 0u, 1, policy < 2u ? MAIL_BATCH : batches[policy - 2u]), SALTS_OK);
+          }
+  }
   it("token correctness: full shared pool releases the Guard and preserves partial claims") {
     check_equal(mail_token_full_case(), SALTS_OK);
   }

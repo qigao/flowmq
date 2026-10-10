@@ -368,6 +368,24 @@ owner 继续收包和推进 I/O，保留已经取得的部分 batch，不持锁�
 显示 8 lane 小消息的逐条共享 Guard 增加 CPU 与 P99，批量 16 显著摊薄成本但
 没有稳定超过独立池。保持独立池默认；共享 Guard 仅留在私有资格验证中。
 
+### retained SG 批量与 native 提交窗口
+
+私有 direct qualification 对照 retained 批量 1/2/4/8/16，保持每 lane 一个
+独立 owner、128 个 source buffer、16 条 staging 和 128 条应用窗口，不加入
+共享 Guard、Actor 或应用 mailbox。公开 immediate slice admission 保持既有契约。
+
+RC1 的 CNet 每个逻辑 write 最多接纳 32 ranges，NativeIO 每次提交最多 16 spans；
+较大逻辑 vector 由 CNet 在同一 write 下继续提交。当前普通 PAIR 帧是 framing
+加 payload 两段，所以 SG16 的逻辑提交减少不等于 native 操作减少。
+[224 组 SG 扫描](FLOWMQ_LANE_SCALING.md#retained-sg-批量与-native-操作扫描2026-10-10)
+显示 64 B 的 SG8/SG16 native 总操作数几乎相同，SG16 没有稳定吞吐收益；
+64 KiB、8 lane 的 immediate SG 比 queued SG16 吞吐更高、排队 P99 更低。
+暂不根据逻辑 write 数修改批量默认值，也不把 private queued admission 公开化。
+
+诊断 getter 只允许 owner 线程读取 backend 累计统计，不推进、observe 或消费完成。
+计数覆盖该 backend 的收、发与其他 native 操作，不能标为纯 DATA 写 syscall 数。
+采样止于接收验证完成，随后关闭仍由同一 owner drain 全部 retained 引用。
+
 ### 历史 mailbox qualification 的范围
 
 下述 mailbox 仅用于内部测试和性能对照，不安装、不作为产品架构候选继续推进。

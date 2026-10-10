@@ -1163,3 +1163,129 @@ ctest --preset bench-win-release-user -R "^bench_flowmq_lane_token$" -V
 **MED：**尚未验证低负载阻塞等待的 CPU 收益、FIFO/LIFO Token 公平性、其他平台、
 TLS、跨机、TSan/ASan 或失败注入。此次不重测 ZMQ，不能把本轮 Guard 结果与
 上一节不同池组织/时间点的 ZMQ 结果拼接成新的胜负结论。
+
+## retained SG 批量与 native 操作扫描（2026-10-10）
+
+本轮基于 `9d0ba89`，继续用 Windows/MSVC Release、Salts 2.3.0-rc.1，
+比较同一个 direct TCP PAIR workload 的 copy、公开 immediate SG、私有 queued
+SG1/2/4/8/16。每 lane 一个线程、独立 context/owner、独立 128 个 source
+buffer；两个逻辑数据源各自保序，staging 16、应用窗口 128。没有 producer
+线程、Actor、应用 mailbox 或共享 Guard。仅新增私有采样与测试，不改变公开
+send/recv、owner progress、协议或生产批量默认值。
+
+每组完整填充和验证 payload，一条完整 copy warmup，策略、大小与 lane 数轮换
+执行顺序。1/8 lane、64 B/64 KiB、七种策略、八轮，共 **224 组全部通过**，
+33,546,240 条消息、35,936,796,672 payload bytes。原始数据：
+[flowmq-sg-batch-sweep-windows-20261010.csv](flowmq-sg-batch-sweep-windows-20261010.csv)。
+
+### 计数与计时边界
+
+新增 owner-thread 只读 getter，warmup 后、放行前和完整接收校验后各读取一次
+`native_io_backend_stats`，不额外推进或消费完成。差值包含同一 backend 的
+收、发与其他 native 操作；**不是纯写 syscall 数**。接收结束不是终态 drain
+屏障，snapshot 可以仍有在途操作，随后正常关闭再检查 retained 最终释放。
+正式用例同时检查 submitted 增长、completed 不倒退，failed、rejected_full 和
+native_submit_errors 没有增加。
+
+吞吐计时止于最后一个 lane 完整接收验证；进程 CPU 增量覆盖放行至 done 屏障，
+包含每 lane 一次末尾统计读取。P99 从取得可复用 source 后、填充前到完整接收
+验证后，包含这条消息的后续排队，但不完整包含之前没有可用 source 的重试。
+不是应用外部请求端到端延迟。warmup 没有预触其余 backing 页，初始化和
+teardown 不计时。没有 affinity 或频率控制，测量时存在其他 CPU 负载；绝对
+速率不能与上一轮或历史 ZMQ 数据拼接。以下配对值也保留了这种负载的不确定性。
+
+### 8 lane 的绝对中位数
+
+cycles/条是整个进程 CPU cycles 增量除以完成条数；各列取八轮中位数。
+native/条为 submitted 差值除以完成条数，不等于 CNet write/条。
+
+| payload / 发送 | k条/s | cycles/条 | P99 µs | native/条 |
+| --- | ---: | ---: | ---: | ---: |
+| 64 B copy | 2,338.021 | 7,797.5 | 204.6 | 0.1563 |
+| 64 B immediate SG | 324.699 | 57,514.6 | 584.6 | 2.0156 |
+| 64 B queued SG1 | 317.310 | 58,645.6 | 3,651.8 | 2.0156 |
+| 64 B queued SG2 | 551.753 | 33,418.3 | 1,964.4 | 1.0312 |
+| 64 B queued SG4 | 877.315 | 21,246.1 | 1,050.3 | 0.5313 |
+| 64 B queued SG8 | 1,365.439 | 13,511.4 | 520.0 | 0.2813 |
+| 64 B queued SG16 | 1,259.432 | 14,717.2 | 583.5 | 0.2813 |
+| 64 KiB copy | 7.724 | 2,198,063.8 | 161,030.9 | 1.2330 |
+| 64 KiB immediate SG | 16.664 | 1,098,029.9 | 9,791.0 | 2.0892 |
+| 64 KiB queued SG1 | 16.669 | 1,092,022.3 | 68,560.9 | 2.0905 |
+| 64 KiB queued SG2 | 11.808 | 1,552,374.2 | 107,234.1 | 1.6100 |
+| 64 KiB queued SG4 | 12.408 | 1,471,578.1 | 100,138.7 | 1.3540 |
+| 64 KiB queued SG8 | 11.717 | 1,549,101.4 | 105,377.2 | 1.2355 |
+| 64 KiB queued SG16 | 11.994 | 1,529,378.1 | 108,215.6 | 1.2330 |
+
+64 B SG16 相对 immediate 的配对吞吐 +298.9%、cycles −75.3%，8/8 胜出；
+相对 copy 却为吞吐 −40.7%、cycles +72.4%、P99 +178.9%，0/8 胜出。
+copy native/条更低；小消息 copy coalesce 已将多条编码帧放进连续 buffer，
+本轮不能由这些总计数单独分离 framing、引用管理、分配或接收解析的 CPU 成本。
+
+64 KiB SG16 相对 copy 吞吐 +57.5%、cycles −33.1%、P99 −35.8%，8/8 胜出，
+但相对 immediate SG 吞吐 −19.7%、cycles +24.9%、P99 +851.6%，0/8 胜出，
+native/条反而减少 41.4%。**事实：**少 native 操作没有转化为更高吞吐；排队
+深度与单次逻辑 write 的大小也发生变化，不能把这些百分比全部归因于分段提交。
+SG1 同样保留 queued admission，P99 远高于 immediate；不能仅按每批条数解释延迟。
+
+### SG16 相对 SG8：逻辑 write 减半，native 操作没有减半
+
+百分比先逐轮计算 `SG16/SG8 − 1`，再取八轮中位数；不是两侧绝对中位数的比。
+
+| payload / lanes | 配对吞吐 | 配对 cycles/条 | 配对 P99 | 配对 native 数 | 配对 CNet write 数 | 吞吐 wins |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 64 B / 1 | −4.7% | +4.5% | −5.4% | 0.0% | −47.1% | 2/8 |
+| 64 B / 8 | −0.7% | +1.4% | +2.7% | 0.0% | −47.1% | 4/8 |
+| 64 KiB / 1 | +1.0% | −1.1% | +4.6% | +0.1% | −49.6% | 4/8 |
+| 64 KiB / 8 | +7.6% | −6.4% | −1.0% | −0.8% | −49.6% | 6/8 |
+
+**事实：**当前 SDK 的 `CNET_RETAINED_VECTOR_MAX=32`，
+`NATIVE_IO_VECTOR_MAX=16`。`cnet_send_slicev` 的公开契约明确说明较大 logical
+vector 会分多次 native 提交；对应 RC1 的 `cnet_write_queue_build_vector`
+在输出 16 spans 后结束当前窗口。当前普通 PAIR retained 帧实测都是两段。
+因此满 SG8 是 16 ranges，满 SG16 是 32 ranges。
+
+**计算：**1 lane、64 B、每组 65,536 条时，SG8 的 CNet writes 为 8,705，
+SG16 为 4,609；减少 `1 − 4609/8705 = 47.05%`。两者八轮的 native submitted
+都为 **18,434**。8 lane 时也只相差 0–4 次，差异 ≤0.0028%。SG8/16 的
+poll/条中位数均为 0.1485，copy 为 0.0860；继续增大 logical batch 没有
+减少当前小消息负载的 native 操作或 progress 次数。
+
+**推论：**16-span 窗口解释了 SG8 之后 native 摊销的平坦区，是后续优化必须
+考虑的边界；不是已经证明了某个函数占据全部 CPU。64 B、8 lane 的逐轮吞吐比
+范围 0.704–1.532，没有稳定赢家。64 KiB、8 lane 范围 0.763–1.357，SG16
+虽赢 6/8，仍低于 immediate 的每一轮，暂不推广为通用 batch 最优值。
+
+source 复用仍严格等待 refcount==1，本轮 79/224 组出现过 buffer 不可用重试，
+集中在 queued 路径。64 KiB、8 lane 的 probes/条中位数从 SG1 的 16.856 降到
+SG16 的 1.000，SG16 的不足次数中位数为 0；重试不是丢消息或提前复用。
+源池总预算没有变化，减少 probe 也没有使 SG16 超过 immediate。
+
+### 选择、验证与下一步
+
+保持独立 lane 和独立 source 池，保留公开 immediate SG；小消息 copy 与 retained
+各有所有权契约，不因本轮吞吐将 retained 隐式改为复制。私有 SG1/2/4/8/16
+资格验证全部保留，不将 SG16 设置为公开 admission 策略，也不改 SDK native
+vector 上限。新增 Salts::CNet 显式链接只属于 benchmark，生产依赖没有增加。
+回滚只需移除采样 getter、sweep 用例和注册，不涉及用户数据或协议迁移。
+
+正式 SG sweep 用例覆盖 40 个成功/取消配置，核对 payload、逐源 FIFO、引用
+保活和释放一次，且 max messages/ranges 不超过本组批量。SG sweep、direct、
+Token、owner、owner completion batch、owner fault、owner fault pool 七项
+CTest 各连续通过十次，167.70 s；完整 Release build 通过。性能 CTest 八轮
+通过，156.49 s。CSV 核对 224 个唯一配置、消息/worker 数、SG 两段/条和应用
+在途峰值 ≤128。最终测量后没有修改 C 源码。
+
+```powershell
+cmake --build --preset win-release-user
+ctest --preset win-release-user -R "^test_flowmq_(lane_sg_sweep|lane_direct|lane_token|owner|owner_batch|owner_fault|owner_fault_pool)$" --repeat until-fail:10 --output-on-failure
+ctest --preset bench-win-release-user -R "^bench_flowmq_lane_sg_sweep$" -V
+```
+
+日志：`build/sg-sweep-build.log`、`build/sg-sweep-final-correctness.log`、
+`build/sg-sweep-comparison.log`。测试须在已配置的 MSVC/vcpkg 环境中执行。
+
+**MED：**尚缺隔离机器/affinity、低负载等待、其他平台、TLS、跨机、ZMQ 同轮
+对照以及 CPU stack/分配 profiler。本轮证据足以否定“CNet 逻辑提交减半就能
+同等减少 native 开销”的判断，不能宣称确定了全部 CPU 瓶颈。
+代码中的 retained publication 固定存储 32 个 slice 描述符，而本负载实际只用
+两个；按实际 range 数分配是下一项可单独测量的候选，尚未实现或宣称收益。

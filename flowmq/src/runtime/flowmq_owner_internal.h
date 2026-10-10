@@ -27,4 +27,9 @@ int flowmq_owner_internal_progress_once(
 int flowmq_owner_internal_step(flowmq_owner_t *owner, uint32_t max_wait_ms);
 int flowmq_owner_internal_wake(flowmq_owner_t *owner);
 
+/* Owner-thread diagnostic snapshot; no progress or completion consumption.
+ * Counts all operations of the shared backend, not only DATA writes/syscalls. */
+int flowmq_owner_internal_native_stats(
+    const flowmq_owner_t *owner, native_io_backend_stats *stats);
+
 #endif
