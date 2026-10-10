@@ -290,11 +290,19 @@ endif()
 
 if(FLOWMQ_BUILD_ZMQ_BENCHMARK)
   find_package(ZeroMQ CONFIG REQUIRED)
+  # vcpkg's static triplets expose libzmq as an INTERFACE forwarding target.
+  # Validate the actual archive while keeping its public link target below.
+  set(_flowmq_zmq_artifact_target libzmq)
+  get_target_property(_flowmq_zmq_target_type libzmq TYPE)
+  if(_flowmq_zmq_target_type STREQUAL "INTERFACE_LIBRARY" AND TARGET libzmq-static)
+    set(_flowmq_zmq_artifact_target libzmq-static)
+  endif()
   string(TOUPPER "${CMAKE_BUILD_TYPE}" _flowmq_zmq_config)
   get_target_property(
-    _flowmq_zmq_config_location libzmq
+    _flowmq_zmq_config_location ${_flowmq_zmq_artifact_target}
     "IMPORTED_LOCATION_${_flowmq_zmq_config}")
-  get_target_property(_flowmq_zmq_generic_location libzmq IMPORTED_LOCATION)
+  get_target_property(_flowmq_zmq_generic_location
+    ${_flowmq_zmq_artifact_target} IMPORTED_LOCATION)
   if(NOT _flowmq_zmq_config_location AND NOT _flowmq_zmq_generic_location)
     message(
       FATAL_ERROR
