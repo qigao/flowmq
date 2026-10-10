@@ -289,6 +289,24 @@ if(FLOWMQ_BUILD_ZMQ_BENCHMARK)
   target_compile_definitions(bench_flowmq_socket PRIVATE FLOWMQ_BENCH_WITH_ZMQ=1)
   target_link_libraries(bench_flowmq_socket_owners PRIVATE libzmq)
   target_compile_definitions(bench_flowmq_socket_owners PRIVATE FLOWMQ_BENCH_WITH_ZMQ=1)
+  target_link_libraries(bench_flowmq_owner_mailbox PRIVATE libzmq)
+  target_compile_definitions(bench_flowmq_owner_mailbox PRIVATE FLOWMQ_BENCH_WITH_ZMQ=1)
+  if(BUILD_TESTS)
+    add_test(NAME test_flowmq_mailbox_zmq
+             COMMAND bench_flowmq_owner_mailbox --filter "mailbox ZMQ correctness:")
+    add_test(NAME bench_flowmq_mailbox_zmq
+             COMMAND bench_flowmq_owner_mailbox --filter "mailbox ZMQ comparison:")
+    add_test(NAME bench_flowmq_mailbox_zmq_progress
+             COMMAND bench_flowmq_owner_mailbox --filter "mailbox ZMQ progress:")
+    set_tests_properties(test_flowmq_mailbox_zmq PROPERTIES
+      LABELS "flowmq;flowmq-transport" RUN_SERIAL TRUE TIMEOUT 120)
+    set_tests_properties(bench_flowmq_mailbox_zmq bench_flowmq_mailbox_zmq_progress PROPERTIES
+      LABELS "flowmq;benchmark" RUN_SERIAL TRUE TIMEOUT 600)
+    if(WIN32)
+      set_tests_properties(test_flowmq_mailbox_zmq bench_flowmq_mailbox_zmq bench_flowmq_mailbox_zmq_progress PROPERTIES
+        ENVIRONMENT_MODIFICATION "${FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS}")
+    endif()
+  endif()
   cmake_add_benchmark(bench_flowmq_pattern_zmq
     SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_pattern_zmq.c
     LIBS libzmq Salts::Core Salts::TinyTest

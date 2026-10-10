@@ -1,7 +1,7 @@
 # FlowMQ 固定连接数的多 lane 扩展性与 libzmq 对照（2026-10-10）
 
-前半部分保存 `794ec02` 的 FlowMQ 独立扩展性结果；末尾的 libzmq 对照是另一轮双方
-相邻运行的配对实验。两轮数据独立保存，不跨轮相减推导性能收益。
+前半部分保存 `794ec02` 的 FlowMQ 独立扩展性结果；后续各节分别保存 libzmq、
+mailbox、retained SG 与 credit 推进对照。各轮数据独立保存，不跨轮相减推导性能收益。
 
 ## 范围与复现
 
@@ -785,3 +785,153 @@ multipart/fanout、owner/listener/fault、公开 C11/C++17 和多核示例。
 配置拒绝的正式测试，运行路径和测量实现未改。复现沿用上节 CMake/CTest 命令。
 未覆盖新合批路径的 CNet admission 失败注入、native 部分失败注入、TLS、跨机、
 Linux/macOS 或 sanitizer；32-range 实测包含多次 native 提交，但不等同于故障注入。
+
+## Mailbox 同负载 ZMQ 对照与 credit 推进诊断（2026-10-10）
+
+本节生产 runtime 沿用 `c198cf1`；只扩展 benchmark 和正确性验证，SDK 仍为上述
+Salts 2.3.0-rc.1。**结论以启用 sender events 的后续对照为准：仅循环 DONTWAIT 的
+ZMQ 小消息成绩受到命令处理节流影响，不能作为 ZMQ 性能上限。**
+
+### 共同负载与生命周期
+
+本轮沿用有界 mailbox、两个 producer/lane、64 个 source buffer/producer、每批 16
+消息发布、每轮最多 16 send/receive。对比 FlowMQ copy、FlowMQ retained、ZMQ copy
+和 ZMQ owned；FlowMQ retained 预先按上轮证据选择 64 B 的 batch SG/16、64 KiB 的
+immediate SG，不根据本轮成绩事后选择。所有策略轮换四轮，配置和校验代码共用。
+
+ZMQ 每 lane 独立 context，明确 IO_THREADS=1，PAIR socket 只由该 lane consumer
+操作；额外 I/O/管理线程计入 CPU。producer 不接触 socket。ZMQ owned 以
+`zmq_msg_init_data` 接管一个额外 buffer 引用，任意线程的 free callback 只执行
+线程安全的 mem_buffer_release；发送失败 close 临时消息，不能留下引用。成功时
+callback 可能先于发送函数返回，不能沿用 CNet“返回后必有在途引用”的测试假设。
+source 仍须等到基础引用唯一才能重写。ZMQ receive 借用 message 数据校验后 close。
+契约依据为 [init_data](https://libzmq.readthedocs.io/en/latest/zmq_msg_init_data.html)
+和 [msg_send](https://libzmq.readthedocs.io/en/latest/zmq_msg_send.html)。
+
+两边都使用同一 FlowMQ owner 的 NativeIO 控制唤醒：ZMQ 侧该 owner 没有网络 socket，
+只在 mailbox 真正空闲且所有已接纳数据均已接收时等待；其网络由 ZMQ 后台推进，
+活跃时不额外调用空 backend poll。此 owner 不创建线程。这样 producer 发布后的
+wake 接口和丢唤醒保护保持一致；本对照是完整 mailbox 集成成本，不是纯网络库计时。
+双方在计时屏障前完成一个全尺寸 copy 消息收发与完整校验，排除尚未连通的启动阶段。
+ZMQ 显式设置 SNDHWM/RCVHWM=128、IMMEDIATE=1、LINGER=0；HWM 数字相同不等于
+内部窗口/内存上限相同。因此两边在 consumer admission 上额外限定每 lane 最多
+128 条“成功发送但未接收”消息，记录 app_full 与 peak_inflight_per_lane，独立于
+各库自己的 credit/HWM。完整 workload 确认全部接收后才结束计时，错误/取消关闭
+允许丢弃待发消息，但必须在 context 终止后确认所有 source 引用归还。
+
+1/8 lane 分别有 3/24 个应用 worker，另有 controller；ZMQ 再有每 lane 一个 I/O
+线程及管理线程。没有绑定 CPU，也没有限制双方总 CPU 预算。进程 CPU/cycles
+包含 producer 填充、重试、逐字节接收校验及后台线程，排除资源构造和关闭。
+P99 从获得可复用 source 后开始准备消息，到接收校验完成；不含此前等待 source
+及 producer 的 5 ms sleep。因此这里既不是纯网络吞吐，也不是完整业务请求延迟。
+
+### 事实：DONTWAIT 基线暴露了 ZMQ 推进差异
+
+[第一份原始 CSV](flowmq-mailbox-vs-zmq-windows-20261010.csv) 为 256 组：
+2 payload × 2 lane 数 × 2 负载 × 2 wait × 4 发送策略 × 4 轮，全部通过，
+共 19,759,104 条、39,881,539,584 payload bytes，106.17 s。
+这份 CSV 来自已经加入应用在途上限的 qualified 日志，不包含更早的无窗口试跑。
+
+64 B 单 lane 的 ZMQ copy/owned 都约 10.2 万条/s；8 lane wake 分别约
+81.35/81.32 万条/s。此时 FlowMQ copy 为 419.51 万条/s，但不能直接据此宣称
+FlowMQ 小消息领先。ZMQ copy 每组有约 107 万次 send busy，实际在途峰值达到 128。
+
+**事实 / 源码：**libzmq 4.3.5 的 `send` 先调用 `process_commands(0, true)`；
+DONTWAIT 遇到 EAGAIN 直接返回。`process_commands` 的 throttle 分支可暂缓处理
+sender mailbox；`ZMQ_EVENTS` 查询则调用不节流的 `process_commands(0, false)`。
+见 [socket_base.cpp](https://github.com/zeromq/libzmq/blob/v4.3.5/src/socket_base.cpp#L1118)
+及 [EVENTS 分支](https://github.com/zeromq/libzmq/blob/v4.3.5/src/socket_base.cpp#L434)。
+延迟阈值为 3,000,000 TSC ticks，见
+[config.hpp](https://github.com/zeromq/libzmq/blob/v4.3.5/src/config.hpp)。
+pipe 通过 activate-write 命令反馈读取进度，HWM=128 时 LWM=64，见
+[pipe.cpp](https://github.com/zeromq/libzmq/blob/v4.3.5/src/pipe.cpp#L185)。
+这解释了“已经消费但 sender 尚未处理 credit”的可能性；本轮没有采集逐条命令时序。
+
+### 单变量干预与修正后的比较
+
+为验证上述推论，保留原来的 `zmq_copy/zmq_owned`，新增 `*_events`：每次 consumer
+progress 对 sender 调用一次公开 `zmq_getsockopt(ZMQ_EVENTS)`。仍然非阻塞发送；
+消息、HWM、应用在途上限、队列、source 数量和线程布局不变。查询不是网络完成
+通知，也不是阻塞等待；它处理 sender 的现有命令。计时前 warmup 查询不计入计数。
+
+[第二份原始 CSV](flowmq-mailbox-zmq-progress-windows-20261010.csv) 为独立的
+96 组：2 payload × 2 lane 数 × 6 策略 × 4 轮，均为饱和负载、wake；六种策略
+轮换，重新测量 FlowMQ 作为同轮参照。共 14,376,960 条，26.12 s。所有组实际
+在途峰值 ≤128，events 组的 send_event_checks 等于 consumer progress 次数。
+下表各项为本轮四组中位数；吞吐单位 k条/s，cycles 是进程 raw cycles/条。
+
+| payload | lanes | 策略 | 吞吐 k条/s | cycles/条 | prepare→receive P99 ms |
+| --- | ---: | --- | ---: | ---: | ---: |
+| 64 B | 1 | FlowMQ copy | 705.817 | 10,235 | 0.374 |
+| 64 B | 1 | ZMQ copy + events | 1,122.901 | 8,337 | 0.529 |
+| 64 B | 1 | FlowMQ batch SG/16 | 341.910 | 20,976 | 0.532 |
+| 64 B | 1 | ZMQ owned + events | 1,094.687 | 8,454 | 0.416 |
+| 64 B | 8 | FlowMQ copy | 3,762.610 | 13,659 | 0.480 |
+| 64 B | 8 | ZMQ copy + events | 5,021.091 | 11,616 | 0.653 |
+| 64 B | 8 | FlowMQ batch SG/16 | 1,827.793 | 29,341 | 0.722 |
+| 64 B | 8 | ZMQ owned + events | 4,985.469 | 10,993 | 0.553 |
+| 64 KiB | 1 | FlowMQ copy | 6.277 | 975,309 | 43.469 |
+| 64 KiB | 1 | ZMQ copy + events | 8.282 | 885,938 | 21.046 |
+| 64 KiB | 1 | FlowMQ immediate SG | 7.677 | 827,375 | 19.872 |
+| 64 KiB | 1 | ZMQ owned + events | 8.444 | 868,976 | 20.214 |
+| 64 KiB | 8 | FlowMQ copy | 24.447 | 1,906,037 | 81.989 |
+| 64 KiB | 8 | ZMQ copy + events | 47.029 | 1,102,170 | 27.799 |
+| 64 KiB | 8 | FlowMQ immediate SG | 43.312 | 1,099,041 | 26.201 |
+| 64 KiB | 8 | ZMQ owned + events | 49.817 | 1,000,320 | 33.441 |
+
+**事实 / 干预结果：**64 B 八 lane，ZMQ copy 从同轮 810.925 → 5,021.091 k条/s，
+四轮配对提高 519.4%，cycles/条下降 83.9%；send busy 中位数从 1,025,307 → 105，
+producer buffer 等待从约 2,421 万 → 214 万次。应用窗口仍为 128，没有靠扩容取得
+收益。owned 也四轮全部改善，配对吞吐提高 512.1%。64 KiB 的两种 ZMQ 策略仅各
+赢两轮，未出现稳定吞吐改善。由源码和干预共同支持：原小消息上限主要是这一
+DONTWAIT 接入方式的 sender 命令/credit 推进瓶颈，不能归为通用 TCP 或 SG 上限。
+
+**MED / 修正后的性能差距：**对比 events 组，八 lane FlowMQ copy 小消息吞吐四轮
+全部较低，配对中位数 −19.0%、cycles/条 +14.9%、P99 −25.6%；batch SG 小消息
+吞吐四轮全部较低，配对 −62.3%、cycles/条 +169.5%。64 KiB immediate SG 吞吐
+四轮全部较低，配对 −12.8%、cycles/条 +9.6%、P99 −19.3%。比例公式为同轮
+`median(FlowMQ_metric / ZMQ_metric − 1)`，与表中两个独立中位数的比值不同。
+例如小消息 copy 吞吐的逐轮比值范围为 0.67–0.84；四轮不足以给出稳定置信区间。
+
+### CPU 与后续优化边界
+
+第一轮的低负载（每批后 sleep 5 ms）中，八 lane wake 相比同策略 spin，cycles/条
+配对下降：64 B FlowMQ copy/batch SG 为 97.8%/97.4%，ZMQ copy/owned 为
+96.9%/96.5%；64 KiB 分别为 30.4%/62.0% 和 54.9%/60.6%。events 策略尚未做
+低负载性能扫描，不能将这些比例直接套用。sleep 不是固定 offered rate，这也不
+等价于整机 CPU 百分比下降。
+
+**推论与下一步：**当前应先减小无效重试，再讨论增加核数。FlowMQ 小 retained
+路径的 16 消息 SG 批仍显著落后 copy 和 ZMQ owned，应测量提交、引用管理和
+producer 重试各自成本。大消息 immediate SG 的实际在途峰值仅约 3–4，而
+ZMQ owned + events 可达约 124；统一上限不等于实际流水深度相同。已有最大批
+SG 又未稳定改善大消息，因此后续应扫描小批次与批次字节上限，并结合 profile
+判断 buffer 释放/credit 周期，不能直接改成无限排队或自动增大 batch。
+
+本轮不改变生产 CNet/ACE ownership 或公开接口，没有升级依赖。仍未覆盖固定总核
+预算、共享 ZMQ context 调优、跨机、TLS、其他平台、sanitizer、native 失败注入或
+CPU stack/硬件计数；`poll_calls` 是 consumer progress 轮数，不能当作 ZMQ poll
+或内核 syscall 数。旧 direct-owner batch128 benchmark 使用不同应用线程数和
+阻塞 ZMQ 调用，与本 mailbox 结果不能跨 workload 相减。
+
+### 验证与复现
+
+新增 ZMQ 拒绝发送引用回收、copy/owned 与 events 模式的 MPSC wrap/FIFO、全
+payload 校验、空闲唤醒及取消关闭测试。源存储只在 context 终止、全部引用返回后
+释放，每个 backing 的最终释放 callback 恰好一次。FlowMQ 原有七个正式用例继续
+覆盖共享 helper、私有 SG 边界与取消。验证命令为：
+
+```powershell
+cmake --build --preset win-release-user
+ctest --preset win-release-user -R "^test_flowmq_(owner_mailbox|mailbox_zmq)$" --repeat until-fail:10 -V
+ctest --preset bench-win-release-user -R "^bench_flowmq_mailbox_zmq$" -V
+ctest --preset bench-win-release-user -R "^bench_flowmq_mailbox_zmq_progress$" -V
+```
+
+最终 Release build 通过，无新增编译 warning；两个 CTest entry 共 7+3 个正式用例，
+包含各自参数矩阵，连续十轮全部通过（41.87 s）。窗口基线日志为
+`build/mailbox-zmq-qualified-{build,correctness,comparison}.log`；events 诊断日志为
+`build/mailbox-zmq-events-{build,correctness,comparison}.log`。之后仅补充 warmup
+字节指针的显式类型转换以清除新 warning，最终 build/test 日志为
+`build/mailbox-zmq-final-{build,correctness}.log`。本轮未重跑全部 transport 回归，
+也未构建关闭可选 ZMQ 的配置；生产源码没有变化。
