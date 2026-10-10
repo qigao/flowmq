@@ -5,6 +5,13 @@
   ],
   "testPresets": [
     {
+      "name": "base-benchmark",
+      "hidden": true,
+      "filter": { "include": { "label": "benchmark" } },
+      "execution": { "noTestsAction": "error", "stopOnFailure": true, "jobs": 1 },
+      "output": { "outputOnFailure": true }
+    },
+    {
       "name": "base-test",
       "hidden": true,
       "displayName": "Base Test Preset",

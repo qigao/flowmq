@@ -62,10 +62,77 @@ socket owner lane，pattern FSM 与网络 peer 使用同一事实源。
 
 ## CNet 边界
 
-`cnet_client_poll()` 可以一次推进该 client 的所有 connection，但 `cnet_listener_wait()`
-目前是独立 wait primitive。FlowMQ 的 caller-driven `poll` 对列表中的 socket 执行非阻塞
-progress，并以 1ms 有界间隔重复检查，因而具备统一 timeout 语义。CNet 后续若提供可组合
-readiness/wait-set，可替换该等待策略以降低空闲唤醒延迟，但不得用隐藏线程掩盖这一边界。
+`cnet_client_poll()` 可以一次推进该 client 的所有 connection。FlowMQ ordinary socket
+仍单独调用 `cnet_listener_wait()`；ordinary `poll` 对列表中的 socket 执行非阻塞
+progress，并以 1ms 有界间隔重复检查，提供统一 timeout 语义。
+
+本轮迁移使用的 Salts 2.3.0-rc.1 SDK 已提供 `cnet_listener_attach_external()`、
+`cnet_listener_submit_external_accept()` 和 `cnet_listener_route_external_completion()`，
+可以由宿主通过共享 NativeIO backend 推进 accept，与 `cnet_listener_wait()` 互斥。
+FlowMQ 现有 explicit owner 仍只开放 TCP client-side；服务端接入属于尚未实现的
+[Acceptor–Connector 设计](ARCHITECTURE.md#acceptorconnector-接入决策2026-10-10)，
+不能把 SDK 能力当作当前 FlowMQ 已支持的行为。
+
+### 协议 READY 与重连退避
+
+连接 endpoint 拥有退避状态，peer generation 拥有一次性的 READY 标记。
+TCP/TLS `CONNECTED` 只表示 transport 建连成功；只有本地 HELLO/SETTINGS 的发送完成、
+远端 HELLO/SETTINGS 的接收与校验全部成功，才重置该 endpoint 的退避。
+TX-first 与 RX-first 均经过同一 READY gate。错误 pattern 或 TLS certificate/HELLO
+identity 校验失败不能重置退避，也不能使 DATA 获得发送资格。
+
+READY 是本地协议状态，不是对端应用执行确认。TLS 身份拒绝的重连测试由连接方
+ROUTER 执行 identity policy，并观测它自己的 endpoint 退避；不能从被服务端拒绝的
+客户端推断远端授权已成功或尚未成功。现有 FMQ/6 没有提供这样的远端确认。
+
+重连不重放旧 DATA。旧 peer 关闭时取消绑定到它的未完成 multipart，释放暂存内容，
+下一次发送返回 `SALTS_ENOTCONN`；新 READY 会话仅接受随后显式提交的新消息。
+XSUB 的期望订阅重新同步属于控制面恢复，与 DATA replay 分开。
+这些边界由 `test_flowmq_peer_state` 的握手排列测试及 `test_flowmq_socket` 的真实
+TCP 错误 HELLO、TLS 身份拒绝、multipart 断连和 XSUB 重连测试覆盖（#118 / #120）。
+
+### 已观察完成批次的错误边界
+
+Owner 每轮只有一次 `native_io_backend_observe()`。一旦取出完成批次，即使某项
+路由失败，也必须继续处理剩余事件，再推进各 live socket 的本地阶段，最后返回
+第一个错误。路由函数可能先消费事件再返回错误，因此不能将该事件重试或交给
+另一个 socket；完全无人认领的事件仍返回 `SALTS_EPROTO`，不能静默吞掉。
+
+`test_flowmq_owner_fault` 使用三个实际 TCP ROUTER/DEALER 连接共享一个 Owner，
+在同一次真实 observe 返回的首项或中间项被 CNet 消费后注入错误报告。
+测试检查批次后续事件、retained payload 的单次释放、排队消息传递、发送计数、
+流控额度恢复，以及关闭出错 socket 后相邻连接继续推进。
+私有同步 dispatcher 仅用于该验收，不安装到 SDK、不保存在 Owner 中；普通
+poll/close 仍直接选择默认批次路由。测试没有制造完成事件、替换 backend 或增加
+Owner 的 observe 次数。这覆盖 #119 的真实批次故障边界，不代表 #125 的 SG
+host lease、独立 SG completion、陈旧 generation 或跨平台验收已完成。
+
+## 可选长期 peer pool（#123）
+
+`flowmq_socket_set_peer_pool()` 在启动前显式启用每 socket 独立的 CNet
+pool；默认关闭。Manager、pool 和协议状态由同一个 progress owner 驱动。
+每条连接在 connect/adopt 前预留 physical/connecting 名额，完整 FMQ/6
+HELLO/SETTINGS 双向完成、TLS 身份校验通过后才绑定真实 Manager BOUND
+记录，并通过协议回调提交一个独占 pipe slot。该 lease 覆盖整个会话，
+不是逐消息租借；DATA 仍使用既有队列、HWM 和协议 credit。
+
+不选择跨 socket 共享 pool：现有 Manager 的归属是 socket，共享会引入
+owner、凭据和 REQ/REP 状态迁移。pool key 使用内部稳定编号，区分 socket、
+endpoint、transport、不可变 TLS 配置、pattern 及每次连接的唯一代际。
+这些编号仅在所属 pool 内有效，不是凭据散列。连接代际不复用，因此未知的
+远端身份不会在握手前获得 lease，旧 ROUTER 路由、订阅或事务不会迁入新会话。
+
+真实终止回调先标记 pool terminal；尚未消费的接收消息继续保留 peer、
+Manager context 与 pipe lease。最后一条消息消费后（或 socket 关闭丢弃后）
+释放 lease，再释放 context。保留发送内存仍按 CNet send terminal 释放，
+pool 不替代该协议。shutdown 先 seal，驱动真实终止并清空 lease，再销毁
+pool、Manager 和 client。连接和 lease 数分别有界；字节容量继续由既有
+发送/接收 HWM 管理，不引入新的等待队列、预热、重试或 DATA 重放。
+
+主动 connect 满容量立即返回 `SALTS_ENOBUFS`；listener 满容量保留 OS
+backlog，并继续推进已有连接。snapshot 从 CNet pool 读取连接/lease 状态，
+不维护第二套容量计数。迁移可逐 socket 启用；回滚只需在下次创建 socket
+时不启用，线上会话不支持更换 pool 配置。
 
 ## 发送内存与所有权
 
@@ -190,3 +257,25 @@ benchmark 亦已接入；后续重点是严格 receive fair queue 与明确的�
 round trip、完整 pattern compatibility matrix、REQ/REP FSM、PUB/SUB filtering、
 PUSH/DEALER round-robin、ROUTER identity、multipart atomicity、HWM/DONTWAIT，以及与
 libzmq 相同 workload 的吞吐和延迟对比。
+
+peer pool 的正式回归包括 `test_flowmq_peer_pool`（配置 0/1/full、
+READY 前无 lease、终止后容量回收、残留 multipart 代际、握手期间关闭）、
+`test_flowmq_socket_pool`（同一套 TCP/TLS、pattern、HWM、retained-send 用例）
+和 `test_flowmq_owner_fault_pool`（真实共享 NativeIO 完成批次及邻接连接隔离）。
+`test_flowmq_public_c11` / `test_flowmq_public_cpp17` 复用 package consumer，
+检查共享库公开 ABI；仅启用测试时要求 C++ 编译器，产品仍是 C11。
+
+Windows 使用已发布 Salts 2.3.0-rc.1 / Salts Utils 4.3.0-rc.1，通过 user
+preset 构建和 CTest 验证；pool 生命周期与 Owner fault 用例各重复 20 次通过。
+可在 VsDevCmd 环境复现：
+
+```sh
+cmake --build --preset win-release-user
+ctest --preset win-release-user -R "^test_flowmq_" --output-on-failure
+ctest --preset win-release-user -R "^test_flowmq_(peer_pool|owner_fault_pool)$" --repeat until-fail:20 --output-on-failure
+```
+
+#123 的 Windows 安装 SDK C11/C++17 consumer、TCP/TLS 1/2/4 progress owners
+对照现已执行；原始数据、波动与复测、复现命令和剩余范围见
+[peer pool 验收记录](PEER_POOL_QUALIFICATION.md)。跨平台 CI 实跑与独立的
+retained-byte/分配成本证据仍待完成，当前测量不证明普遍性能收益。

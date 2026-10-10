@@ -100,10 +100,15 @@ typedef struct flowmq_router_peer_status_s {
 #define FLOWMQ_ROUTER_PEER_STATUS_INIT \
   { sizeof(flowmq_router_peer_status_t) }
 
-/** Create a context. The context owns no progress thread. */
+/**
+ * Create a context. The context owns no progress thread or lifecycle lock.
+ * Context socket/owner creation and destruction must be serialized, including
+ * context termination. Independent threads should each use their own context;
+ * separate owners do not make a shared context's lifecycle thread-safe.
+ */
 FLOWMQ_C_API flowmq_ctx_t *flowmq_ctx_new(void);
 
-/** Destroy an empty context, or return SALTS_EBUSY while sockets remain. */
+/** Destroy an empty context, or return SALTS_EBUSY while sockets/owners remain. */
 FLOWMQ_C_API int flowmq_ctx_term(flowmq_ctx_t *ctx);
 
 /** Create one caller-owned classic socket. */

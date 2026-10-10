@@ -1,6 +1,8 @@
 #include "flowmq_owner.h"
 
 #include "flowmq_socket_external_internal.h"
+#include "flowmq_owner_batch.h"
+#include "flowmq_owner_internal.h"
 
 #include <salts/clock.h>
 #include <salts/error_codes.h>
@@ -73,11 +75,27 @@ static int flowmq_owner_progress_local(flowmq_socket_t *socket) {
              : status;
 }
 
-static int flowmq_owner_progress_once(flowmq_owner_t *owner,
-                                      uint32_t max_wait_ms) {
+static int flowmq_owner_route_completion_slot(
+    void *user, size_t slot, const native_io_completion *completion,
+    bool *consumed, size_t *events) {
+  flowmq_owner_t *owner = (flowmq_owner_t *)user;
+  flowmq_socket_t *socket = owner->sockets[slot];
+  if (socket == NULL || !flowmq_socket_internal_runtime_active(socket)) {
+    *consumed = false;
+    if (events != NULL) *events = 0u;
+    return SALTS_OK;
+  }
+  return flowmq_socket_internal_route_external_completion(
+      socket, completion, consumed, events);
+}
+
+static int flowmq_owner_progress_impl(
+    flowmq_owner_t *owner, uint32_t max_wait_ms,
+    flowmq_owner_internal_batch_fn dispatch, void *user, bool wait_when_empty) {
   uint32_t wait_ms = max_wait_ms;
   size_t active_count = 0u;
   size_t completion_count = 0u;
+  int first_error = SALTS_OK;
   int status;
 
   if (owner == NULL || !owner->backend_initialized || owner->backend_closed)
@@ -99,7 +117,7 @@ static int flowmq_owner_progress_once(flowmq_owner_t *owner,
     if (socket_wait < wait_ms) wait_ms = socket_wait;
   }
 
-  if (active_count == 0u) {
+  if (active_count == 0u && !wait_when_empty) {
     if (max_wait_ms != 0u) cmeta_sleep_ms(max_wait_ms);
     return SALTS_OK;
   }
@@ -110,23 +128,13 @@ static int flowmq_owner_progress_once(flowmq_owner_t *owner,
   if (status != SALTS_OK && status != SALTS_ETIMEDOUT) return status;
 
   if (status == SALTS_OK) {
-    for (size_t index = 0u; index < completion_count; ++index) {
-      bool consumed = false;
-      for (size_t i = 0u;
-           i < owner->socket_capacity && !consumed; ++i) {
-        flowmq_socket_t *socket = owner->sockets[i];
-        bool socket_consumed = false;
-        size_t events = 0u;
-        if (socket == NULL ||
-            !flowmq_socket_internal_runtime_active(socket))
-          continue;
-        status = flowmq_socket_internal_route_external_completion(
-            socket, &owner->completions[index], &socket_consumed, &events);
-        if (status != SALTS_OK) return status;
-        if (socket_consumed) consumed = true;
-      }
-      if (!consumed) return SALTS_EPROTO;
-    }
+    first_error = dispatch != NULL
+        ? dispatch(user, owner->completions, completion_count,
+                   owner->socket_capacity, flowmq_owner_route_completion_slot,
+                   owner)
+        : flowmq_owner_batch_route(
+              owner->completions, completion_count, owner->socket_capacity,
+              flowmq_owner_route_completion_slot, owner);
   }
 
   /*
@@ -141,9 +149,39 @@ static int flowmq_owner_progress_once(flowmq_owner_t *owner,
         !flowmq_socket_internal_runtime_active(socket))
       continue;
     status = flowmq_owner_progress_local(socket);
-    if (status != SALTS_OK) return status;
+    if (status != SALTS_OK && first_error == SALTS_OK)
+      first_error = status;
   }
-  return SALTS_OK;
+  return first_error;
+}
+
+int flowmq_owner_internal_progress_once(
+    flowmq_owner_t *owner, uint32_t max_wait_ms,
+    flowmq_owner_internal_batch_fn dispatch, void *user) {
+  return flowmq_owner_progress_impl(owner, max_wait_ms, dispatch, user, false);
+}
+
+int flowmq_owner_internal_step(flowmq_owner_t *owner, uint32_t max_wait_ms) {
+  return flowmq_owner_progress_impl(owner, max_wait_ms, NULL, NULL, true);
+}
+
+int flowmq_owner_internal_wake(flowmq_owner_t *owner) {
+  if (owner == NULL) return SALTS_EINVAL;
+  /* Lifecycle is externally quiesced; do not read owner-thread mutable flags
+   * here. NativeIO owns concurrent wake coalescing and its admission check. */
+  return native_io_backend_wake(&owner->backend);
+}
+
+int flowmq_owner_internal_native_stats(
+    const flowmq_owner_t *owner, native_io_backend_stats *stats) {
+  if (owner == NULL || stats == NULL || !owner->backend_initialized || owner->backend_closed)
+    return SALTS_EINVAL;
+  return native_io_backend_get_stats(&owner->backend, stats) ? SALTS_OK : SALTS_EIO;
+}
+
+static int flowmq_owner_progress_once(flowmq_owner_t *owner,
+                                      uint32_t max_wait_ms) {
+  return flowmq_owner_internal_progress_once(owner, max_wait_ms, NULL, NULL);
 }
 
 flowmq_owner_t *flowmq_owner_new(

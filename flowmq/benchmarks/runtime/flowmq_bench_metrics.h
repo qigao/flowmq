@@ -8,6 +8,8 @@
  * query. Peak RSS is process-lifetime high water, never a per-case delta. */
 typedef struct flowmq_bench_metrics_s {
   uint64_t cpu_ns;
+  uint64_t cpu_cycles;
+  int cpu_cycles_available;
   uint64_t peak_rss_bytes;
 } flowmq_bench_metrics_t;
 
@@ -19,16 +21,21 @@ typedef struct flowmq_bench_metrics_s {
 static int flowmq_bench_metrics_read(flowmq_bench_metrics_t *out) {
   FILETIME created, exited, kernel, user;
   ULARGE_INTEGER kernel_ticks, user_ticks;
+  ULONG64 cycles;
   PROCESS_MEMORY_COUNTERS memory = {0};
   const uint64_t ns_per_tick = 100u;
   if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user) ||
-      !GetProcessMemoryInfo(GetCurrentProcess(), &memory, sizeof(memory)))
+      !GetProcessMemoryInfo(GetCurrentProcess(), &memory, sizeof(memory)) ||
+      !QueryProcessCycleTime(GetCurrentProcess(), &cycles))
     return SALTS_EIO;
   kernel_ticks.LowPart = kernel.dwLowDateTime;
   kernel_ticks.HighPart = kernel.dwHighDateTime;
   user_ticks.LowPart = user.dwLowDateTime;
   user_ticks.HighPart = user.dwHighDateTime;
   out->cpu_ns = (kernel_ticks.QuadPart + user_ticks.QuadPart) * ns_per_tick;
+  /* Keep raw cycles separate: CPU timer frequency need not track wall time. */
+  out->cpu_cycles = cycles;
+  out->cpu_cycles_available = 1;
   out->peak_rss_bytes = (uint64_t)memory.PeakWorkingSetSize;
   return SALTS_OK;
 }
@@ -40,6 +47,9 @@ static int flowmq_bench_metrics_read(flowmq_bench_metrics_t *out) {
   const uint64_t ns_per_second = 1000000000u;
   const uint64_t ns_per_microsecond = 1000u;
   if (getrusage(RUSAGE_SELF, &usage) != 0) return SALTS_EIO;
+  /* No portable process-cycle query is supplied by this metrics adapter. */
+  out->cpu_cycles = 0u;
+  out->cpu_cycles_available = 0;
   out->cpu_ns =
       ((uint64_t)usage.ru_utime.tv_sec + (uint64_t)usage.ru_stime.tv_sec) * ns_per_second +
       ((uint64_t)usage.ru_utime.tv_usec + (uint64_t)usage.ru_stime.tv_usec) * ns_per_microsecond;

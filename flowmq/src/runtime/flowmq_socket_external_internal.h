@@ -31,6 +31,32 @@ int flowmq_socket_internal_attach_owner_backend(
     flowmq_socket_t *socket, native_io_backend *backend,
     const void *owner_token);
 
+/* Internal TCP listener qualification only; never installed. Requires an
+ * owner-created socket and permanently shares that lane's wait. Public bind
+ * remains unsupported until the architecture's integration gates pass. */
+int flowmq_socket_internal_bind_external(flowmq_socket_t *socket,
+                                         const char *endpoint);
+
+/* Private TCP PAIR single-part retained-queue qualification. Configure on the
+ * owner before connect; batch_messages is 1..16. Public send_slice keeps its
+ * immediate contract even on this socket. No hidden progress or payload copy.
+ * Queued send success retains immutable backing until completion/close; full
+ * or rejected sends leave caller ownership intact. All calls are owner-only. */
+typedef struct flowmq_retained_queue_stats_s {
+  /* Successful private queued-send DATA admission into CNet, including the
+   * direct idle first message. Not native submissions or peer receipt. Copy
+   * and public immediate sends are excluded. Qualification workloads bound
+   * these owner-local counters below overflow; no references are retained. */
+  uint64_t writes, messages, ranges;
+  size_t max_messages, max_ranges;
+} flowmq_retained_queue_stats_t;
+int flowmq_socket_internal_retained_queue(flowmq_socket_t *socket,
+                                         size_t batch_messages);
+int flowmq_socket_internal_send_slice_queued(flowmq_socket_t *socket,
+                                            const mem_slice_t *slice);
+int flowmq_socket_internal_retained_queue_stats(
+    const flowmq_socket_t *socket, flowmq_retained_queue_stats_t *stats);
+
 int flowmq_socket_internal_owned_by(
     const flowmq_socket_t *socket, const void *owner_token);
 
@@ -63,6 +89,12 @@ int flowmq_socket_internal_poll_revents(
 
 int flowmq_socket_internal_async_error_matches(
     const flowmq_socket_t *socket, int status);
+
+/* Private read-only test diagnostic; endpoint retry state is not an API.
+ * Caller must own the socket's progress lane and may not use this for routing. */
+int flowmq_socket_internal_endpoint_backoff(
+    const flowmq_socket_t *socket, size_t endpoint_index,
+    uint64_t *current_delay_ms);
 
 /* Private qualification query; never installed in the public SDK. */
 int flowmq_socket_internal_fanout_match_count(

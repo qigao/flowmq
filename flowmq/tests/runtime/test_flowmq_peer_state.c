@@ -1,4 +1,5 @@
 #include "flowmq_peer_state.h"
+#include "flowmq_reconnect_ready.h"
 
 #include "cmeta_error.h"
 #include "tinytest.h"
@@ -216,5 +217,92 @@ spec("flowmq_peer_state") {
     check_equal(state.lifecycle, FLOWMQ_PEER_LIFECYCLE_FREE);
     check_equal(state.handshake, 0u);
     check_equal(state.write_lane, FLOWMQ_PEER_WRITE_IDLE);
+  }
+
+  it("resets reconnect backoff only after a complete accepted handshake") {
+    flowmq_peer_state_t state = FLOWMQ_PEER_STATE_INIT;
+    flowmq_reconnect_t reconnect;
+    flowmq_peer_write_lane_t completed = FLOWMQ_PEER_WRITE_IDLE;
+    uint64_t delay_ms = 0u;
+    unsigned ready_recorded = 0u;
+
+    check_equal(flowmq_reconnect_init(&reconnect, 40u, 160u, 17u),
+                SALTS_OK);
+    check_equal(flowmq_reconnect_next(&reconnect, &delay_ms), SALTS_OK);
+    check_equal(flowmq_reconnect_next(&reconnect, &delay_ms), SALTS_OK);
+    check_equal(reconnect.current_delay_ms, 80u);
+    check_equal(flowmq_reconnect_reset_on_protocol_ready(
+                    NULL, &state, &ready_recorded), SALTS_EINVAL);
+    check_equal(flowmq_reconnect_reset_on_protocol_ready(
+                    &reconnect, &state, &ready_recorded), SALTS_EBUSY);
+
+    check_equal(flowmq_peer_state_allocate(&state), SALTS_OK);
+    check_equal(flowmq_peer_state_transition(
+                    &state, FLOWMQ_PEER_LIFECYCLE_CONNECTED), SALTS_OK);
+    /* Bare CONNECTED and a valid incoming HELLO/SETTINGS are insufficient. */
+    check_equal(flowmq_peer_state_handshake_mark(
+                    &state, FLOWMQ_PEER_HANDSHAKE_HELLO_RX), SALTS_OK);
+    check_equal(flowmq_peer_state_handshake_mark(
+                    &state, FLOWMQ_PEER_HANDSHAKE_SETTINGS_RX), SALTS_OK);
+    check_equal(flowmq_reconnect_reset_on_protocol_ready(
+                    &reconnect, &state, &ready_recorded), SALTS_EBUSY);
+    check_equal(reconnect.current_delay_ms, 80u);
+
+    check_equal(flowmq_peer_state_write_begin(
+                    &state, FLOWMQ_PEER_WRITE_HELLO), SALTS_OK);
+    check_equal(flowmq_peer_state_write_complete(&state, &completed), SALTS_OK);
+    check_equal(flowmq_reconnect_reset_on_protocol_ready(
+                    &reconnect, &state, &ready_recorded), SALTS_EBUSY);
+    check_equal(reconnect.current_delay_ms, 80u);
+    check_equal(flowmq_peer_state_write_begin(
+                    &state, FLOWMQ_PEER_WRITE_SETTINGS), SALTS_OK);
+    check_equal(flowmq_peer_state_write_complete(&state, &completed), SALTS_OK);
+    check_true(flowmq_peer_state_ready(&state));
+    check_equal(flowmq_reconnect_reset_on_protocol_ready(
+                    &reconnect, &state, &ready_recorded), SALTS_OK);
+    check_equal(reconnect.current_delay_ms, 0u);
+    check_equal(ready_recorded, 1u);
+
+    check_equal(flowmq_reconnect_next(&reconnect, &delay_ms), SALTS_OK);
+    check_equal(reconnect.current_delay_ms, 40u);
+    check_equal(flowmq_reconnect_reset_on_protocol_ready(
+                    &reconnect, &state, &ready_recorded), SALTS_EALREADY);
+    check_equal(reconnect.current_delay_ms, 40u);
+    check_equal(flowmq_peer_state_transition(
+                    &state, FLOWMQ_PEER_LIFECYCLE_CLOSING), SALTS_OK);
+    ready_recorded = 0u;
+    check_equal(flowmq_reconnect_reset_on_protocol_ready(
+                    &reconnect, &state, &ready_recorded), SALTS_EBUSY);
+    check_equal(reconnect.current_delay_ms, 40u);
+  }
+
+  it("accepts TX-first READY exactly once for the next peer generation") {
+    flowmq_peer_state_t state = FLOWMQ_PEER_STATE_INIT;
+    flowmq_reconnect_t reconnect;
+    flowmq_peer_write_lane_t completed = FLOWMQ_PEER_WRITE_IDLE;
+    unsigned ready_recorded = 0u;
+
+    check_equal(flowmq_reconnect_init(&reconnect, 40u, 160u, 19u),
+                SALTS_OK);
+    check_equal(flowmq_reconnect_next(&reconnect, NULL), SALTS_EINVAL);
+    check_equal(flowmq_peer_state_allocate(&state), SALTS_OK);
+    check_equal(flowmq_peer_state_transition(
+                    &state, FLOWMQ_PEER_LIFECYCLE_CONNECTED), SALTS_OK);
+    check_equal(flowmq_peer_state_write_begin(
+                    &state, FLOWMQ_PEER_WRITE_HELLO), SALTS_OK);
+    check_equal(flowmq_peer_state_write_complete(&state, &completed), SALTS_OK);
+    check_equal(flowmq_peer_state_write_begin(
+                    &state, FLOWMQ_PEER_WRITE_SETTINGS), SALTS_OK);
+    check_equal(flowmq_peer_state_write_complete(&state, &completed), SALTS_OK);
+    check_equal(flowmq_reconnect_reset_on_protocol_ready(
+                    &reconnect, &state, &ready_recorded), SALTS_EBUSY);
+    check_equal(flowmq_peer_state_handshake_mark(
+                    &state, FLOWMQ_PEER_HANDSHAKE_HELLO_RX), SALTS_OK);
+    check_equal(flowmq_peer_state_handshake_mark(
+                    &state, FLOWMQ_PEER_HANDSHAKE_SETTINGS_RX), SALTS_OK);
+    check_equal(flowmq_reconnect_reset_on_protocol_ready(
+                    &reconnect, &state, &ready_recorded), SALTS_OK);
+    check_equal(flowmq_reconnect_reset_on_protocol_ready(
+                    &reconnect, &state, &ready_recorded), SALTS_EALREADY);
   }
 }

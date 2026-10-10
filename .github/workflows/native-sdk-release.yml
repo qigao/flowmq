@@ -418,6 +418,30 @@ jobs:
           cp -aL stage stage-dereferenced
           rm -rf stage
           mv stage-dereferenced stage
+      - name: Compare peer pool on native Unix owners
+        if: (matrix.os == 'linux' || matrix.os == 'macos') && github.event_name == 'workflow_dispatch' && inputs.run_benchmarks
+        shell: bash
+        run: |
+          set -euo pipefail
+          preset=bench-host-release-ci
+          if [[ "${{ matrix.os }}" == "macos" ]]; then preset=bench-mac-release-ci; fi
+          ctest --preset "$preset" -R '^bench_flowmq_peer_pool_' -V \
+            --output-log build/peer-pool-comparison.log
+      - name: Compare peer pool on Windows owners
+        if: matrix.os == 'windows' && github.event_name == 'workflow_dispatch' && inputs.run_benchmarks
+        shell: cmd
+        run: |
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          ctest --preset bench-host-release-ci -R "^bench_flowmq_peer_pool_" -V --output-log build/peer-pool-comparison.log
+          if errorlevel 1 exit /b 1
+      - name: Upload peer pool comparison
+        if: always() && matrix.os != 'android' && github.event_name == 'workflow_dispatch' && inputs.run_benchmarks
+        uses: actions/upload-artifact@v4
+        with:
+          name: flowmq-peer-pool-${{ matrix.os }}
+          path: build/peer-pool-comparison.log
+          if-no-files-found: error
       - name: Run FlowMQ owner-affine multicore benchmark
         if: matrix.os == 'linux' && github.event_name == 'workflow_dispatch' && inputs.run_benchmarks
         shell: bash
@@ -940,55 +964,35 @@ jobs:
         run: |
           set -euo pipefail
           export FLOWMQ_ROOT="$FLOWMQ_PREFIX"
-          export LD_LIBRARY_PATH="$FLOWMQ_PREFIX/lib:$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$GITHUB_WORKSPACE/vcpkg_installed/x64-linux/lib"
-          cmake -S tests/package -B build/package-smoke -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_PREFIX_PATH="$FLOWMQ_PREFIX;$SALTS_UTILS_ROOT;$SALTS_ROOT" \
-            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
-            -DVCPKG_TARGET_TRIPLET=x64-linux \
-            -DVCPKG_MANIFEST_MODE=OFF \
-            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"
-          cmake --build build/package-smoke --parallel 2
-          build/package-smoke/flowmq_package_consumer
-          build/package-smoke/flowmq_package_consumer_cpp
+          cd tests/package
+          cmake --preset package-host-release
+          cmake --build --preset package-host-release --parallel 2
+          ctest --preset package-host-release
       - name: Verify restored native consumer on macOS
         if: matrix.os == 'macos'
         shell: bash
         run: |
           set -euo pipefail
           export FLOWMQ_ROOT="$FLOWMQ_PREFIX"
-          export DYLD_LIBRARY_PATH="$FLOWMQ_PREFIX/lib:$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$GITHUB_WORKSPACE/vcpkg_installed/$FLOWMQ_TRIPLET/lib"
-          cmake -S tests/package -B build/package-smoke -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_PREFIX_PATH="$FLOWMQ_PREFIX;$SALTS_UTILS_ROOT;$SALTS_ROOT" \
-            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
-            -DVCPKG_TARGET_TRIPLET="$FLOWMQ_TRIPLET" \
-            -DVCPKG_MANIFEST_MODE=OFF \
-            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"
-          cmake --build build/package-smoke --parallel 2
-          build/package-smoke/flowmq_package_consumer
-          build/package-smoke/flowmq_package_consumer_cpp
+          cd tests/package
+          cmake --preset package-host-release
+          cmake --build --preset package-host-release --parallel 2
+          ctest --preset package-host-release
       - name: Verify restored native consumer on Windows
         if: matrix.os == 'windows'
         shell: cmd
         run: |
+          set "FLOWMQ_CACHE_VCPKG_ROOT=%VCPKG_ROOT%"
           call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
           if errorlevel 1 exit /b 1
+          set "VCPKG_ROOT=%FLOWMQ_CACHE_VCPKG_ROOT%"
           set "FLOWMQ_ROOT=%FLOWMQ_PREFIX%"
-          set "PATH=%FLOWMQ_PREFIX%\bin;%SALTS_UTILS_ROOT%\bin;%SALTS_ROOT%\bin;%GITHUB_WORKSPACE%\vcpkg_installed\x64-windows\bin;%PATH%"
-          cmake -S tests/package -B build/package-smoke -G Ninja ^
-            -DCMAKE_BUILD_TYPE=Release ^
-            -DCMAKE_PREFIX_PATH="%FLOWMQ_PREFIX%;%SALTS_UTILS_ROOT%;%SALTS_ROOT%" ^
-            -DCMAKE_TOOLCHAIN_FILE="%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake" ^
-            -DVCPKG_TARGET_TRIPLET=x64-windows ^
-            -DVCPKG_MANIFEST_MODE=OFF ^
-            -DVCPKG_INSTALLED_DIR="%GITHUB_WORKSPACE%\vcpkg_installed"
+          cd tests\package
+          cmake --preset package-host-release
           if errorlevel 1 exit /b 1
-          cmake --build build/package-smoke --parallel 2
+          cmake --build --preset package-host-release --parallel 2
           if errorlevel 1 exit /b 1
-          build\package-smoke\flowmq_package_consumer.exe
-          if errorlevel 1 exit /b 1
-          build\package-smoke\flowmq_package_consumer_cpp.exe
+          ctest --preset package-host-release
           if errorlevel 1 exit /b 1
       - name: Verify restored Android consumer compile and link
         if: matrix.os == 'android'
@@ -996,21 +1000,9 @@ jobs:
         run: |
           set -euo pipefail
           export FLOWMQ_ROOT="$FLOWMQ_PREFIX"
-          cmake -S tests/package -B build/package-smoke -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_SYSTEM_NAME=Android \
-            -DFlowMQ_DIR="$FLOWMQ_PREFIX/lib/cmake/FlowMQ" \
-            -DCMAKE_PREFIX_PATH="$FLOWMQ_PREFIX;$SALTS_UTILS_ROOT;$SALTS_ROOT" \
-            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
-            -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
-            -DVCPKG_TARGET_TRIPLET=arm64-android \
-            -DVCPKG_MANIFEST_MODE=OFF \
-            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" \
-            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching \
-            -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=android-26 \
-            -DANDROID_STL=c++_shared
-          cmake --build build/package-smoke --parallel 2
+          cd tests/package
+          cmake --preset package-android-release
+          cmake --build --preset package-android-release --parallel 2
 
   publish:
     needs: [metadata, pack, qualify]

@@ -1,0 +1,73 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "package-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "toolchainFile": "$env{VCPKG_CACHE_REPOSITORY_ROOT}/cmake/QigaoVcpkgToolchain.cmake",
+      "environment": {
+        "FLOWMQ_SOURCE_ROOT": "${sourceDir}/../..",
+        "FLOWMQ_ROOT": "$penv{FLOWMQ_ROOT}",
+        "SALTS_ROOT": "$penv{SALTS_ROOT}",
+        "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
+        "FLOWMQ_TRIPLET": "$penv{FLOWMQ_TRIPLET}",
+        "VCPKG_CACHE_REPOSITORY_ROOT": "$penv{VCPKG_CACHE_REPOSITORY_ROOT}",
+        "VCPKG_BINARY_SOURCES": "$penv{VCPKG_BINARY_SOURCES}"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_STANDARD": "11",
+        "CMAKE_C_STANDARD_REQUIRED": "ON",
+        "CMAKE_C_EXTENSIONS": "OFF",
+        "CMAKE_CXX_STANDARD": "17",
+        "CMAKE_CXX_STANDARD_REQUIRED": "ON",
+        "CMAKE_CXX_EXTENSIONS": "OFF",
+        "VCPKG_MANIFEST_DIR": "$env{FLOWMQ_SOURCE_ROOT}",
+        "VCPKG_MANIFEST_MODE": "ON",
+        "VCPKG_INSTALLED_DIR": "$env{FLOWMQ_SOURCE_ROOT}/vcpkg_installed",
+        "VCPKG_TARGET_TRIPLET": "$env{FLOWMQ_TRIPLET}",
+        "VCPKG_INSTALL_OPTIONS": "--only-binarycaching",
+        "CMAKE_PREFIX_PATH": "$env{FLOWMQ_SOURCE_ROOT}/vcpkg_installed/$env{FLOWMQ_TRIPLET}"
+      }
+    },
+    {
+      "name": "package-host-release",
+      "inherits": "package-base",
+      "binaryDir": "$env{FLOWMQ_SOURCE_ROOT}/build/package-host",
+      "cacheVariables": {
+        "VCPKG_HOST_TRIPLET": "$env{FLOWMQ_TRIPLET}"
+      },
+      "environment": {
+        "PATH": "$env{FLOWMQ_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{FLOWMQ_SOURCE_ROOT}/vcpkg_installed/$penv{FLOWMQ_TRIPLET}/bin${pathListSep}$penv{PATH}",
+        "LD_LIBRARY_PATH": "$env{FLOWMQ_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{FLOWMQ_SOURCE_ROOT}/vcpkg_installed/$penv{FLOWMQ_TRIPLET}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
+        "DYLD_LIBRARY_PATH": "$env{FLOWMQ_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{FLOWMQ_SOURCE_ROOT}/vcpkg_installed/$penv{FLOWMQ_TRIPLET}/lib${pathListSep}$penv{DYLD_LIBRARY_PATH}"
+      }
+    },
+    {
+      "name": "package-android-release",
+      "inherits": "package-base",
+      "binaryDir": "$env{FLOWMQ_SOURCE_ROOT}/build/package-android",
+      "environment": { "FLOWMQ_TRIPLET": "arm64-android" },
+      "cacheVariables": {
+        "CMAKE_SYSTEM_NAME": "Android",
+        "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "$penv{ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake",
+        "ANDROID_ABI": "arm64-v8a",
+        "ANDROID_PLATFORM": "android-26",
+        "ANDROID_STL": "c++_shared"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "package-host-release", "configurePreset": "package-host-release" },
+    { "name": "package-android-release", "configurePreset": "package-android-release" }
+  ],
+  "testPresets": [
+    {
+      "name": "package-host-release",
+      "configurePreset": "package-host-release",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error" }
+    }
+  ]
+}

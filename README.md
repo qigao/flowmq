@@ -20,6 +20,14 @@ FlowMQ 是 C11 的 pattern-oriented messaging library。它提供 FMQ/6 wire cod
 
 > Branch/release boundary: `v1.2.1` 在 `v1.2.0` 的 owner-lane、reuse-port、retained TLS、producer-owned/segmented receive 与公开 `flowmq_recv_slicev()` 基础上，包含 #101/#102 的 atomic retained PUB/XPUB fanout、#104 的 generated DataBind ChannelPlan/ServicePlan qualification，以及 #111/#112 的 CMeta ownership、最新 Salts SDK 适配与显式多 owner 验证。除非显式标记 release，下面的行为描述以 current `main` 为准。
 
+`v1.3.0` 迁移到 Salts 2.3 / SaltsUtils 4.3 的 RC/stable SDK 系列，加入可选有界
+CNet peer pool、FMQ/6 READY 后才重置 reconnect backoff、完整 owner completion
+batch 的错误结算，以及有界小消息 copy coalesce。固定 owner 线程归属和既有
+wire protocol 保持不变；独立 lane、共享 Guard 与 retained SG 的测试数据见
+[lane scaling](docs/FLOWMQ_LANE_SCALING.md)。Actor、应用 mailbox 与 queued SG
+扫描属于私有性能资格验证，不作为本版本的公开数据路径。macOS 发布 profile
+使用 AppleClang，匹配当前 Salts SDK 的 TinyTest native Mach-O TLS ABI。
+
 当前开发分支的 NuGet restore 使用 `Salts.Native Version="2.3.0-*"` 与
 `SaltsUtils.Native Version="4.3.0-*"`：选择对应的最新 RC（正式版发布后选择同版本正式版），
 而不是回退到 2.2.x / 4.2.x。公开链接依赖是
@@ -82,6 +90,33 @@ peer. Invalid IDs, mixed authorities, mixed TLS/plaintext schemes and expired
 snapshots fail before any socket or network mutation. Endpoint sets are bounded
 to four entries in this first slice. The application owns any choice of
 destination set, sequence ticket, authority eligibility and TLS configuration.
+
+## CNet 2.3 bounded peer pool (FlowMQ #123)
+
+`flowmq_peer_pool.h` provides optional startup-only admission limits for
+long-lived FMQ/6 connections. Each socket owns its pool on the same progress
+owner as its Manager. Defaults remain unchanged until explicitly enabled:
+
+```c
+flowmq_peer_pool_config_t pool = FLOWMQ_PEER_POOL_CONFIG_INIT;
+pool.max_peers = 2;
+pool.max_connecting = 1;
+int status = flowmq_socket_set_peer_pool(socket, &pool); /* Before bind/connect. */
+```
+
+Valid limits are `1 <= max_connecting <= max_peers <= 4`. An active dial reserves
+capacity before opening a connection and fails `SALTS_ENOBUFS` when full.
+Only a fully validated HELLO/SETTINGS exchange can acquire the peer's single
+session lease. Sends keep using existing HWM and credit; they do not acquire
+per-message leases. Socket, TLS policy, pattern and connection generation never
+share leases. Existing reconnect policy stays pinned to its endpoint.
+
+`flowmq_socket_get_peer_pool()` copies connecting, ready, draining and lease
+counts into a `FLOWMQ_PEER_POOL_SNAPSHOT_INIT` snapshot. A terminated peer with
+queued receive parts retains its slot until the last part is consumed or the
+socket closes. A full listener leaves new connections in its OS backlog while
+continuing established-peer progress. See the [ownership and shutdown design](
+docs/CNET_TCP_TLS_ARCHITECTURE.md#可选长期-peer-pool123).
 
 ## Caller-driven transport
 
@@ -456,9 +491,13 @@ FMP/1 由当前 SaltsUtils 的 `salts-idlc` 生成；工具更新会触发头文
 新数据路径 benchmark：
 
 ```powershell
-cmake --fresh --preset win-release-user -DFLOWMQ_BUILD_ZMQ_BENCHMARK=ON
+cmake --fresh --preset win-release-user -DBUILD_TESTS=ON -DFLOWMQ_BUILD_ZMQ_BENCHMARK=ON
 cmake --build --preset win-release-user --target bench_flowmq_socket
+ctest --preset bench-win-release-user -R "^bench_flowmq_zmq_comparison$" --repeat until-fail:3 -V
 ```
+
+同负载 TCP copy 对照使用双方相同的完整样本数，独立于 smoke/CI 缩减开关。
+Windows 实测、原始数据和限制见 [FlowMQ / libzmq 对照](docs/FLOWMQ_ZMQ_COMPARISON.md)。
 
 ZeroMQ 由 `vcpkg.json` 安装；公平对比必须使用 Release preset，使 FlowMQ 与
 libzmq 都链接 Release 产物。GitHub Actions 通过
@@ -515,13 +554,15 @@ $env:FLOWMQ_LOCAL_SALTS_ROOT = (Resolve-Path ../salts/stage/sdk/windows-x64).Pat
 cmake --preset win-release-local-sdk -DBUILD_TESTS=ON
 cmake --build --preset win-release-local-sdk
 ctest --preset win-release-local-sdk -LE benchmark --output-on-failure
-ctest --preset win-release-local-sdk -R '^bench_flowmq_socket_owners_' -V --output-log build/Msvc-Release-LocalSDK/owner-scaling.log
+ctest --preset bench-win-release-local-sdk -R '^bench_flowmq_socket_owners_' -V --output-log build/Msvc-Release-LocalSDK/owner-scaling.log
 ```
 
 `win-release-local-sdk` 使用独立 build/install 目录，不替换发布 SDK 的链接；
 `FLOWMQ_LOCAL_SALTS_ROOT` 必须指向完整 SDK，缺失时配置失败。
-发布包验证仍使用 `win-release-user`；Linux 对应使用 `linux-release-user`，
-但下述修复尚未发布，不能假设 restore 得到的包已包含它。
+发布包验证仍使用 `win-release-user`；Linux 对应使用 `linux-release-user`。
+下文 Salts 2.1.0 本地修复版 SDK 的数字保留为历史记录；CNet 2.3 peer pool
+对照使用已发布的 RC SDK，见后文。普通 test preset 排除 benchmark，性能
+测量必须选 `bench-*` test preset。
 基准同样保留为正式 CTest 项，失败不会被跳过或标记成预期成功。
 每批 16 条消息，每条含两个等长 part，总 payload 为 64 B 或 64 KiB。
 所有消息检查长度、内容、连接身份、序号和 `RCVMORE`；预热同时验证发送 HWM
@@ -533,13 +574,25 @@ ctest --preset win-release-local-sdk -R '^bench_flowmq_socket_owners_' -V --outp
 可用父环境 `FLOWMQ_OWNER_BENCH_ROUNDS`（1–4096）覆盖批数，
 `FLOWMQ_OWNER_BENCH_REPEATS`（1–9）覆盖重复次数；非法值直接失败。
 
-只汇总成功用例的 `OWNER_RESULT` CSV 行：吞吐按完整应用消息及 payload
+只汇总成功用例的 `OWNER_RESULT` CSV 行（末列 `pool_enabled` 为 0/1）：吞吐按完整应用消息及 payload
 计一次，不计协议/TLS 头；墙钟从统一放行到最后一个 owner 完成，排除建连、
 握手、预热和关闭，包含 FlowMQ 编解码及消息校验成本。
 P99 是从每条消息首次发送尝试到收齐最后一个 part 的实测延迟，包含排队，
 不把批次平均耗时冒充单消息延迟。CPU 为该测量阶段整个进程的 CPU 秒数；
 RSS 为进程生命周期峰值，不是每行独立的内存增量。线程未绑核，Windows
 CPU 时间存在计量粒度限制。诊断适配仅在 benchmark 中使用系统统计 API。
+
+可选 peer pool 的同负载关闭/启用对照使用独立 CTest 项：
+
+```powershell
+ctest --preset bench-win-release-user -R '^bench_flowmq_peer_pool_' -V --output-log build/peer-pool-comparison.log
+```
+
+每轮交替两种模式的先后顺序；启用时每 socket 的 physical/connecting 容量为 1，
+预热后及关闭前检查真实 READY lease。默认回归中的
+`test_flowmq_socket_owners` 同时覆盖两种模式，benchmark 不进入默认回归。
+当前 Windows 实测、原始数据及安装 SDK 的 C11/C++17 验收入口见
+[peer pool 验收记录](docs/PEER_POOL_QUALIFICATION.md)。
 
 2026-10-07 合并主线前（`f3192c1`）的本机测量：Windows Release、Salts 2.1.0 加本地 CNet TLS 缓冲区修复、
 Ryzen 9 7940HX（16 核 / 32 逻辑处理器），四类负载三轮吞吐中位数如下。

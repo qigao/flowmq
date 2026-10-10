@@ -5,6 +5,9 @@ set(FLOWMQ_TRANSPORT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/cnet/flowmq_destination.c
     ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_socket.c
     ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_owner.c
+    ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_owner_internal.h
+    ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_owner_batch.c
+    ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_owner_batch.h
     ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_owned_stream.h
     ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_peer_state.c
     ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_peer_state.h
@@ -16,6 +19,7 @@ set(FLOWMQ_TRANSPORT_SOURCES
 set(FLOWMQ_TRANSPORT_HEADERS
     ${PROJECT_SOURCE_DIR}/flowmq/include/flowmq_socket.h
     ${PROJECT_SOURCE_DIR}/flowmq/include/flowmq_destination.h
+    ${PROJECT_SOURCE_DIR}/flowmq/include/flowmq_peer_pool.h
     ${PROJECT_SOURCE_DIR}/flowmq/include/flowmq_owner.h
     ${PROJECT_SOURCE_DIR}/flowmq/include/flowmq_transport.h)
 
