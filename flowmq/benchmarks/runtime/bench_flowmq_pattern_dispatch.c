@@ -60,6 +60,8 @@ typedef struct bench_socket_group_s {
 } bench_socket_group_t;
 
 static flowmq_socket_t *bench_group_socket(bench_socket_group_t *group, int type) {
+  flowmq_socket_t *socket;
+  const int message_hwm = 1000;
 #if defined(FLOWMQ_BENCH_SHARED_LISTENER)
   if (group->owner == NULL) {
     flowmq_owner_config_t config = FLOWMQ_OWNER_CONFIG_INIT;
@@ -67,10 +69,23 @@ static flowmq_socket_t *bench_group_socket(bench_socket_group_t *group, int type
     group->owner = flowmq_owner_new(group->ctx, &config);
     if (group->owner == NULL) return NULL;
   }
-  return flowmq_owner_socket(group->owner, type);
+  socket = flowmq_owner_socket(group->owner, type);
 #else
-  return flowmq_socket(group->ctx, type);
+  socket = flowmq_socket(group->ctx, type);
 #endif
+  if (socket != NULL &&
+      (flowmq_setsockopt(socket, FLOWMQ_SNDHWM, &message_hwm,
+                        sizeof(message_hwm)) != SALTS_OK ||
+       flowmq_setsockopt(socket, FLOWMQ_RCVHWM, &message_hwm,
+                        sizeof(message_hwm)) != SALTS_OK)) {
+#if defined(FLOWMQ_BENCH_SHARED_LISTENER)
+    (void)flowmq_owner_close_socket(group->owner, socket);
+#else
+    (void)flowmq_close(socket);
+#endif
+    return NULL;
+  }
+  return socket;
 }
 
 static int bench_group_bind(flowmq_socket_t *socket) {
@@ -900,6 +915,13 @@ spec("FlowMQ pattern dispatch benchmark") {
       }
       check_equal(status, SALTS_OK);
       BENCH_PROBE_END(&filtered.group, "pub_filtered", samples, 2u);
+      check_equal(bench_group_progress_many(&filtered.group, 32u), SALTS_OK);
+      for (size_t i = 1u; i < BENCH_PATTERN_PEERS; i += 2u) {
+        unsigned char buffer[BENCH_PATTERN_PAYLOAD_BYTES];
+        size_t received = 0u;
+        check_equal(flowmq_recv(filtered.subs[i], buffer, sizeof(buffer),
+                                &received, FLOWMQ_DONTWAIT), SALTS_EBUSY);
+      }
       bench_group_close(&filtered.group);
     }
 

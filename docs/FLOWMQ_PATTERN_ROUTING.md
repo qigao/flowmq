@@ -245,6 +245,120 @@ ctest --preset bench-win-release-user -R "^bench_flowmq_pattern_shared_listener$
 
 日志：`build/listener-pattern-qualification.log`、
 `build/listener-pattern-{1,2,3,4}-{dispatch,shared_listener}.log`。
-该结果不包含进程 CPU、P99、接纳延迟或峰值资源；没有新的 ZMQ 非 PAIR 对照。
+该阶段结果不包含进程 CPU、P99、接纳延迟或峰值资源；非 PAIR 的 ZMQ 对照见下节。
 公开 owner bind 仍不开放，剩余失败注入和平台验证见
 [架构门槛](ARCHITECTURE.md#flowmq-内部-shared-listener-集成2026-10-10)。
+
+
+## 非 PAIR 的 ZMQ 对照（2026-10-10）
+
+本轮新增 `bench_flowmq_pattern_zmq.c`，补齐五个网络场景的真实 libzmq 对照，
+未修改生产 runtime。FlowMQ 仍使用上一节的 **内部 shared-listener owner**，公开
+owner bind 仍未开放。这里的结果不能直接代表现有公开 ordinary socket 路径。
+
+### 测量口径与策略
+
+环境：Windows 11 10.0.26200、Ryzen 9 7940HX（16 核/32 逻辑处理器）、
+MSVC 14.44.35207 Release；Salts 2.3.0-rc.1（源码
+`58ff08fc95b4aa1dc493c0b7080426b2c11d4959`）、libzmq 4.3.5（vcpkg 4.3.5#2）。
+FlowMQ runtime 基线为 `05287e2`，本次仅新增对照基准、显式 HWM 和计时后的过滤检查。
+
+- 两端均为 TCP loopback、64 B、20,000 samples；每个 sample 收齐当前操作的全部
+  消息后才进入下一轮。PUB/PUSH 为 4 个已交付消息，ROUTER 为 1 个，REQ/REP 和
+  过滤 PUB 为 2 个。ROUTER identity 不计作应用 payload，PUB 按接收者交付次数计数。
+- 两端显式设置发送/接收消息 HWM=1000。FlowMQ 另保留默认 16 MiB byte credit，
+  ZMQ 没有对应的相同 byte-credit 协议；这组低在途量不测试 HWM 饱和或丢弃策略等价性。
+- FlowMQ：一个调用线程、一个 owner，全部 2–5 个 sockets 位于同一 lane，无后台
+  I/O worker。ZMQ：一个调用线程、一个 context、`ZMQ_IO_THREADS=1`，全部 sockets
+  共用该 context。未固定 CPU 亲和，也未测进程 CPU，不能视为相同 CPU 预算。
+- 同一 ZMQ 程序分别测阻塞发送/接收与 `ZMQ_DONTWAIT` 忙轮询；后者通过
+  `FLOWMQ_PATTERN_ZMQ_SPIN=1` 选择。失败等待有 3 s 上限，设置 LINGER=0，关闭重连，
+  PUSH/DEALER/REQ 使用 IMMEDIATE，ROUTER 使用 MANDATORY，设置在 bind/connect 前完成。
+  选项含义以 [ZMQ setsockopt](https://libzmq.readthedocs.io/en/latest/zmq_setsockopt.html)
+  为准。两种模式除了等待策略外复用同一 fixture、校验和计时循环。
+- ZMQ PUSH 在四个握手事件到达后执行 warm cycle；PUB 则以带序号的真实消息确认订阅
+  生效，过滤场景分别确认 payments./orders.，不把 TCP 握手当作订阅屏障。监控只存在于
+  setup，关闭后才计时；事件帧按 [ZMQ monitor 文档](https://libzmq.readthedocs.io/en/latest/zmq_socket_monitor.html)
+  解码。两端均在计时后确认未匹配 SUB 没有收到数据。
+- 计时包含长度/内容检查。FlowMQ 接收后额外推进一次整个 owner，以处理发送完成与
+  credit；ZMQ 接收还检查 RCVMORE。这里测量的是具体 API 使用方式的端到端循环成本，
+  不是纯 pattern 路由算法耗时。
+
+三个变体以全部六种排列各运行一轮，顺序为 `F/B/S`、`S/B/F`、`B/F/S`、`S/F/B`、
+`F/S/B`、`B/S/F`（F=FlowMQ shared owner，B=ZMQ blocking，S=ZMQ spin），每轮串行，
+测量期间不并行运行 build 或回归测试。原始 90 行及对应日志路径见
+[非 PAIR 对照 CSV](flowmq-pattern-vs-zmq-windows-20261010.csv)。只在本批次内配对，
+不混入上一节的历史绝对耗时。
+
+### 结果
+
+吞吐单位为 **千条已交付消息/s**；前三列各为六轮中位数。比值逐轮计算
+`FlowMQ ops/s / ZMQ spin ops/s` 再取中位数，因此不等于前三列中位数直接相除。
+
+| 场景 | FlowMQ shared | ZMQ 阻塞 | ZMQ 忙轮询 | 配对 F/S | F 胜过 S |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| PUB 四 peer 广播 | 88.51 | 68.13 | 82.03 | 1.074× | 5/6 |
+| PUSH 四 peer 轮询 | 72.22 | 70.91 | 82.57 | 0.873× | 1/6 |
+| ROUTER 定向 | 84.61 | 27.27 | 33.75 | 2.407× | 6/6 |
+| REQ/REP | 92.62 | 23.01 | 27.80 | 3.344× | 6/6 |
+| PUB 二选四过滤 | 78.95 | 40.25 | 46.04 | 1.577× | 6/6 |
+
+REQ/REP 一次往返计两条消息，对应约 **46.31k / 11.51k / 13.90k roundtrips/s**。
+各变体 avg/sample 的六轮中位数如下；不能将 PUB/PUSH 的一个 sample 当成一条消息延迟。
+
+| 场景 | FlowMQ µs/sample | ZMQ 阻塞 µs/sample | ZMQ 忙轮询 µs/sample |
+| --- | ---: | ---: | ---: |
+| PUB 四 peer | 45.195 | 58.713 | 48.763 |
+| PUSH 四 peer | 55.386 | 56.440 | 48.450 |
+| ROUTER 定向 | 11.819 | 36.664 | 29.646 |
+| REQ/REP | 21.607 | 87.206 | 72.140 |
+| PUB 过滤 | 25.362 | 49.754 | 43.443 |
+
+**事实：**ROUTER、REQ/REP、过滤 PUB 相比 ZMQ 的两种等待策略都是 6/6 轮更快。
+PUB 广播对忙轮询的优势较小且有一轮反转；PUSH 则在 5/6 轮落后于 ZMQ 忙轮询，
+配对吞吐中位数低 12.7%。只看阻塞 ZMQ 会掩盖这个差距（PUSH 对阻塞版仅 4/6 轮更快）。
+波动不可忽略：例如过滤 PUB 的 F/S 各自范围为 63.67–93.36k / 37.29–72.75k msg/s，
+这六轮描述性统计不构成显著性或跨平台结论。
+
+**MED / 推论：**PUSH 值得优先继续剖析。当前 `bench_push_cycle()` 每轮调用四次
+`bench_send_retry()`，各先推进 owner；随后四次 `bench_recv_exact()` 各在接收前和
+接收后推进 owner。即使没有重试，一轮也至少执行 **12 次、每次覆盖五个 sockets 的
+显式 group progress**，ZMQ 则在后台 I/O 线程推进。这是代码可核实的工作量差异，
+支持测量 batch send/progress 合并的方向，但本轮没有阶段计时，尚不能把 12.7% 的差距
+全部归因于这些调用。不能通过跳过 completion/credit 处理来制造吞吐收益。
+
+这些是小窗口、收齐再发的结果，**不是大 batch 的饱和带宽上限**，也不能与此前
+[8 连接、batch=128 的 PAIR 数据](FLOWMQ_LANE_SCALING.md)直接横比。
+本轮没有测非 PAIR 多 lane 扩展、不同 payload/batch、P99、CPU 或峰值内存。
+慢 peer 隔离和 POLLOUT 仍只有 FlowMQ 数据：byte-credit、消息 HWM 和 readiness 的
+协议差异需要独立制定等价场景，未填充虚构的 ZMQ 对照。
+
+### 验证与复现
+
+- 完整 Release build 通过。两种 ZMQ 等待策略各含五项正确性测试，各连续十轮通过，
+  共 100 个 case；短循环使用递增序号检查内容/跨循环次序，另检查 multipart 信封和
+  未匹配/多余数据；资源释放放在 teardown 中，避免 fatal 断言跳过清理。
+- ordinary/probe/profile/ZMQ 的资格运行 4/4 通过。最终六轮三变体 18/18 次 CTest
+  运行通过，共 114 个场景（FlowMQ 每次另含四个不作 ZMQ 对比的场景）。CSV 的
+  90 个配对场景累计校验 4,680,000 条计时内消息的长度与内容；计时消息为固定内容，
+  不能声称这 468 万条全部使用序号验证。
+- 日志：`build/pattern-zmq-build-final.log`、`build/pattern-zmq-correctness-final.log`、
+  `build/pattern-zmq-qualification.log`、`build/pattern-vs-zmq-{1..6}-{variant}.log`。
+  runtime 未改，本轮未重复全部 core/transport 回归，未验证 Linux/macOS。
+
+在已有 Release preset 开启 `FLOWMQ_BUILD_ZMQ_BENCHMARK=ON`，VS developer environment：
+
+```powershell
+cmake --build --preset win-release-user
+ctest --preset win-release-user -R "^test_flowmq_pattern_zmq(_spin)?$" --repeat until-fail:10 -V
+$orders = @('shared_listener,zmq,zmq_spin', 'zmq_spin,zmq,shared_listener',
+            'zmq,shared_listener,zmq_spin', 'zmq_spin,shared_listener,zmq',
+            'shared_listener,zmq_spin,zmq', 'zmq,zmq_spin,shared_listener')
+for ($trial = 1; $trial -le $orders.Count; ++$trial) {
+  foreach ($variant in $orders[$trial - 1].Split(',')) {
+    ctest --preset bench-win-release-user -R ("^bench_flowmq_pattern_" + $variant + "$") -V `
+      *> ("build/pattern-vs-zmq-{0}-{1}.log" -f $trial, $variant)
+    if ($LASTEXITCODE -ne 0) { throw "Pattern measurement failed" }
+  }
+}
+```

@@ -241,6 +241,37 @@ if(FLOWMQ_BUILD_ZMQ_BENCHMARK)
   target_compile_definitions(bench_flowmq_socket PRIVATE FLOWMQ_BENCH_WITH_ZMQ=1)
   target_link_libraries(bench_flowmq_socket_owners PRIVATE libzmq)
   target_compile_definitions(bench_flowmq_socket_owners PRIVATE FLOWMQ_BENCH_WITH_ZMQ=1)
+  cmake_add_benchmark(bench_flowmq_pattern_zmq
+    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_pattern_zmq.c
+    LIBS libzmq Salts::Core Salts::TinyTest
+    FOLDER "flowmq/benchmarks/runtime")
+  if(BUILD_TESTS)
+    add_test(NAME test_flowmq_pattern_zmq
+             COMMAND bench_flowmq_pattern_zmq --filter "correctness:")
+    set_tests_properties(test_flowmq_pattern_zmq PROPERTIES
+      LABELS "flowmq;flowmq-transport" RUN_SERIAL TRUE TIMEOUT 120
+      ENVIRONMENT "FLOWMQ_PATTERN_ZMQ_SPIN=0")
+    add_test(NAME bench_flowmq_pattern_zmq
+             COMMAND bench_flowmq_pattern_zmq --filter "performance:")
+    set_tests_properties(bench_flowmq_pattern_zmq PROPERTIES
+      LABELS "flowmq;benchmark" RUN_SERIAL TRUE TIMEOUT 600
+      ENVIRONMENT "FLOWMQ_PATTERN_ZMQ_SPIN=0")
+    add_test(NAME test_flowmq_pattern_zmq_spin
+             COMMAND bench_flowmq_pattern_zmq --filter "correctness:")
+    set_tests_properties(test_flowmq_pattern_zmq_spin PROPERTIES
+      LABELS "flowmq;flowmq-transport" RUN_SERIAL TRUE TIMEOUT 120
+      ENVIRONMENT "FLOWMQ_PATTERN_ZMQ_SPIN=1")
+    add_test(NAME bench_flowmq_pattern_zmq_spin
+             COMMAND bench_flowmq_pattern_zmq --filter "performance:")
+    set_tests_properties(bench_flowmq_pattern_zmq_spin PROPERTIES
+      LABELS "flowmq;benchmark" RUN_SERIAL TRUE TIMEOUT 600
+      ENVIRONMENT "FLOWMQ_PATTERN_ZMQ_SPIN=1")
+    if(WIN32)
+      set_tests_properties(test_flowmq_pattern_zmq bench_flowmq_pattern_zmq
+                           test_flowmq_pattern_zmq_spin bench_flowmq_pattern_zmq_spin PROPERTIES
+        ENVIRONMENT_MODIFICATION "${FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS}")
+    endif()
+  endif()
   if(BUILD_TESTS)
     add_test(NAME bench_flowmq_lane_zmq
              COMMAND bench_flowmq_socket_owners --filter "lane comparison:")
