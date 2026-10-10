@@ -342,6 +342,32 @@ owner 管理。这些能力承担协议顺序、背压与异步生命周期，�
 mailbox 而移除。[直通与 mailbox 对照](FLOWMQ_LANE_SCALING.md#同-lane-直通与跨线程-mailbox-对照2026-10-10)
 保存选择依据和吞吐/CPU 取舍；本选择是项目边界，不是所有 Actor 应用的性能结论。
 
+### CMeta 同步 Guard 的 buffer 池对照
+
+同步方案先在私有 qualification 中验证，不改变公开 owner 的线程契约。
+当前 SDK 的 `cmeta/ace_synchronization.h` 提供 Lockable/Guard；它不是带
+FIFO/LIFO 排队语义的 ACE Token，也不是 NativeIO ACT。测试用 Platform mutex
+实现 Lockable，比较独立池无 Guard、独立池有 Guard、共享池有 Guard。
+
+每 lane 128 个预分配 backing；共享方案合并相同总容量，不增加资源预算。
+所有池持有永久基础引用。借用时在同步范围内检查 refcount==1 并取得 retained
+slice；全局游标与这次检查/retain 由同一 Guard 保护。取得 slice 后才释放 Guard，
+随后在 lane 内写入内容和提交网络操作。其余线程仅能通过同一 Guard 获取借用，
+不能凭缓存裸指针 retain；在途内容保持不可变，直到所有临时引用释放。Guard
+不覆盖填充、CNet 调用、progress、终态回调或任何等待。无可用 buffer 返回 EBUSY，
+owner 继续收包和推进 I/O，保留已经取得的部分 batch，不持锁自旋。
+
+比较一次借用 1/16 个 buffer，收发 staging 仍统一为 16，应用窗口仍为 128。
+每 lane 一个线程和一个独立 context/owner，两个逻辑数据源保留各自 FIFO。
+准备到验证的 P99 从借用尝试开始计时，包含这次 Guard 等待；同时单独记录
+进入 Guard 的累计与最大耗时、调用次数、buffer 探测和不足次数。成功与取消均
+先释放 staging，再在原 owner drain 网络，join 全部 lane 后核对基础引用及
+最终释放回调，最后销毁池和 mutex。测量不包含初始化、warmup 和 teardown。
+
+[384 组测量](FLOWMQ_LANE_SCALING.md#cmeta-guard-与共享-buffer-池对照2026-10-10)
+显示 8 lane 小消息的逐条共享 Guard 增加 CPU 与 P99，批量 16 显著摊薄成本但
+没有稳定超过独立池。保持独立池默认；共享 Guard 仅留在私有资格验证中。
+
 ### 历史 mailbox qualification 的范围
 
 下述 mailbox 仅用于内部测试和性能对照，不安装、不作为产品架构候选继续推进。

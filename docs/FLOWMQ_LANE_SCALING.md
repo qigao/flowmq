@@ -1061,3 +1061,105 @@ ctest --preset bench-win-release-user -R "^bench_flowmq_lane_handoff$" -V
 以及 EVENTS 查询数和 buffer 检查计数。未测 direct 定时/空闲策略、关闭 ZMQ 的
 构建配置、全 transport 回归、其他平台、TLS、跨机或 native 失败注入。新增正式
 用例验证的是内部 progress qualification，不扩展公开 owner_poll 的唤醒契约。
+
+## CMeta Guard 与共享 buffer 池对照（2026-10-10）
+
+用户要求通过测试决定同步 Token 的引入方式。本轮基于 `2d559fa`，使用相同
+Windows/MSVC Release 和 RC1 SDK。当前可用原语是 CMeta Lockable/Scoped Guard，
+由 Platform mutex 实现；**没有 FIFO/LIFO 同步 ACE Token 的排序保证**，也没有
+使用 NativeIO ACT。这次结果只适用于下面的同步范围，不能推广为 ACT 的性能。
+
+### 对照协议
+
+复用现有私有 TCP PAIR harness 的 direct 路径，新增 `test_flowmq_lane_token`
+和 `bench_flowmq_lane_token`。每 lane 一个线程、一个独立 context/owner、两个
+逻辑数据源，保持逐源 FIFO；没有生产者线程、Actor 或应用 mailbox。
+
+比较 `local`（独立池无锁）、`local_guard`（独立池＋每 lane Guard）和
+`shared_guard`（合并池＋一个共享 Guard）。基础存储由 controller 创建并持有
+引用，每 lane 预算 128 个 buffer；共享池为 lanes×128，总容量相同。
+Guard 只保护池游标、refcount==1 的空闲检查和 retained slice 获取。填充和所有
+CNet 操作均在解锁后由各自 owner 执行；引用数恢复为 1 才允许再次借用。
+没有池 resize、借用裸指针重新 retain、持锁网络操作或持锁等待可用 buffer。
+
+一次借用 1/16 个 buffer，两者的发送 staging 都是 16，应用在途上限都是 128。
+64 B 比较 copy 和 retained SG16；64 KiB 比较 copy 和公开 immediate SG。
+每组完整 payload 填充与接收验证、一次完整 copy warmup、1/8 lane、交替执行
+顺序。两次各四轮，共 384 组全部成功、57,507,840 条消息、61,605,937,152
+payload bytes。第二次仅补充计时前 mutex 初始化失败的 ENOMEM 检查，计时
+路径相同；两次有效数据全部保留，CSV 的 `measurement_run=1/2` 标识来源。
+原始数据：[flowmq-token-pool-windows-20261010.csv](flowmq-token-pool-windows-20261010.csv)。
+
+计时覆盖放行至最后一个 lane 完成，不包含初始化、warmup 和 teardown。
+CPU cycles 为进程增量/完成条数。P99 是每组从这次借用尝试开始至完整接收验证
+的消息分位数，包含这次 Guard 进入耗时和填充；失败借用后再次尝试前的时间
+不完整计入后取得的 slice，不能称为应用端到端 P99。三条路径均使用相同的
+两次时钟查询。Guard 进入耗时包含接口校验、锁获取和计时开销，不能当作
+纯 OS mutex 时间。warmup 只有一条，没有预触全部 backing 页；计时仍包含
+其余 buffer 的首次访问。没有绑定 CPU affinity、固定频率或隔离系统其他负载。
+
+### 8 lane 结果
+
+下表是共享 Guard 相对同 payload、同发送方式、同借用批量的无锁独立池。
+百分比先在同一次测量中逐轮计算 `shared_guard/local − 1`，再取八轮中位数；不是两侧吞吐
+中位数的比值。吞吐 wins 为共享方案超过独立方案的轮数。
+
+| payload / 发送 | 借用批量 | 独立池 k条/s | 共享 Guard k条/s | 配对吞吐 | 配对 cycles/条 | 配对 P99 | 吞吐 wins |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 64 B copy | 1 | 4,170.976 | 2,952.618 | −23.2% | +31.9% | +158.3% | 0/8 |
+| 64 B copy | 16 | 4,436.553 | 4,367.175 | −1.3% | +6.5% | +13.9% | 4/8 |
+| 64 B SG16 | 1 | 2,598.020 | 2,268.846 | −20.8% | +25.7% | +62.2% | 0/8 |
+| 64 B SG16 | 16 | 2,545.139 | 2,466.785 | −1.6% | +3.0% | +6.7% | 3/8 |
+| 64 KiB copy | 1 | 22.759 | 24.907 | +3.2% | −2.3% | −1.5% | 6/8 |
+| 64 KiB copy | 16 | 23.600 | 21.615 | −2.3% | +3.6% | +7.2% | 4/8 |
+| 64 KiB immediate SG | 1 | 39.068 | 39.953 | −3.1% | +6.5% | +9.2% | 3/8 |
+| 64 KiB immediate SG | 16 | 41.274 | 40.265 | +0.2% | −1.6% | +0.9% | 4/8 |
+
+**事实：**所有测量都没有 buffer 耗尽，探测次数/条为 1.000–1.0044；应用在途
+峰值为 127。Guard 每条一次时，调用数恰好等于消息数；批量 16 时恰好为消息数/16。
+因此本轮没有通过等待池空间降低 CPU，也没有池容量扩大的收益。
+
+8 lane、64 B copy 的独立 Guard 对照，每条借用的配对吞吐 −1.5%、cycles +0.8%；
+共享 Guard 为 −23.2%、+31.9%。SG16 对应独立 Guard 为 −3.3%、+0.8%，共享
+为 −20.8%、+25.7%。**推论：**成本主要随共享竞争增加；不是仅添加 CMeta 接口
+就产生同等损失。共享方案同时改变游标与 buffer 分配局部性，仍不能把全部
+差额精确归因于 mutex，缺少 CPU stack/硬件计数证据。
+
+64 B copy 共享 Guard 的逐组平均进入耗时再取八轮中位数：每条借用 777.2 ns，
+一次借用 16 条为 564.2 ns/次（约 35.3 ns/条）。两种路径的最大进入耗时的
+八轮中位数分别为 765.4 µs 和 152.7 µs。共享方案改成批量 16，相对自身逐条
+方案的配对吞吐 +27.7%、cycles/条 −22.0%；SG16 为 +15.8%、−15.5%。这是减少
+同步频率的证据，不是已经超过独立 lane 的证据。批量同时摊薄时钟查询和
+调用入口成本，不能把全部提升量解释为 OS 锁操作节省。
+
+64 KiB copy 首次四轮的共享 batch16 配对吞吐为 +8.3%，合并第二次后变为
+−2.3%（4/8），逐轮比值范围 0.742–1.185，说明原先的正向结果不稳定。
+独立 Guard 的 batch16 对照为 +2.1%（5/8），不能证明提升来自共享 Token。
+64 KiB SG 的共享 batch16 吞吐比逐轮范围 0.872–1.118、4/8 胜出，暂未显示
+稳定收益。1 lane 时无竞争，Guard 每次进入的中位数约 38–115 ns。小差值应
+继续视作本机实验波动，不能据此宣称加锁必然加速。
+
+### 选择与验证范围
+
+**选择：**保持独立 lane/独立 buffer 池作为默认，不向生产热路径加入共享 Guard。
+需要共享资源时，当前可选的是批量借用＋短同步范围；本轮先保留为资格验证，
+不能以锁代替 CNet 固定线程归属。新增 CMeta 链接仅属于 benchmark，生产
+依赖、公开 API 和 wire protocol 均未改变；回滚只需移除本轮私有测试与注册。
+
+两项正式 Token 用例验证强制池满时 Guard 释放、部分借用恢复、跨 lane 内容
+隔离，以及 96 个网络成功/取消配置中的 wrap、FIFO、SG retained 引用和最终
+释放回调。Token、原 direct、owner completion batch 三项 CTest 各连续通过
+十次，最终复跑 59.49 s；完整 Release build 无新增 warning。两次性能 CTest
+分别为 37.42/45.79 s；最终测量后没有修改 C 源码。最终日志：
+`build/token-final-build.log`、`build/token-final-correctness.log`、
+`build/token-final-comparison.log`；首次数据来自 `build/token-comparison.log`。
+
+```powershell
+cmake --build --preset win-release-user
+ctest --preset win-release-user -R "^test_flowmq_(lane_token|lane_direct|owner_batch)$" --repeat until-fail:10 --output-on-failure
+ctest --preset bench-win-release-user -R "^bench_flowmq_lane_token$" -V
+```
+
+**MED：**尚未验证低负载阻塞等待的 CPU 收益、FIFO/LIFO Token 公平性、其他平台、
+TLS、跨机、TSan/ASan 或失败注入。此次不重测 ZMQ，不能把本轮 Guard 结果与
+上一节不同池组织/时间点的 ZMQ 结果拼接成新的胜负结论。

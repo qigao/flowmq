@@ -5,6 +5,7 @@
 #include <salts/clock.h>
 #include <salts/disruptor.h>
 #include <salts/thread.h>
+#include <cmeta/ace_synchronization.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,6 +21,16 @@ enum { MAIL_LANES = 8, MAIL_PRODUCERS = 2, MAIL_CAPACITY = 128,
        MAIL_ROUNDS = 32, MAIL_SATURATED_ROUNDS = 2048, MAIL_RX_SEGMENTS = 64,
        MAIL_ZMQ_COPY = 4, MAIL_ZMQ_OWNED = 5,
        MAIL_ZMQ_COPY_EVENTS = 6, MAIL_ZMQ_OWNED_EVENTS = 7 };
+
+enum { TOKEN_LOCAL = 2, TOKEN_LOCAL_GUARD = 3, TOKEN_SHARED_GUARD = 4,
+       TOKEN_BATCHED_LOCAL = 5, TOKEN_BATCHED_LOCAL_GUARD = 6,
+       TOKEN_BATCHED_SHARED_GUARD = 7,
+       TOKEN_POOL_PER_LANE = MAIL_PRODUCERS * MAIL_BUFFERS };
+
+static void mail_token_acquire(void *self) { cmeta_mutex_lock(self); }
+static void mail_token_release(void *self) { cmeta_mutex_unlock(self); }
+CMETA_IMPLEMENTS(cmeta_ace_lockable, mail_token_policy, 0u,
+    .acquire = mail_token_acquire, .release = mail_token_release);
 
 typedef struct mail_header_s {
   uint64_t lane, producer, sequence, prepared_ns;
@@ -50,6 +61,10 @@ struct mail_lane_s {
   uint64_t *latencies;
   size_t received, admitted, polls, send_busy, segments, app_full, peak_inflight, event_checks;
   flowmq_retained_queue_stats_t sg_stats;
+  cmeta_mutex_t token_mutex;
+  mem_buffer_t *token_buffers[TOKEN_POOL_PER_LANE];
+  size_t token_next, token_calls;
+  uint64_t token_enter_ns, token_enter_max_ns;
 #if defined(FLOWMQ_BENCH_WITH_ZMQ)
   void *zmq_ctx, *zmq_sender, *zmq_receiver;
 #endif
@@ -62,6 +77,9 @@ struct mail_run_s {
   size_t ready, writers_ready, done, rounds, bytes, cancel_after, admission_limit;
   int limit_bytes;
   int started, cleanup, notify, retained, direct;
+  cmeta_mutex_t token_mutex;
+  mem_buffer_t *token_buffers[MAIL_LANES * TOKEN_POOL_PER_LANE];
+  size_t token_count, token_next;
   uint32_t pause_ms;
 };
 
@@ -124,6 +142,66 @@ static int mail_prepare(mail_producer *p, uint64_t sequence, mem_slice_t *out,
   }
 }
 
+/* Qualification only: serialize check-and-retain of pool base references.
+ * Claim references under the Guard; fill and all I/O occur after leaving it.
+ * No callback takes this mutex. Last release publishes reusable storage via
+ * the buffer's atomic refcount; base storage survives until all lanes join. */
+static int mail_token_prepare(mail_lane *lane, mail_local_batch *batch) {
+  mail_run *run = lane->run;
+  const int policy = (run->direct - TOKEN_LOCAL) % 3;
+  const size_t budget = run->direct >= TOKEN_BATCHED_LOCAL ? MAIL_BATCH : 1u;
+  mem_buffer_t **buffers = policy == 2 ? run->token_buffers : lane->token_buffers;
+  size_t *next = policy == 2 ? &run->token_next : &lane->token_next;
+  const size_t capacity = policy == 2 ? run->token_count : TOKEN_POOL_PER_LANE;
+  mail_producer *p = &lane->producers[batch->producer];
+  cmeta_ace_guard guard = {0};
+  cmeta_mutex_t *mutex = policy == 2 ? &run->token_mutex : &lane->token_mutex;
+  const cmeta_ace_lockable lock = mail_token_policy_as_cmeta_ace_lockable(mutex);
+  const size_t first = batch->count;
+  const uint64_t prepared = cmeta_hrtime();
+  int status = SALTS_OK;
+  if (policy != 0) {
+    if (cmeta_ace_guard_enter(&guard, &lock) != CMETA_OK) return SALTS_EPROTO;
+  }
+  /* Equal clock instrumentation in all three policies, including no Guard. */
+  const uint64_t elapsed = cmeta_hrtime() - prepared;
+  if (policy != 0) {
+    ++lane->token_calls;
+    lane->token_enter_ns += elapsed;
+    if (elapsed > lane->token_enter_max_ns) lane->token_enter_max_ns = elapsed;
+  }
+  for (size_t claim = 0u; claim < budget && batch->count < MAIL_BATCH; ++claim) {
+    size_t probes = 0u;
+    const size_t prior_count = batch->count;
+    for (; probes < capacity; ++probes) {
+      const size_t index = (*next + probes) % capacity;
+      mem_buffer_t *buffer = buffers[index];
+      if (mem_buffer_ref_count(buffer) != 1u) continue;
+      batch->entries[batch->count].slice = mem_slice(buffer, 0u, run->bytes);
+      if (batch->entries[batch->count].slice.buffer == NULL) status = SALTS_ENOMEM;
+      else {
+        ++batch->count;
+        *next = (index + 1u) % capacity;
+      }
+      ++probes;
+      break;
+    }
+    p->buffer_probes += probes;
+    if (status != SALTS_OK) break;
+    if (batch->count == prior_count) {
+      ++p->buffer_waits;
+      status = SALTS_EBUSY;
+      break;
+    }
+  }
+  if (policy != 0 && cmeta_ace_guard_leave(&guard) != CMETA_OK) abort();
+  for (size_t i = first; i < batch->count; ++i) {
+    const mail_header header = {lane->id, batch->producer, p->published + i, prepared};
+    mail_fill((unsigned char *)batch->entries[i].slice.data, run->bytes, &header);
+  }
+  return status;
+}
+
 /* One bounded staging batch, not another mailbox. Never wait here: the same
  * owner must receive and advance I/O to make retained sources reusable. */
 static int mail_direct_entry(mail_lane *lane, mail_local_batch *batch, mail_entry **out) {
@@ -132,6 +210,11 @@ static int mail_direct_entry(mail_lane *lane, mail_local_batch *batch, mail_entr
     mail_producer *p = &lane->producers[batch->producer];
     if (p->published == lane->run->rounds * MAIL_BATCH) return SALTS_EBUSY;
     while (batch->count < MAIL_BATCH) {
+      if (lane->run->direct >= TOKEN_LOCAL) {
+        const int status = mail_token_prepare(lane, batch);
+        if (status != SALTS_OK) return status;
+        continue;
+      }
       const int status = mail_try_prepare(p, p->published + batch->count,
                                           &batch->entries[batch->count].slice);
       if (status != SALTS_OK) return status;
@@ -568,12 +651,16 @@ static int mail_run_path(size_t lanes, size_t bytes, size_t rounds, uint32_t pau
   size_t polls = 0u, busy = 0u, wakes = 0u, full = 0u, buffer_waits = 0u, segments = 0u;
   size_t app_full = 0u, peak_inflight = 0u, event_checks = 0u;
   size_t buffer_probes = 0u;
+  size_t token_calls = 0u;
+  uint64_t token_enter_ns = 0u, token_enter_max_ns = 0u;
   flowmq_retained_queue_stats_t sg_stats = {0};
   int status = SALTS_OK;
   if (lanes == 0u || lanes > MAIL_LANES || bytes < sizeof(mail_header) ||
       bytes > MAIL_MAX_BYTES || rounds == 0u || rounds > MAIL_SATURATED_ROUNDS) return SALTS_EINVAL;
   if (retained < 0 || retained > MAIL_ZMQ_OWNED_EVENTS) return SALTS_EINVAL;
   if (direct && pause_ms != 0u) return SALTS_EINVAL;
+  if (direct < 0 || direct > TOKEN_BATCHED_SHARED_GUARD ||
+      (direct >= TOKEN_LOCAL && retained >= MAIL_ZMQ_COPY)) return SALTS_EINVAL;
 #if !defined(FLOWMQ_BENCH_WITH_ZMQ)
   if (retained >= MAIL_ZMQ_COPY) return SALTS_ENOTSUP;
 #endif
@@ -585,6 +672,14 @@ static int mail_run_path(size_t lanes, size_t bytes, size_t rounds, uint32_t pau
   run.direct = direct;
   run.cancel_after = cancel_after;
   cmeta_mutex_init(&run.mutex); cmeta_cond_init(&run.changed);
+  if (direct >= TOKEN_LOCAL) {
+    cmeta_mutex_init(&run.token_mutex);
+    if (run.token_mutex == NULL) status = SALTS_ENOMEM;
+    for (size_t i = 0u; i < lanes; ++i) {
+      cmeta_mutex_init(&workers[i].token_mutex);
+      if (workers[i].token_mutex == NULL) status = SALTS_ENOMEM;
+    }
+  }
   for (size_t i = 0u; status == SALTS_OK && i < lanes; ++i) {
     mail_lane *lane = &workers[i];
     lane->id = i; lane->run = &run; lane->latencies = latencies + i * (total / lanes);
@@ -601,6 +696,10 @@ static int mail_run_path(size_t lanes, size_t bytes, size_t rounds, uint32_t pau
       for (size_t k = 0u; k < MAIL_BUFFERS; ++k) {
         p->buffers[k] = mem_wrap_external(p->storage + k * bytes, bytes, mail_released, &p->released);
         if (p->buffers[k] == NULL) { status = SALTS_ENOMEM; break; }
+        if (direct >= TOKEN_LOCAL) {
+          lane->token_buffers[j * MAIL_BUFFERS + k] = p->buffers[k];
+          run.token_buffers[run.token_count++] = p->buffers[k];
+        }
       }
     }
   }
@@ -643,6 +742,9 @@ measured_done:
     polls += lane->polls; busy += lane->send_busy; segments += lane->segments;
     app_full += lane->app_full;
     event_checks += lane->event_checks;
+    token_calls += lane->token_calls;
+    token_enter_ns += lane->token_enter_ns;
+    if (token_enter_max_ns < lane->token_enter_max_ns) token_enter_max_ns = lane->token_enter_max_ns;
     if (peak_inflight < lane->peak_inflight) peak_inflight = lane->peak_inflight;
     sg_stats.writes += lane->sg_stats.writes;
     sg_stats.messages += lane->sg_stats.messages;
@@ -667,6 +769,7 @@ measured_done:
       free(p->storage);
     }
     if (lane->queue != NULL) disruptor_destroy(lane->queue);
+    if (direct >= TOKEN_LOCAL) cmeta_mutex_destroy(&lane->token_mutex);
   }
   status = atomic_load(&run.error);
   if (status == SALTS_OK && (received != total || admitted != total || finish <= start ||
@@ -675,7 +778,18 @@ measured_done:
     qsort(latencies, total, sizeof(*latencies), mail_compare);
     const char *send_names[] = {"copy", "sg", "queued_sg", "batch_sg", "zmq_copy", "zmq_owned",
                                 "zmq_copy_events", "zmq_owned_events"};
-    printf("MAILBOX_RESULT,%zu,%zu,%zu,%u,%s,%s,%zu,%llu,%.3f,%.3f,%d,%.3f,%llu,%zu,%zu,%zu,%zu,%zu,%zu,%llu,%llu,%llu,%zu,%zu,%zu,%zu,%zu,%s,%zu,%zu\n",
+    if (direct >= TOKEN_LOCAL) {
+      const char *paths[] = {"local", "local_guard", "shared_guard"};
+      printf("TOKEN_RESULT,%zu,%zu,%zu,%s,%s,%zu,%zu,%llu,%.3f,%.3f,%d,%.3f,%llu,%zu,%llu,%llu,%zu,%zu,%zu,%zu\n",
+             bytes, lanes, repeat, send_names[retained], paths[(direct - TOKEN_LOCAL) % 3],
+             direct >= TOKEN_BATCHED_LOCAL ? (size_t)MAIL_BATCH : 1u, total,
+             (unsigned long long)(finish - start), (double)total * 1e9 / (finish - start),
+             (double)(after.cpu_ns - before.cpu_ns) / total, after.cpu_cycles_available,
+             (double)(after.cpu_cycles - before.cpu_cycles) / total,
+             (unsigned long long)latencies[(total * 99u + 99u) / 100u - 1u],
+             token_calls, (unsigned long long)token_enter_ns, (unsigned long long)token_enter_max_ns,
+             buffer_probes, buffer_waits, peak_inflight, created);
+    } else printf("MAILBOX_RESULT,%zu,%zu,%zu,%u,%s,%s,%zu,%llu,%.3f,%.3f,%d,%.3f,%llu,%zu,%zu,%zu,%zu,%zu,%zu,%llu,%llu,%llu,%zu,%zu,%zu,%zu,%zu,%s,%zu,%zu\n",
            bytes, lanes, repeat, pause_ms, send_names[retained], direct ? "local" : notify ? "wake" : "spin",
            total, (unsigned long long)(finish - start), (double)total * 1e9 / (finish - start),
            (double)(after.cpu_ns - before.cpu_ns) / total, after.cpu_cycles_available,
@@ -691,6 +805,7 @@ measured_done:
     fprintf(stderr, "MAILBOX_ERROR,status=%d,lanes=%zu,bytes=%zu,sg=%d,wake=%d,received=%zu/%zu\n",
                                  status, lanes, bytes, retained, notify, received, total);
   cmeta_cond_destroy(&run.changed); cmeta_mutex_destroy(&run.mutex); free(latencies);
+  if (direct >= TOKEN_LOCAL) cmeta_mutex_destroy(&run.token_mutex);
   return status;
 }
 
@@ -875,6 +990,64 @@ static void mail_report_header(void) {
   printf("MAILBOX_HEADER,payload_bytes,lanes,repeat,pause_ms,send,wait,messages,wall_ns,messages_per_second,cpu_ns_per_message,cpu_cycles_available,cpu_cycles_per_message,prepare_receive_p99_ns,poll_calls,send_busy,wake_calls,queue_full,buffer_waits,receive_segments,sg_writes,sg_messages,sg_ranges,sg_max_messages,sg_max_ranges,app_full,peak_inflight_per_lane,send_event_checks,path,application_workers,buffer_probes\n");
 }
 
+/* Exhaust a shared pool deliberately: a partial claim must release its Guard,
+ * preserve its slices, reject a competing claimant, then resume after release.
+ * The network cases below supply actual concurrent callers and terminal drain. */
+static int mail_token_full_case(void) {
+  mail_run run = {0};
+  mail_lane lanes[2] = {0};
+  mail_local_batch batches[2] = {0};
+  mem_slice_t held[TOKEN_POOL_PER_LANE] = {0};
+  unsigned char storage[TOKEN_POOL_PER_LANE][64] = {0};
+  mail_release_counter released;
+  size_t allocated = 0u;
+  int status = SALTS_OK;
+  run.bytes = sizeof(storage[0]); run.rounds = 2u;
+  run.direct = TOKEN_BATCHED_SHARED_GUARD;
+  atomic_init(&released.count, 0u);
+  cmeta_mutex_init(&run.token_mutex);
+  if (run.token_mutex == NULL) return SALTS_ENOMEM;
+  for (size_t lane = 0u; lane < 2u; ++lane) {
+    lanes[lane].id = lane; lanes[lane].run = &run;
+    for (size_t p = 0u; p < MAIL_PRODUCERS; ++p) {
+      lanes[lane].producers[p].lane = &lanes[lane];
+      lanes[lane].producers[p].id = p;
+    }
+  }
+  for (size_t i = 0u; i < TOKEN_POOL_PER_LANE; ++i) {
+    run.token_buffers[i] = mem_wrap_external(storage[i], run.bytes, mail_released, &released);
+    if (run.token_buffers[i] == NULL) { status = SALTS_ENOMEM; break; }
+    ++allocated; ++run.token_count;
+    if (i >= 3u) held[i] = mem_slice(run.token_buffers[i], 0u, run.bytes);
+  }
+  if (status == SALTS_OK &&
+      (mail_token_prepare(&lanes[0], &batches[0]) != SALTS_EBUSY || batches[0].count != 3u ||
+       mail_token_prepare(&lanes[1], &batches[1]) != SALTS_EBUSY || batches[1].count != 0u))
+    status = SALTS_EPROTO;
+  for (size_t i = 0u; i < TOKEN_POOL_PER_LANE; ++i) mem_slice_release(&held[i]);
+  if (status == SALTS_OK) status = mail_token_prepare(&lanes[1], &batches[1]);
+  if (status == SALTS_OK) status = mail_token_prepare(&lanes[0], &batches[0]);
+  for (size_t lane = 0u; lane < 2u; ++lane) {
+    if (status == SALTS_OK && batches[lane].count != MAIL_BATCH) status = SALTS_EPROTO;
+    for (size_t i = 0u; i < batches[lane].count; ++i) {
+      mail_header header = {0};
+      size_t offset = 0u;
+      const int checked = mail_validate_bytes((const unsigned char *)batches[lane].entries[i].slice.data,
+                                               run.bytes, &header, &offset);
+      if (status == SALTS_OK && (checked != SALTS_OK || header.lane != lane ||
+                                header.producer != 0u || header.sequence != i)) status = SALTS_EPROTO;
+      mem_slice_release(&batches[lane].entries[i].slice);
+    }
+  }
+  for (size_t i = 0u; i < allocated; ++i) {
+    if (mem_buffer_ref_count(run.token_buffers[i]) != 1u) abort();
+    mem_buffer_release(run.token_buffers[i]);
+  }
+  if (atomic_load(&released.count) != allocated) status = SALTS_EPROTO;
+  cmeta_mutex_destroy(&run.token_mutex);
+  return status;
+}
+
 static int mail_direct_prepare_case(void) {
   mail_run run = {0};
   mail_lane lane = {0};
@@ -965,6 +1138,38 @@ static int mail_zmq_rejection_case(void) {
 #endif
 
 spec("FlowMQ internal SG mailbox") {
+  it("token correctness: full shared pool releases the Guard and preserves partial claims") {
+    check_equal(mail_token_full_case(), SALTS_OK);
+  }
+  it("token correctness: independent and shared pool leases preserve FIFO and drain on cancellation") {
+    const size_t sizes[] = {64u, MAIL_MAX_BYTES}, counts[] = {1u, MAIL_LANES};
+    for (size_t size = 0u; size < 2u; ++size)
+      for (size_t lane = 0u; lane < 2u; ++lane)
+        for (int path = TOKEN_LOCAL; path <= TOKEN_BATCHED_SHARED_GUARD; ++path)
+          for (int mode = 0; mode < 2; ++mode) {
+            const int send = mode == 0 ? 0 : sizes[size] == 64u ? 3 : 1;
+            check_equal(mail_run_path(counts[lane], sizes[size], 8u, 0u,
+                                     send, 0, 0u, 0, 0u, path), SALTS_OK);
+            check_equal(mail_run_path(counts[lane], sizes[size], 8u, 0u,
+                                     send, 0, 0u, 0, MAIL_BATCH, path), SALTS_ECANCELED);
+          }
+  }
+  bench("token comparison: independent versus guarded shared buffer pools") {
+    const size_t sizes[] = {64u, MAIL_MAX_BYTES}, counts[] = {1u, MAIL_LANES};
+    printf("TOKEN_CONFIG,primitive=CMeta_Lockable_Guard_Platform_mutex,fairness=unspecified,workers=one_per_lane,slots_per_lane=128,staging=16,affinity=unbound,load=saturated,guard=check_and_retain_only\n");
+    printf("TOKEN_HEADER,payload_bytes,lanes,repeat,send,path,lease_batch,messages,wall_ns,messages_per_second,cpu_ns_per_message,cpu_cycles_available,cpu_cycles_per_message,lease_receive_p99_ns,guard_calls,guard_enter_total_ns,guard_enter_max_ns,buffer_probes,buffer_waits,peak_inflight_per_lane,application_workers\n");
+    for (size_t repeat = 0u; repeat < MAIL_REPEATS; ++repeat)
+      for (size_t size = 0u; size < 2u; ++size)
+        for (size_t lane = 0u; lane < 2u; ++lane)
+          for (size_t order = 0u; order < 2u; ++order)
+            for (size_t path = 0u; path < 6u; ++path) {
+              const size_t bytes = sizes[(size + repeat) % 2u];
+              const int send = (order + repeat) % 2u == 0u ? 0 : bytes == 64u ? 3 : 1;
+              check_equal(mail_run_path(counts[(lane + repeat) % 2u], bytes,
+                  bytes == 64u ? MAIL_SATURATED_ROUNDS : MAIL_ROUNDS, 0u,
+                  send, 0, repeat + 1u, 1, 0u, TOKEN_LOCAL + (int)((path + repeat) % 6u)), SALTS_OK);
+            }
+  }
   it("lane direct correctness: partial preparation yields and resumes without rewriting owned sources") {
     check_equal(mail_direct_prepare_case(), SALTS_OK);
   }
