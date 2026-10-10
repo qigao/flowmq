@@ -25,12 +25,16 @@ typedef struct mail_header_s {
   uint64_t lane, producer, sequence, prepared_ns;
 } mail_header;
 typedef struct mail_entry_s { mem_slice_t slice; } mail_entry;
+typedef struct mail_local_batch_s {
+  mail_entry entries[MAIL_BATCH];
+  size_t count, next, producer;
+} mail_local_batch;
 typedef struct mail_release_counter_s { atomic_size_t count; } mail_release_counter;
 typedef struct mail_run_s mail_run;
 typedef struct mail_lane_s mail_lane;
 typedef struct mail_producer_s {
   mail_lane *lane;
-  size_t id, next_buffer, published, full, buffer_waits, wakes;
+  size_t id, next_buffer, published, full, buffer_waits, buffer_probes, wakes;
   mem_buffer_t *buffers[MAIL_BUFFERS];
   unsigned char *storage;
   mail_release_counter released;
@@ -57,7 +61,7 @@ struct mail_run_s {
   atomic_int error;
   size_t ready, writers_ready, done, rounds, bytes, cancel_after, admission_limit;
   int limit_bytes;
-  int started, cleanup, notify, retained;
+  int started, cleanup, notify, retained, direct;
   uint32_t pause_ms;
 };
 
@@ -90,26 +94,54 @@ static void mail_start_wait(mail_run *run) {
 /* Exactly one producer owns each base reference. All other users must already
  * hold a slice reference; no one may acquire from a saved bare buffer pointer.
  * Thus ref_count == 1 establishes exclusive reuse, not approximate queue size. */
+static int mail_try_prepare(mail_producer *p, uint64_t sequence, mem_slice_t *out) {
+  mail_run *run = p->lane->run;
+  for (size_t i = 0u; i < MAIL_BUFFERS; ++i) {
+    const size_t index = (p->next_buffer + i) % MAIL_BUFFERS;
+    mem_buffer_t *buffer = p->buffers[index];
+    if (mem_buffer_ref_count(buffer) != 1u) continue;
+    p->buffer_probes += i + 1u;
+    const mail_header h = {p->lane->id, p->id, sequence, cmeta_hrtime()};
+    mail_fill((unsigned char *)mem_buffer_data(buffer), run->bytes, &h);
+    *out = mem_slice(buffer, 0u, run->bytes);
+    if (out->buffer == NULL) return SALTS_ENOMEM;
+    p->next_buffer = (index + 1u) % MAIL_BUFFERS;
+    return SALTS_OK;
+  }
+  p->buffer_probes += MAIL_BUFFERS;
+  ++p->buffer_waits;
+  return SALTS_EBUSY;
+}
+
 static int mail_prepare(mail_producer *p, uint64_t sequence, mem_slice_t *out,
                         uint64_t deadline) {
-  mail_run *run = p->lane->run;
   for (;;) {
-    int status = mail_status(run, deadline);
+    int status = mail_status(p->lane->run, deadline);
     if (status != SALTS_OK) return status;
-    for (size_t i = 0u; i < MAIL_BUFFERS; ++i) {
-      const size_t index = (p->next_buffer + i) % MAIL_BUFFERS;
-      mem_buffer_t *buffer = p->buffers[index];
-      if (mem_buffer_ref_count(buffer) != 1u) continue;
-      const mail_header h = {p->lane->id, p->id, sequence, cmeta_hrtime()};
-      mail_fill((unsigned char *)mem_buffer_data(buffer), run->bytes, &h);
-      *out = mem_slice(buffer, 0u, run->bytes);
-      if (out->buffer == NULL) return SALTS_ENOMEM;
-      p->next_buffer = (index + 1u) % MAIL_BUFFERS;
-      return SALTS_OK;
-    }
-    ++p->buffer_waits;
+    status = mail_try_prepare(p, sequence, out);
+    if (status != SALTS_EBUSY) return status;
     cmeta_thread_yield();
   }
+}
+
+/* One bounded staging batch, not another mailbox. Never wait here: the same
+ * owner must receive and advance I/O to make retained sources reusable. */
+static int mail_direct_entry(mail_lane *lane, mail_local_batch *batch, mail_entry **out) {
+  if (batch->next == MAIL_BATCH) batch->count = batch->next = 0u;
+  if (batch->count != MAIL_BATCH) {
+    mail_producer *p = &lane->producers[batch->producer];
+    if (p->published == lane->run->rounds * MAIL_BATCH) return SALTS_EBUSY;
+    while (batch->count < MAIL_BATCH) {
+      const int status = mail_try_prepare(p, p->published + batch->count,
+                                          &batch->entries[batch->count].slice);
+      if (status != SALTS_OK) return status;
+      ++batch->count;
+    }
+    p->published += MAIL_BATCH;
+    batch->producer = (batch->producer + 1u) % MAIL_PRODUCERS;
+  }
+  *out = &batch->entries[batch->next];
+  return SALTS_OK;
 }
 
 static void mail_produce(void *arg) {
@@ -402,6 +434,7 @@ static void mail_consume(void *arg) {
   const size_t total = run->rounds * MAIL_BATCH * MAIL_PRODUCERS;
   uint64_t expected[MAIL_PRODUCERS] = {0};
   disruptor_cursor_t pending = {0};
+  mail_local_batch local = {0};
   int status = mail_open(lane);
   if (status == SALTS_OK) status = mail_warmup(lane);
   mail_error(run, status);
@@ -422,11 +455,18 @@ static void mail_consume(void *arg) {
         ++lane->app_full;
         break;
       }
-      if (pending.sequence == 0u && !disruptor_worker_try_claim(lane->queue, &pending)) {
-        observed_empty = 1;
-        break;
+      mail_entry *entry = NULL;
+      if (run->direct) {
+        status = mail_direct_entry(lane, &local, &entry);
+        if (status == SALTS_EBUSY) { status = SALTS_OK; break; }
+        if (status != SALTS_OK) break;
+      } else {
+        if (pending.sequence == 0u && !disruptor_worker_try_claim(lane->queue, &pending)) {
+          observed_empty = 1;
+          break;
+        }
+        entry = disruptor_acquire_entry(lane->queue, &pending);
       }
-      mail_entry *entry = disruptor_acquire_entry(lane->queue, &pending);
       status = mail_send(lane, &entry->slice, run->retained);
       if (status == SALTS_EBUSY || status == SALTS_ENOBUFS) {
         ++lane->send_busy;
@@ -445,8 +485,11 @@ static void mail_consume(void *arg) {
         break;
       }
       mem_slice_release(&entry->slice);
-      disruptor_worker_release_entry(lane->queue, &pending);
-      pending.sequence = 0u;
+      if (run->direct) ++local.next;
+      else {
+        disruptor_worker_release_entry(lane->queue, &pending);
+        pending.sequence = 0u;
+      }
       ++lane->admitted;
       if (lane->peak_inflight < lane->admitted - lane->received)
         lane->peak_inflight = lane->admitted - lane->received;
@@ -463,7 +506,7 @@ static void mail_consume(void *arg) {
     /* A nonempty/budget-exhausted mailbox or undelivered message must keep
      * making progress. Only true application-idle lanes may park. A publish
      * racing this check carries a persistent NativeIO wake into step(). */
-    const uint32_t wait = run->notify && observed_empty && pending.sequence == 0u &&
+    const uint32_t wait = !run->direct && run->notify && observed_empty && pending.sequence == 0u &&
         lane->admitted == lane->received ? MAIL_WAIT_MS : 0u;
     status = mail_progress(lane, wait);
   }
@@ -486,13 +529,15 @@ static void mail_consume(void *arg) {
   while (!run->cleanup) cmeta_cond_wait(&run->changed, &run->mutex);
   cmeta_mutex_unlock(&run->mutex);
   /* All producers are joined before cleanup. Drain references even on error. */
-  do {
+  for (size_t i = local.next; i < local.count; ++i)
+    mem_slice_release(&local.entries[i].slice);
+  while (lane->queue != NULL) {
     if (pending.sequence == 0u && !disruptor_worker_try_claim(lane->queue, &pending)) break;
     mail_entry *entry = disruptor_acquire_entry(lane->queue, &pending);
     mem_slice_release(&entry->slice);
     disruptor_worker_release_entry(lane->queue, &pending);
     pending.sequence = 0u;
-  } while (1);
+  }
 #if defined(FLOWMQ_BENCH_WITH_ZMQ)
   mail_zmq_close(lane);
 #endif
@@ -510,8 +555,9 @@ static void mail_join(cmeta_thread_t *thread) {
   if (cmeta_thread_join(thread) != SALTS_OK) abort();
 }
 
-static int mail_run_case(size_t lanes, size_t bytes, size_t rounds, uint32_t pause_ms,
-                         int retained, int notify, size_t repeat, int measured, size_t cancel_after) {
+static int mail_run_path(size_t lanes, size_t bytes, size_t rounds, uint32_t pause_ms,
+                         int retained, int notify, size_t repeat, int measured, size_t cancel_after,
+                         int direct) {
   mail_run run = {0};
   mail_lane workers[MAIL_LANES] = {0};
   cmeta_thread_t consumers[MAIL_LANES] = {0}, producers[MAIL_LANES * MAIL_PRODUCERS] = {0};
@@ -521,11 +567,13 @@ static int mail_run_case(size_t lanes, size_t bytes, size_t rounds, uint32_t pau
   size_t created = 0u, writers = 0u, admitted = 0u, received = 0u;
   size_t polls = 0u, busy = 0u, wakes = 0u, full = 0u, buffer_waits = 0u, segments = 0u;
   size_t app_full = 0u, peak_inflight = 0u, event_checks = 0u;
+  size_t buffer_probes = 0u;
   flowmq_retained_queue_stats_t sg_stats = {0};
   int status = SALTS_OK;
   if (lanes == 0u || lanes > MAIL_LANES || bytes < sizeof(mail_header) ||
       bytes > MAIL_MAX_BYTES || rounds == 0u || rounds > MAIL_SATURATED_ROUNDS) return SALTS_EINVAL;
   if (retained < 0 || retained > MAIL_ZMQ_OWNED_EVENTS) return SALTS_EINVAL;
+  if (direct && pause_ms != 0u) return SALTS_EINVAL;
 #if !defined(FLOWMQ_BENCH_WITH_ZMQ)
   if (retained >= MAIL_ZMQ_COPY) return SALTS_ENOTSUP;
 #endif
@@ -534,14 +582,17 @@ static int mail_run_case(size_t lanes, size_t bytes, size_t rounds, uint32_t pau
   atomic_init(&run.error, SALTS_OK);
   run.bytes = bytes; run.rounds = rounds; run.pause_ms = pause_ms;
   run.retained = retained; run.notify = notify;
+  run.direct = direct;
   run.cancel_after = cancel_after;
   cmeta_mutex_init(&run.mutex); cmeta_cond_init(&run.changed);
   for (size_t i = 0u; status == SALTS_OK && i < lanes; ++i) {
     mail_lane *lane = &workers[i];
     lane->id = i; lane->run = &run; lane->latencies = latencies + i * (total / lanes);
-    const disruptor_config_t config = {sizeof(mail_entry), MAIL_CAPACITY, 1u, DISRUPTOR_MODE_WORKER_POOL};
-    lane->queue = disruptor_create(&config);
-    if (lane->queue == NULL) { status = SALTS_ENOMEM; break; }
+    if (!direct) {
+      const disruptor_config_t config = {sizeof(mail_entry), MAIL_CAPACITY, 1u, DISRUPTOR_MODE_WORKER_POOL};
+      lane->queue = disruptor_create(&config);
+      if (lane->queue == NULL) { status = SALTS_ENOMEM; break; }
+    }
     for (size_t j = 0u; status == SALTS_OK && j < MAIL_PRODUCERS; ++j) {
       mail_producer *p = &lane->producers[j];
       p->id = j; p->lane = lane; atomic_init(&p->released.count, 0u);
@@ -562,7 +613,7 @@ static int mail_run_case(size_t lanes, size_t bytes, size_t rounds, uint32_t pau
   while (run.ready != created) cmeta_cond_wait(&run.changed, &run.mutex);
   cmeta_mutex_unlock(&run.mutex);
   status = atomic_load(&run.error);
-  for (size_t i = 0u; status == SALTS_OK && i < created; ++i)
+  for (size_t i = 0u; !direct && status == SALTS_OK && i < created; ++i)
     for (size_t j = 0u; status == SALTS_OK && j < MAIL_PRODUCERS; ++j) {
       status = cmeta_thread_create(&producers[writers], mail_produce, &workers[i].producers[j]);
       if (status == SALTS_OK) ++writers;
@@ -603,6 +654,7 @@ measured_done:
       mail_producer *p = &lane->producers[j];
       size_t allocated = 0u;
       wakes += p->wakes; full += p->full; buffer_waits += p->buffer_waits;
+      buffer_probes += p->buffer_probes;
       if (atomic_load(&run.error) == SALTS_OK && p->published != rounds * MAIL_BATCH)
         mail_error(&run, SALTS_EPROTO);
       for (size_t k = 0u; k < MAIL_BUFFERS; ++k) if (p->buffers[k] != NULL) {
@@ -623,8 +675,8 @@ measured_done:
     qsort(latencies, total, sizeof(*latencies), mail_compare);
     const char *send_names[] = {"copy", "sg", "queued_sg", "batch_sg", "zmq_copy", "zmq_owned",
                                 "zmq_copy_events", "zmq_owned_events"};
-    printf("MAILBOX_RESULT,%zu,%zu,%zu,%u,%s,%s,%zu,%llu,%.3f,%.3f,%d,%.3f,%llu,%zu,%zu,%zu,%zu,%zu,%zu,%llu,%llu,%llu,%zu,%zu,%zu,%zu,%zu\n",
-           bytes, lanes, repeat, pause_ms, send_names[retained], notify ? "wake" : "spin",
+    printf("MAILBOX_RESULT,%zu,%zu,%zu,%u,%s,%s,%zu,%llu,%.3f,%.3f,%d,%.3f,%llu,%zu,%zu,%zu,%zu,%zu,%zu,%llu,%llu,%llu,%zu,%zu,%zu,%zu,%zu,%s,%zu,%zu\n",
+           bytes, lanes, repeat, pause_ms, send_names[retained], direct ? "local" : notify ? "wake" : "spin",
            total, (unsigned long long)(finish - start), (double)total * 1e9 / (finish - start),
            (double)(after.cpu_ns - before.cpu_ns) / total, after.cpu_cycles_available,
            (double)(after.cpu_cycles - before.cpu_cycles) / total,
@@ -632,13 +684,19 @@ measured_done:
            polls, busy, wakes, full, buffer_waits, segments,
            (unsigned long long)sg_stats.writes, (unsigned long long)sg_stats.messages,
            (unsigned long long)sg_stats.ranges, sg_stats.max_messages, sg_stats.max_ranges,
-           app_full, peak_inflight, event_checks);
+           app_full, peak_inflight, event_checks, direct ? "direct" : "mailbox",
+           created + writers, buffer_probes);
   }
   if (status != SALTS_OK && !(cancel_after != 0u && status == SALTS_ECANCELED))
     fprintf(stderr, "MAILBOX_ERROR,status=%d,lanes=%zu,bytes=%zu,sg=%d,wake=%d,received=%zu/%zu\n",
                                  status, lanes, bytes, retained, notify, received, total);
   cmeta_cond_destroy(&run.changed); cmeta_mutex_destroy(&run.mutex); free(latencies);
   return status;
+}
+
+static int mail_run_case(size_t lanes, size_t bytes, size_t rounds, uint32_t pause_ms,
+                         int retained, int notify, size_t repeat, int measured, size_t cancel_after) {
+  return mail_run_path(lanes, bytes, rounds, pause_ms, retained, notify, repeat, measured, cancel_after, 0);
 }
 
 static int mail_queue_case(void) {
@@ -814,7 +872,55 @@ static int mail_batch_case(size_t bytes, int mixed, int byte_hwm, int close_pend
 static void mail_report_header(void) {
   printf("MAILBOX_CONFIG,producers_per_lane=%d,capacity=%d,buffers_per_producer=%d,batch=%d,rounds=%d,small_saturated_rounds=%d,repeats=%d,affinity=unbound,warmup=one_full_size_copy,receive=borrowed_or_slicev,application_window=capacity\n",
          MAIL_PRODUCERS, MAIL_CAPACITY, MAIL_BUFFERS, MAIL_BATCH, MAIL_ROUNDS, MAIL_SATURATED_ROUNDS, MAIL_REPEATS);
-  printf("MAILBOX_HEADER,payload_bytes,lanes,repeat,pause_ms,send,wait,messages,wall_ns,messages_per_second,cpu_ns_per_message,cpu_cycles_available,cpu_cycles_per_message,prepare_receive_p99_ns,poll_calls,send_busy,wake_calls,queue_full,buffer_waits,receive_segments,sg_writes,sg_messages,sg_ranges,sg_max_messages,sg_max_ranges,app_full,peak_inflight_per_lane,send_event_checks\n");
+  printf("MAILBOX_HEADER,payload_bytes,lanes,repeat,pause_ms,send,wait,messages,wall_ns,messages_per_second,cpu_ns_per_message,cpu_cycles_available,cpu_cycles_per_message,prepare_receive_p99_ns,poll_calls,send_busy,wake_calls,queue_full,buffer_waits,receive_segments,sg_writes,sg_messages,sg_ranges,sg_max_messages,sg_max_ranges,app_full,peak_inflight_per_lane,send_event_checks,path,application_workers,buffer_probes\n");
+}
+
+static int mail_direct_prepare_case(void) {
+  mail_run run = {0};
+  mail_lane lane = {0};
+  mail_local_batch batch = {0};
+  mem_slice_t held[MAIL_BUFFERS] = {0};
+  unsigned char storage[MAIL_BUFFERS][64] = {0};
+  mail_entry *entry = NULL;
+  mail_producer *p = &lane.producers[0];
+  int status = SALTS_OK;
+  size_t allocated = 0u;
+  run.bytes = sizeof(storage[0]); run.rounds = 2u;
+  lane.run = &run; p->lane = &lane;
+  atomic_init(&p->released.count, 0u);
+  for (size_t i = 0u; i < MAIL_BUFFERS; ++i) {
+    p->buffers[i] = mem_wrap_external(storage[i], sizeof(storage[i]), mail_released, &p->released);
+    if (p->buffers[i] == NULL) { status = SALTS_ENOMEM; break; }
+    ++allocated;
+    /* Leave only three sources available: preparation must return with an
+     * owned partial batch instead of waiting for the owner's own progress. */
+    if (i >= 3u) {
+      held[i] = mem_slice(p->buffers[i], 0u, sizeof(storage[i]));
+      if (held[i].buffer == NULL) { status = SALTS_ENOMEM; break; }
+    }
+  }
+  if (status == SALTS_OK &&
+      (mail_direct_entry(&lane, &batch, &entry) != SALTS_EBUSY || batch.count != 3u ||
+       batch.next != 0u || p->published != 0u || entry != NULL)) status = SALTS_EPROTO;
+  for (size_t i = 0u; i < MAIL_BUFFERS; ++i) mem_slice_release(&held[i]);
+  if (status == SALTS_OK) status = mail_direct_entry(&lane, &batch, &entry);
+  if (status == SALTS_OK && (batch.count != MAIL_BATCH || p->published != MAIL_BATCH ||
+                            entry != &batch.entries[0])) status = SALTS_EPROTO;
+  for (size_t i = 0u; status == SALTS_OK && i < batch.count; ++i) {
+    mail_header header = {0};
+    size_t offset = 0u;
+    status = mail_validate_bytes((const unsigned char *)batch.entries[i].slice.data,
+                                 batch.entries[i].slice.length, &header, &offset);
+    if (status == SALTS_OK && (offset != run.bytes || header.sequence != i ||
+                              header.producer != 0u || header.lane != 0u)) status = SALTS_EPROTO;
+  }
+  for (size_t i = 0u; i < batch.count; ++i) mem_slice_release(&batch.entries[i].slice);
+  for (size_t i = 0u; i < allocated; ++i) {
+    if (mem_buffer_ref_count(p->buffers[i]) != 1u) abort();
+    mem_buffer_release(p->buffers[i]);
+  }
+  if (atomic_load(&p->released.count) != allocated) status = SALTS_EPROTO;
+  return status;
 }
 
 #if defined(FLOWMQ_BENCH_WITH_ZMQ)
@@ -859,6 +965,53 @@ static int mail_zmq_rejection_case(void) {
 #endif
 
 spec("FlowMQ internal SG mailbox") {
+  it("lane direct correctness: partial preparation yields and resumes without rewriting owned sources") {
+    check_equal(mail_direct_prepare_case(), SALTS_OK);
+  }
+  it("lane direct correctness: local sources preserve FIFO and lifetime through wrap and cancellation") {
+    const size_t sizes[] = {64u, MAIL_MAX_BYTES}, counts[] = {1u, MAIL_LANES};
+    const int modes[] = {0, 1, 2, 3,
+#if defined(FLOWMQ_BENCH_WITH_ZMQ)
+                         MAIL_ZMQ_COPY_EVENTS, MAIL_ZMQ_OWNED_EVENTS,
+#endif
+    };
+    for (size_t size = 0u; size < 2u; ++size)
+      for (size_t lane = 0u; lane < 2u; ++lane)
+        for (size_t mode = 0u; mode < sizeof(modes) / sizeof(modes[0]); ++mode) {
+          check_equal(mail_run_path(counts[lane], sizes[size], 8u, 0u,
+                                   modes[mode], 0, 0u, 0, 0u, 1), SALTS_OK);
+          check_equal(mail_run_path(counts[lane], sizes[size], 8u, 0u,
+                                   modes[mode], 0, 0u, 0, MAIL_BATCH, 1), SALTS_ECANCELED);
+        }
+  }
+  bench("lane handoff comparison: direct owner versus producer mailbox") {
+    const size_t sizes[] = {64u, MAIL_MAX_BYTES}, counts[] = {1u, MAIL_LANES};
+    printf("MAILBOX_TOPOLOGY,logical_sources_per_lane=2,direct_workers_per_lane=1,mailbox_workers_per_lane=3,direct_staging=16,load=saturated\n");
+#if defined(FLOWMQ_BENCH_WITH_ZMQ)
+    int major, minor, patch;
+    zmq_version(&major, &minor, &patch);
+    printf("MAILBOX_ZMQ,version=%d.%d.%d,context=per_lane,io_threads_per_context=1,events=sender_once_per_progress\n", major, minor, patch);
+#endif
+    mail_report_header();
+    for (size_t repeat = 0u; repeat < MAIL_REPEATS; ++repeat)
+      for (size_t size = 0u; size < 2u; ++size)
+        for (size_t lane = 0u; lane < 2u; ++lane) {
+          const size_t bytes = sizes[(size + repeat) % 2u];
+          const int modes[] = {0, bytes == 64u ? 3 : 1,
+#if defined(FLOWMQ_BENCH_WITH_ZMQ)
+                               MAIL_ZMQ_COPY_EVENTS, MAIL_ZMQ_OWNED_EVENTS,
+#endif
+          };
+          const size_t mode_count = sizeof(modes) / sizeof(modes[0]);
+          for (size_t order = 0u; order < mode_count; ++order)
+            for (size_t path = 0u; path < 2u; ++path) {
+              const int direct = (int)((path + repeat) % 2u);
+              check_equal(mail_run_path(counts[(lane + repeat) % 2u], bytes,
+                  bytes == 64u ? MAIL_SATURATED_ROUNDS : MAIL_ROUNDS, 0u,
+                  modes[(order + repeat) % mode_count], !direct, repeat + 1u, 1, 0u, direct), SALTS_OK);
+            }
+        }
+  }
 #if defined(FLOWMQ_BENCH_WITH_ZMQ)
   it("mailbox ZMQ correctness: rejection releases only the temporary external message reference") {
     check_equal(mail_zmq_rejection_case(), SALTS_OK);

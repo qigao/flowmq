@@ -32,12 +32,17 @@ if(BUILD_TESTS)
            COMMAND bench_flowmq_owner_mailbox --filter "mailbox correctness:")
   add_test(NAME bench_flowmq_owner_mailbox
            COMMAND bench_flowmq_owner_mailbox --filter "mailbox comparison:")
-  set_tests_properties(test_flowmq_owner_mailbox PROPERTIES
+  add_test(NAME test_flowmq_lane_direct
+           COMMAND bench_flowmq_owner_mailbox --filter "lane direct correctness:")
+  add_test(NAME bench_flowmq_lane_handoff
+           COMMAND bench_flowmq_owner_mailbox --filter "lane handoff comparison:")
+  set_tests_properties(test_flowmq_owner_mailbox test_flowmq_lane_direct PROPERTIES
     LABELS "flowmq;flowmq-transport" RUN_SERIAL TRUE TIMEOUT 120)
-  set_tests_properties(bench_flowmq_owner_mailbox PROPERTIES
+  set_tests_properties(bench_flowmq_owner_mailbox bench_flowmq_lane_handoff PROPERTIES
     LABELS "flowmq;benchmark" RUN_SERIAL TRUE TIMEOUT 600)
   if(WIN32)
-    set_tests_properties(test_flowmq_owner_mailbox bench_flowmq_owner_mailbox PROPERTIES
+    set_tests_properties(test_flowmq_owner_mailbox bench_flowmq_owner_mailbox
+                        test_flowmq_lane_direct bench_flowmq_lane_handoff PROPERTIES
       ENVIRONMENT_MODIFICATION "${FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS}")
   endif()
 endif()

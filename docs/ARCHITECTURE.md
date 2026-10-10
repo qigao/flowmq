@@ -327,6 +327,16 @@ CPU cycles，但 Windows 上计划释放到完成的 P99 增加到约 16–18 ms
 
 ### 内部 Disruptor mailbox qualification
 
+数据路径按调用线程选择：业务已经位于 socket 的固定 owner lane 时，直接调用
+send/recv 并在同一线程推进 CNet，不要求再经过 Actor、mailbox 或 executor。
+owner 是状态与 I/O 归属，不隐含独立消费线程。只有确实跨线程的 producer 才需要
+有界 owning handoff；它不能成为普通同 lane 调用的必经层。跨线程路径保留原有
+背压、FIFO 和 shutdown 契约，不允许由外部 producer 直接操作 owner socket。
+应用可以合并准备与 I/O 来减少 worker 和空转，也可以显式保留并行准备；两者的
+吞吐/CPU 取舍由 [直通与 mailbox 对照](FLOWMQ_LANE_SCALING.md#同-lane-直通与跨线程-mailbox-对照2026-10-10)
+验证，不把消除 mailbox 等同于所有负载都会提高吞吐。此约束复用现有 API，
+不引入新的调度器、自动线程迁移或公开 mailbox 接口。
+
 内部验证采用每 lane 一个有界 MPSC mailbox：业务 producer 只向预先绑定的 lane 发布
 拥有引用的 slice，唯一 consumer 是该 lane 的 owner。socket/context/backend 始终在 owner
 线程创建、推进和销毁。队列使用 Salts Disruptor worker 模式但只有一个 consumer，

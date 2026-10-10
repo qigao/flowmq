@@ -935,3 +935,125 @@ ctest --preset bench-win-release-user -R "^bench_flowmq_mailbox_zmq_progress$" -
 字节指针的显式类型转换以清除新 warning，最终 build/test 日志为
 `build/mailbox-zmq-final-{build,correctness}.log`。本轮未重跑全部 transport 回归，
 也未构建关闭可选 ZMQ 的配置；生产源码没有变化。
+
+## 同 lane 直通与跨线程 mailbox 对照（2026-10-10）
+
+比较同一 owner 内完成准备、发送、接收的 direct 路径，与两个 producer 通过 MPSC
+mailbox 转交给 owner 的路径。每 lane 均为两个逻辑消息源，每源 64 个固定 buffer，
+每批准备 16 条；完整 payload、源内 FIFO、发送策略及应用在途上限 128 均相同。
+direct 不创建 producer 线程或 Disruptor，只有一个最多 16 条的本地 owning 批次；
+两个逻辑源按批轮换。它测量合并线程和消除转交的整体收益，不是纯队列指令成本。
+
+每个 backing 保留一个基础引用，仅该源准备消息时可修改；只有 refcount==1 才可
+复用。direct 准备遇到暂不可用的 buffer 时返回 owner 收发/progress，禁止等待自己
+推进才能完成的释放。部分准备的批次继续拥有已取得的 slices，完整准备后才发送；
+发送拒绝保留 slice，成功后释放本地引用。取消时释放未发送的批次，再关闭 socket、
+drain native/context，最后确认全部 backing 归还基础引用并恰好释放一次。
+
+此组只比较饱和负载，不为 direct 引入未验证的定时生产或空闲等待策略。CPU 统计
+包含所有线程；1/8 lane 的应用 worker 数分别为 direct 1/8、mailbox 3/24，另有
+controller。ZMQ 仍有额外后台线程，并使用已验证的 sender EVENTS 推进。
+
+### 结果：降低 CPU 成本，不保证每种负载吞吐提高
+
+生产 runtime 仍为 `c198cf1`，在 `4858793` 的 harness 上增加 direct 对照与 buffer
+扫描计数。最终 [128 组原始 CSV](flowmq-lane-handoff-windows-20261010.csv) 覆盖
+2 payload × 2 lane 数 × 4 发送策略 × 2 路径 × 4 轮。路径先后顺序交替，发送策略
+和 payload/lane 顺序轮换。共 19,169,280 条、20,535,312,384 payload bytes，
+24.56 s；全部完整校验通过。这里不使用之前增加逐次计数的试跑数据，最终计数在
+一次 buffer 搜索结束时统一累加，避免为每次 refcount 检查额外写计数。
+
+下表为八 lane 四轮中位数，吞吐单位 k条/s。两条路径均保留完整 payload 填充与
+逐字节接收校验；direct 使用 8 个应用 worker，mailbox 使用 24 个。
+
+| payload | FlowMQ 策略 | mailbox k条/s | direct k条/s | mailbox cycles/条 | direct cycles/条 | mailbox P99 ms | direct P99 ms |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 64 B | copy | 4,017.853 | 3,647.382 | 13,149 | 4,923 | 0.500 | 0.107 |
+| 64 B | batch SG/16 | 1,864.559 | 2,091.586 | 29,200 | 8,957 | 0.715 | 0.322 |
+| 64 KiB | copy | 22.175 | 22.908 | 2,004,772 | 773,279 | 94.116 | 48.464 |
+| 64 KiB | immediate SG | 42.845 | 37.661 | 1,098,974 | 472,650 | 28.670 | 4.181 |
+
+以下比例先按同轮计算 `direct / mailbox − 1`，再取四轮中位数，不能直接由上表
+两个独立中位数相除替代：
+
+| payload / 策略 | 吞吐变化 | cycles/条变化 | prepare→receive P99 变化 | direct 吞吐胜出轮数 |
+| --- | ---: | ---: | ---: | ---: |
+| 64 B copy | −2.7% | −62.3% | −80.1% | 2/4 |
+| 64 B batch SG | +7.7% | −68.4% | −54.3% | 4/4 |
+| 64 KiB copy | +6.2% | −61.3% | −50.7% | 3/4 |
+| 64 KiB immediate SG | −14.2% | −56.2% | −85.3% | 0/4 |
+
+**事实：**FlowMQ 四种八 lane 配置的 direct cycles/条均在四轮中全部下降；吞吐没有
+统一方向。小 retained 的提升范围为 1.007–1.740 倍，波动明显，不把 +7.7% 当作
+稳定平台保证。单 lane 同样节省 CPU：copy/batch SG 小消息 cycles 配对下降
+62.4%/74.9%，copy/immediate SG 大消息下降 55.6%/61.7%。单 lane 小 retained
+吞吐四轮全胜、配对 +33.5%，其他 FlowMQ 配置没有稳定吞吐提升。
+
+**MED / 事实：buffer 扫描是当前 producer 空转的具体来源。**八 lane mailbox 每条
+消息平均检查 source refcount 的次数（四轮中位数）为：64 B copy 约 520 次、
+batch SG 1,151 次；64 KiB copy 约 56,470 次、SG 33,832 次。所有 FlowMQ direct
+计时组都是每消息恰好一次检查，buffer 耗尽重试为零。源码的 producer 在 64 个
+source 均未释放时执行全表扫描、yield、重试；它等待的释放由另一个 owner 推进。
+例如八 lane 大消息 SG 每组完成 8,192 条，mailbox 有约 433 万次完整扫描失败。
+这是真实的应用 producer 等待成本，不能归为 Disruptor 单次入队成本或 Actor 固有成本。
+
+**推论：**合并线程消除了本 workload 下的 producer 等待扫描、跨线程发布和唤醒，
+因此显著降低总 CPU 成本；同时将 payload 准备串行放回 owner，失去并行准备能力，
+可能降低吞吐。本实验没有 CPU stack/调度采样，不能把节省的所有 cycles 单独归给
+buffer 扫描。ZMQ 也出现类似取舍：八 lane direct copy/owned 的大消息配对吞吐
+下降 9.8%/16.5%，cycles/条下降 50.9%/40.1%。
+
+P99 的起点仍为取得可复用 buffer 后、填充前，终点为完整接收校验后。direct
+最多准备一批 16 条，mailbox 可以由外部 producer 更早准备并积压更多消息；没有
+统一外部到达计划。P99 降低包含准备深度与排队策略的变化，不能解释为任意应用
+请求端到端延迟同比降低，也不能用来推导低负载 CPU 利用率。
+
+### direct 路径与 ZMQ
+
+同为 direct 的八 lane 结果如下；ZMQ 仍有自己的后台 I/O/管理线程，CPU 全部计入，
+双方没有固定总核预算或 CPU affinity。
+
+| payload / 路径 | FlowMQ k条/s | ZMQ + EVENTS k条/s | FMQ/ZMQ（吞吐中位数比） |
+| --- | ---: | ---: | ---: |
+| 64 B copy | 3,647.382 | 5,221.943 | 0.698 |
+| 64 B retained | 2,091.586 | 5,389.695 | 0.388 |
+| 64 KiB copy | 22.908 | 37.019 | 0.619 |
+| 64 KiB retained | 37.661 | 39.764 | 0.947 |
+
+大消息 direct SG 相对 ZMQ owned 的四轮配对吞吐 −4.7%、cycles/条 −30.2%、P99
+−43.6%；小消息 direct copy 则为 −26.4%、−30.5%、−69.0%。消除 mailbox 没有
+自动消除所有与 ZMQ 的吞吐差距，尤其小 retained 的差距仍然较大。
+
+用户提及的原单条优势属于另一个 workload。本次任务前在 `4858793` 上复跑原
+`bench_flowmq_zmq_comparison` 三次通过：64 B 发送后立即接收为 FlowMQ 108,058、
+ZMQ 36,174 条/s（2.99 倍）；batch64 为 1,516,084/1,288,840 条/s；64 KiB 单条
+为 594.27/765.93 MiB/s。日志 `build/direct-zmq-regression-20261010.log`。
+它们是原 benchmark 三次结果的中位数，不是本节 direct owner 的回归比；不同
+progress、负载与计时口径的结果必须分开。
+
+### 设计选择、验证与限制
+
+同 lane 数据路径继续直接调用现有 send/recv 与 owner progress，不添加强制
+Actor/mailbox 层。跨线程 producer 保留有界 handoff；如果业务必须保留这种拓扑，
+后续应单独验证有通知的 buffer 归还/等待协议，避免持续全表扫描，而不是绕过
+owner 亲和或无界扩大 source 池。小 retained 合批与大消息 byte-budget 扫描仍是
+独立问题。生产库本来就允许 direct，本轮没有需要回滚的生产默认值、公开 ABI、
+wire protocol 或依赖变更；实验实现限于 benchmark，正式规则补入 ARCHITECTURE。
+
+新增两个正式 direct 用例：一项强制仅三个 source 可用，证明半批准备会返回、
+恢复后 FIFO/内容保持正确并归还所有引用；另一项覆盖 1/8 lane、64 B/64 KiB、
+四种 FlowMQ 策略及两种 ZMQ EVENTS 策略的 wrap、成功与取消共 48 组。
+最终 Release build 无新增 warning，原七个 FlowMQ mailbox、三个 ZMQ mailbox 与
+两个 direct 用例连续十轮全部通过，52.64 s。最终测量后没有修改 C 源码。
+
+```powershell
+cmake --build --preset win-release-user
+ctest --preset win-release-user -R "^test_flowmq_(owner_mailbox|mailbox_zmq|lane_direct)$" --repeat until-fail:10 -V
+ctest --preset bench-win-release-user -R "^bench_flowmq_lane_handoff$" -V
+```
+
+最终日志为 `build/lane-handoff-final-{build,correctness,comparison}.log`。CSV 核对
+唯一配置、消息数、应用 worker 数、wake 数、SG 消息/range、应用在途峰值 ≤128，
+以及 EVENTS 查询数和 buffer 检查计数。未测 direct 定时/空闲策略、关闭 ZMQ 的
+构建配置、全 transport 回归、其他平台、TLS、跨机或 native 失败注入。新增正式
+用例验证的是内部 progress qualification，不扩展公开 owner_poll 的唤醒契约。
