@@ -681,3 +681,107 @@ ctest --preset win-release-user -L "flowmq-transport" --output-on-failure
 最终日志：`build/mailbox-sg-build-qualified.log`、`build/mailbox-sg-qualified.log`、
 `build/mailbox-sg-qualified-comparison.log`、`build/mailbox-sg-transport-regression.log`。
 早期短时长的 `build/mailbox-sg-comparison.log` 不进入最终 CSV，也不与本表混合统计。
+
+## 有界 retained SG 跨消息合批（2026-10-10）
+
+### 实现与兼容边界
+
+本轮复用 FlowMQ 的 outbound publication/credit/HWM 和 CNet retained vector，
+增加不安装的 TCP PAIR 单部消息排队入口；公开 `flowmq_send_slice()` 仍然是原来的
+immediate admission，已有 fanout 仍一条 publication 对应一条 CNet 逻辑写入。
+私有配置只允许 owner 创建的 PAIR 在 connect 前指定每次 1–16 条消息。
+
+首条 idle 消息直接提交。后续消息进入既有有界 outbound queue，每个 slot 保有
+完整 framing 与 payload slices；flush 只合并连续 retained entries，最多 16 条、
+`CNET_RETAINED_VECTOR_MAX=32` 个 ranges，且不超过既有 `max_encoded_size`。
+遇到复制项停止当前 retained batch，按原队列 FIFO 继续。没有 payload flatten、
+SNDMORE 合并或固定凑批 timer。队列成功接纳后，调用方可以释放自己的引用，但
+backing 在 FlowMQ queued ownership 或 CNet 在途 ownership 结束前保持不可变。
+
+CNet 接纳失败不弹出任何 slot；成功后才释放 FlowMQ publication，由 CNet 保活到
+真实 terminal。FlowMQ 记录这一逻辑写入的消息数与 payload 总字节，在 on_send
+完成时归还相应 HWM 占用；发送 credit 仍在各消息首次接纳时提交一次。取消和关闭
+复用原先的 queued release、native drain，slot 释放不意味着 backing 可立即复用。
+每个 queued publication 仍会分配固定上限的 descriptor 对象并克隆引用；本轮没有
+消除这部分分配或引用成本。复杂度为每批 O(messages + ranges)，临时范围数组有界。
+
+按 `$cmeta`/`$cnet`/`$ace` 核对后，既有 CMeta Schema 继续描述静态 pattern/peer
+状态，运行时队列与批次仍由 FlowMQ owner 管理；NativeIO/CNet 仍是完成事实源。
+没有引入第二套 ACT 终态记录、Leader/Followers、Component registry 或 scheduler。
+本轮 SDK 实际仍为 `2.3.0-rc.1` / `58ff08fc95b4aa1dc493c0b7080426b2c11d4959`；
+使用 RC2 skill 指引不代表 SDK 或 CMeta ABI 已升级。
+
+### 同批四种路径对照
+
+继续使用上节的相同 mailbox、producer/source buffer 数量、TCP PAIR、完整内容校验、
+1/8 lanes（3/24 工作线程）、无 affinity、64 B/64 KiB、连续/每批 sleep(5 ms) 负载。
+四种 send 策略分别为 `copy`、公开立即 `sg`、私有 `queued_sg`（最多一消息/写入）、
+私有 `batch_sg`（最多 16 消息/写入）。后两者拥有相同 admission/queue 预算，用于
+隔离跨消息 batching 的效果。每组固定 wait 策略下四种 send 循环换位四轮；wait、
+payload 和 lane 顺序也轮换。只在本轮配对，不能将上节不同运行的绝对值当作回归比。
+
+[256 组原始 CSV](flowmq-retained-batch-windows-20261010.csv)：共 **19,759,104 条消息、
+39,881,539,584 字节 payload**，每组约 74.6–1,400.7 ms。新增 `sg_*` 字段记录写入数、
+消息数、ranges 数及每批最大消息/range 数，只统计私有 queued-send 的成功 CNet admission，
+包含首条直接发送；不统计 native submission、peer receipt、复制或公开立即发送。
+`copy`/`sg` 的这些字段为零代表未采样，不能据此解释为没有网络写入。
+
+以下为满载四轮吞吐中位数，单位 kmsg/s；百分比是每轮配对比值变化的中位数：
+
+| payload | lanes | wait | copy | immediate SG | queued SG/1 | batch SG/16 | batch 相对 queued 吞吐 | cycles/条变化 |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 64 B | 1 | spin | 746.667 | 113.178 | 107.809 | 449.408 | +314.3% | −75.8% |
+| 64 B | 1 | wake | 823.575 | 107.387 | 106.472 | 419.520 | +293.9% | −74.6% |
+| 64 B | 8 | spin | 3203.831 | 476.376 | 462.354 | 1851.664 | +300.7% | −75.0% |
+| 64 B | 8 | wake | 3805.072 | 500.765 | 470.270 | 1755.129 | +270.5% | −73.3% |
+| 64 KiB | 1 | spin | 5.458 | 6.568 | 6.109 | 5.884 | −0.3% | −5.1% |
+| 64 KiB | 1 | wake | 5.008 | 6.054 | 6.330 | 5.876 | −6.3% | +5.6% |
+| 64 KiB | 8 | spin | 14.328 | 31.992 | 37.002 | 30.018 | −9.5% | +17.7% |
+| 64 KiB | 8 | wake | 16.377 | 30.211 | 34.869 | 30.509 | −8.0% | +4.6% |
+
+**事实：小 retained 消息有稳定的合批收益。**64 B 所有 lane/wait 配置均四轮胜过
+queued SG/1 和 immediate SG，但均零轮胜过 copy。八 lane wake 的 CNet 逻辑写入
+从每组 **524,288 → 36,864.5**（四轮中位数），降约 93%；平均约 14.2 消息/写入，
+最大 16 消息/32 ranges。其 P99 中位数 **2.699 → 0.810 ms**，配对下降 70.0%；
+send busy 中位数 **493,890 → 73,414**，owner step **561,006 → 106,319.5**。
+这证明单纯排队不足，跨消息合批才减少了可见的逐消息推进成本。
+
+**MED / 事实：大 retained 消息没有稳定的最大批收益。**64 KiB 八 lane wake 中，batch
+相对 queued 吞吐只赢一轮，P99 中位数 **31.882 → 41.113 ms**、配对增加 25.5%。
+每组写入 **8,192 → 520**，并未带来相应 CPU 或吞吐改善。大消息样本波动明显，
+例如 queued wake 的一轮 P99 达 241.84 ms；四轮结果不足以推导最优 batch 大小，
+也不能把所有差异归因于 SG 系统调用。
+
+**推论：**大批次会将多个 source buffer 的释放绑定到同一逻辑终态，可能拉长占用和
+尾延迟；producer 填充、逐字节接收校验及 yield 等待仍在计时范围内。需以 1/2/4/8/16
+消息与批次字节上限的后续对照和 profiling 区分这些因素，不能仅凭写入次数越少就
+选择越大的 batch。小帧需要交错的 framing/payload，32-range 逻辑上限只能容纳
+16 个两段消息；复制路径能够将更多小帧装入连续 buffer。这里没有测量 native syscall 数。
+
+同一 batch SG 策略的低负载 wake 相对 spin，cycles/条配对下降为：64 B 单/八 lane
+**97.5% / 97.2%**，64 KiB 单/八 lane **61.1% / 33.2%**。仍是实际 publish 唤醒，
+不是固定定时 tick。低负载 sleep 不是固定 offered rate；高负载 producer 仍 yield
+重试，不能把 cycles/条下降描述为整机 CPU 利用率同比下降。
+
+### 验证与选择
+
+采用内部 opt-in 验证，保留生产默认路径。小 borrowed 消息继续适合复制合批；小
+retained 消息已验证可用跨消息 SG 显著改善。大 retained 消息继续保留立即发送和
+较小批次候选，不设置未经扫描验证的自动大小阈值。回滚只涉及私有接入、计数与
+batch qualification；无公开接口、协议、持久格式或依赖升级。
+
+正式测试增加配置/owner 拒绝、首条立即提交、HWM 消息与字节独立饱和、拒绝不
+增加引用、copy/retained 混合 FIFO、64 B/65,537 B/1 MiB 的 16/8/1 消息 range 上限、
+queued 与 native 同时持有引用时关闭。原有 MPSC wrap 和取消测试扩展到全部四种
+发送策略。所有 backing 最终归还基础引用，release callback 恰好一次。
+
+完整 Release build 通过；最终 **7 个 mailbox 测试连续十轮通过**（17.36 s）。
+**33/33 transport CTest 通过**（211.25 s），包括普通/池化 socket、retained
+multipart/fanout、owner/listener/fault、公开 C11/C++17 和多核示例。
+
+最终验证日志：`build/retained-batch-final-build.log`、
+`build/retained-batch-final-correctness.log`、`build/retained-batch-comparison.log`、
+`build/retained-batch-regression.log`。benchmark 为 256 组、124.93 s；之后只增加
+配置拒绝的正式测试，运行路径和测量实现未改。复现沿用上节 CMake/CTest 命令。
+未覆盖新合批路径的 CNet admission 失败注入、native 部分失败注入、TLS、跨机、
+Linux/macOS 或 sanitizer；32-range 实测包含多次 native 提交，但不等同于故障注入。

@@ -39,13 +39,15 @@ struct mail_lane_s {
   mail_producer producers[MAIL_PRODUCERS];
   uint64_t *latencies;
   size_t received, admitted, polls, send_busy, segments;
+  flowmq_retained_queue_stats_t sg_stats;
   uint64_t finished_ns;
 };
 struct mail_run_s {
   cmeta_mutex_t mutex;
   cmeta_cond_t changed;
   atomic_int error;
-  size_t ready, writers_ready, done, rounds, bytes, cancel_after;
+  size_t ready, writers_ready, done, rounds, bytes, cancel_after, admission_limit;
+  int limit_bytes;
   int started, cleanup, notify, retained;
   uint32_t pause_ms;
 };
@@ -155,7 +157,10 @@ static int mail_open(mail_lane *lane) {
   size_t size = 0u, ready = 0u;
   const int hwm = MAIL_CAPACITY;
   const int reconnect = -1;
-  const size_t hwm_bytes = (size_t)MAIL_CAPACITY * lane->run->bytes;
+  /* Boundary fixtures leave twice the tested burst in the other byte budget,
+   * so message-HWM and byte-HWM rejection are independently exercised. */
+  const size_t hwm_bytes = (lane->run->admission_limit != 0u
+      ? 2u * lane->run->admission_limit : MAIL_CAPACITY) * lane->run->bytes;
   int status;
   lane->ctx = flowmq_ctx_new();
   if (lane->ctx == NULL) return SALTS_ENOMEM;
@@ -165,6 +170,11 @@ static int mail_open(mail_lane *lane) {
   lane->sender = flowmq_owner_socket(lane->owner, FLOWMQ_PAIR);
   lane->receiver = flowmq_owner_socket(lane->owner, FLOWMQ_PAIR);
   if (lane->sender == NULL || lane->receiver == NULL) return SALTS_ENOMEM;
+  if (lane->run->retained >= 2) {
+    status = flowmq_socket_internal_retained_queue(
+        lane->sender, lane->run->retained == 2 ? 1u : MAIL_BATCH);
+    if (status != SALTS_OK) return status;
+  }
   flowmq_socket_t *sockets[] = {lane->sender, lane->receiver};
   for (size_t i = 0; i < 2u; ++i) {
     status = flowmq_setsockopt(sockets[i], FLOWMQ_RECONNECT_IVL, &reconnect, sizeof(reconnect));
@@ -172,6 +182,14 @@ static int mail_open(mail_lane *lane) {
     if (status == SALTS_OK) status = flowmq_setsockopt(sockets[i], FLOWMQ_RCVHWM, &hwm, sizeof(hwm));
     if (status == SALTS_OK) status = flowmq_setsockopt(sockets[i], FLOWMQ_SNDHWM_BYTES, &hwm_bytes, sizeof(hwm_bytes));
     if (status == SALTS_OK) status = flowmq_setsockopt(sockets[i], FLOWMQ_RCVHWM_BYTES, &hwm_bytes, sizeof(hwm_bytes));
+    if (status != SALTS_OK) return status;
+  }
+  if (lane->run->admission_limit != 0u) {
+    const int limit = (int)lane->run->admission_limit;
+    const size_t limit_bytes = lane->run->admission_limit * lane->run->bytes;
+    status = lane->run->limit_bytes
+        ? flowmq_setsockopt(lane->sender, FLOWMQ_SNDHWM_BYTES, &limit_bytes, sizeof(limit_bytes))
+        : flowmq_setsockopt(lane->sender, FLOWMQ_SNDHWM, &limit, sizeof(limit));
     if (status != SALTS_OK) return status;
   }
   status = flowmq_socket_internal_bind_external(lane->receiver, "tcp://127.0.0.1:0");
@@ -239,7 +257,9 @@ static void mail_consume(void *arg) {
         break;
       }
       mail_entry *entry = disruptor_acquire_entry(lane->queue, &pending);
-      status = run->retained
+      status = run->retained >= 2
+          ? flowmq_socket_internal_send_slice_queued(lane->sender, &entry->slice)
+          : run->retained
           ? flowmq_send_slice(lane->sender, &entry->slice, FLOWMQ_DONTWAIT)
           : flowmq_send(lane->sender, entry->slice.data, entry->slice.length, FLOWMQ_DONTWAIT);
       if (status == SALTS_EBUSY || status == SALTS_ENOBUFS) {
@@ -280,6 +300,14 @@ static void mail_consume(void *arg) {
   if (status == SALTS_OK)
     for (size_t i = 0u; i < MAIL_PRODUCERS; ++i)
       if (expected[i] != run->rounds * MAIL_BATCH) status = SALTS_EPROTO;
+  if (lane->sender != NULL) {
+    const int read = flowmq_socket_internal_retained_queue_stats(lane->sender, &lane->sg_stats);
+    if (status == SALTS_OK) status = read;
+  }
+  if (status == SALTS_OK && run->retained >= 2 &&
+      (lane->sg_stats.messages != total || lane->sg_stats.max_ranges > 32u ||
+       lane->sg_stats.max_messages > (run->retained == 2 ? 1u : MAIL_BATCH)))
+    status = SALTS_EPROTO;
   mail_error(run, status);
   cmeta_mutex_lock(&run->mutex);
   ++run->done;
@@ -318,6 +346,7 @@ static int mail_run_case(size_t lanes, size_t bytes, size_t rounds, uint32_t pau
   uint64_t *latencies = NULL, start = 0u, finish = 0u;
   size_t created = 0u, writers = 0u, admitted = 0u, received = 0u;
   size_t polls = 0u, busy = 0u, wakes = 0u, full = 0u, buffer_waits = 0u, segments = 0u;
+  flowmq_retained_queue_stats_t sg_stats = {0};
   int status = SALTS_OK;
   if (lanes == 0u || lanes > MAIL_LANES || bytes < sizeof(mail_header) ||
       bytes > MAIL_MAX_BYTES || rounds == 0u || rounds > MAIL_SATURATED_ROUNDS) return SALTS_EINVAL;
@@ -382,6 +411,11 @@ measured_done:
     mail_lane *lane = &workers[i];
     admitted += lane->admitted; received += lane->received;
     polls += lane->polls; busy += lane->send_busy; segments += lane->segments;
+    sg_stats.writes += lane->sg_stats.writes;
+    sg_stats.messages += lane->sg_stats.messages;
+    sg_stats.ranges += lane->sg_stats.ranges;
+    if (sg_stats.max_messages < lane->sg_stats.max_messages) sg_stats.max_messages = lane->sg_stats.max_messages;
+    if (sg_stats.max_ranges < lane->sg_stats.max_ranges) sg_stats.max_ranges = lane->sg_stats.max_ranges;
     if (lane->finished_ns > finish) finish = lane->finished_ns;
     for (size_t j = 0u; j < MAIL_PRODUCERS; ++j) {
       mail_producer *p = &lane->producers[j];
@@ -404,13 +438,16 @@ measured_done:
   if (status == SALTS_OK && (received != total || admitted != total || finish <= start)) status = SALTS_EPROTO;
   if (status == SALTS_OK && measured) {
     qsort(latencies, total, sizeof(*latencies), mail_compare);
-    printf("MAILBOX_RESULT,%zu,%zu,%zu,%u,%s,%s,%zu,%llu,%.3f,%.3f,%d,%.3f,%llu,%zu,%zu,%zu,%zu,%zu,%zu\n",
-           bytes, lanes, repeat, pause_ms, retained ? "sg" : "copy", notify ? "wake" : "spin",
+    const char *send_names[] = {"copy", "sg", "queued_sg", "batch_sg"};
+    printf("MAILBOX_RESULT,%zu,%zu,%zu,%u,%s,%s,%zu,%llu,%.3f,%.3f,%d,%.3f,%llu,%zu,%zu,%zu,%zu,%zu,%zu,%llu,%llu,%llu,%zu,%zu\n",
+           bytes, lanes, repeat, pause_ms, send_names[retained], notify ? "wake" : "spin",
            total, (unsigned long long)(finish - start), (double)total * 1e9 / (finish - start),
            (double)(after.cpu_ns - before.cpu_ns) / total, after.cpu_cycles_available,
            (double)(after.cpu_cycles - before.cpu_cycles) / total,
            (unsigned long long)latencies[(total * 99u + 99u) / 100u - 1u],
-           polls, busy, wakes, full, buffer_waits, segments);
+           polls, busy, wakes, full, buffer_waits, segments,
+           (unsigned long long)sg_stats.writes, (unsigned long long)sg_stats.messages,
+           (unsigned long long)sg_stats.ranges, sg_stats.max_messages, sg_stats.max_ranges);
   }
   if (status != SALTS_OK && !(cancel_after != 0u && status == SALTS_ECANCELED))
     fprintf(stderr, "MAILBOX_ERROR,status=%d,lanes=%zu,bytes=%zu,sg=%d,wake=%d,received=%zu/%zu\n",
@@ -497,7 +534,130 @@ static int mail_wake_case(int delayed) {
   return status;
 }
 
+/* Queue a deterministic burst without progress: prove the first message is
+ * submitted immediately, full rejection owns nothing, and actual CNet writes
+ * join distinct wire messages. Large frames exercise logical/native splitting. */
+static int mail_batch_case(size_t bytes, int mixed, int byte_hwm, int close_pending) {
+  enum { COUNT = 32 };
+  mail_run run = {0};
+  mail_lane lane = {0};
+  mem_buffer_t *buffers[COUNT] = {0};
+  uint64_t latencies[COUNT] = {0}, expected[MAIL_PRODUCERS] = {0};
+  mail_release_counter released;
+  unsigned char *storage = malloc(COUNT * bytes);
+  int status, final_status;
+  if (storage == NULL) return SALTS_ENOMEM;
+  atomic_init(&run.error, SALTS_OK);
+  atomic_init(&released.count, 0u);
+  run.bytes = bytes; run.retained = 3;
+  run.admission_limit = COUNT; run.limit_bytes = byte_hwm;
+  lane.run = &run; lane.latencies = latencies;
+  status = mail_open(&lane);
+  if (status == SALTS_OK && flowmq_socket_internal_retained_queue(lane.sender, 1u) != SALTS_EBUSY)
+    status = SALTS_EPROTO;
+  for (size_t i = 0u; status == SALTS_OK && i < COUNT; ++i) {
+    mem_slice_t slice;
+    const mail_header header = {0u, 0u, i, cmeta_hrtime()};
+    mail_fill(storage + i * bytes, bytes, &header);
+    buffers[i] = mem_wrap_external(storage + i * bytes, bytes, mail_released, &released);
+    if (buffers[i] == NULL) { status = SALTS_ENOMEM; break; }
+    slice = mem_slice(buffers[i], 0u, bytes);
+    if (i == 1u && (flowmq_send_slice(lane.sender, &slice, FLOWMQ_DONTWAIT) != SALTS_EBUSY ||
+                    mem_buffer_ref_count(buffers[i]) != 2u)) status = SALTS_EPROTO;
+    if (status == SALTS_OK)
+      status = mixed && i == 12u
+          ? flowmq_send(lane.sender, slice.data, slice.length, FLOWMQ_DONTWAIT)
+          : flowmq_socket_internal_send_slice_queued(lane.sender, &slice);
+    mem_slice_release(&slice);
+  }
+  if (status == SALTS_OK) {
+    mem_slice_t rejected = mem_slice(buffers[0], 0u, bytes);
+    const uint32_t refs = mem_buffer_ref_count(buffers[0]);
+    if (flowmq_socket_internal_send_slice_queued(lane.sender, &rejected) != SALTS_ENOBUFS ||
+        mem_buffer_ref_count(buffers[0]) != refs) status = SALTS_EPROTO;
+    mem_slice_release(&rejected);
+  }
+  if (status == SALTS_OK) {
+    status = flowmq_socket_internal_retained_queue_stats(lane.sender, &lane.sg_stats);
+    if (status == SALTS_OK && (lane.sg_stats.messages != 1u || lane.sg_stats.writes != 1u))
+      status = SALTS_EPROTO;
+  }
+  const uint64_t deadline = cmeta_monotonic_ms() + MAIL_DEADLINE_MS;
+  while (status == SALTS_OK && !close_pending && lane.received < COUNT) {
+    status = mail_status(&run, deadline);
+    if (status == SALTS_OK) status = flowmq_owner_internal_step(lane.owner, 0u);
+    if (status == SALTS_OK) status = mail_receive(&lane, expected);
+    if (status == SALTS_EBUSY) status = SALTS_OK;
+  }
+  if (status == SALTS_OK && !close_pending) {
+    status = flowmq_socket_internal_retained_queue_stats(lane.sender, &lane.sg_stats);
+    const size_t ranges_per_message = 2u * ((bytes + 65535u) / 65536u);
+    const size_t expected_max = 32u / ranges_per_message;
+    if (status == SALTS_OK && (expected[0] != COUNT ||
+        lane.sg_stats.messages != COUNT - (mixed != 0) ||
+        lane.sg_stats.max_messages != expected_max ||
+        lane.sg_stats.max_ranges != expected_max * ranges_per_message)) status = SALTS_EPROTO;
+  }
+  final_status = status;
+  if (lane.sender != NULL) {
+    status = flowmq_owner_close_socket(lane.owner, lane.sender);
+    if (final_status == SALTS_OK) final_status = status;
+  }
+  if (lane.receiver != NULL) {
+    status = flowmq_owner_close_socket(lane.owner, lane.receiver);
+    if (final_status == SALTS_OK) final_status = status;
+  }
+  if (lane.owner != NULL) {
+    status = flowmq_owner_term(lane.owner);
+    if (final_status == SALTS_OK) final_status = status;
+  }
+  if (lane.ctx != NULL) {
+    status = flowmq_ctx_term(lane.ctx);
+    if (final_status == SALTS_OK) final_status = status;
+  }
+  size_t allocated = 0u;
+  for (size_t i = 0u; i < COUNT; ++i) if (buffers[i] != NULL) {
+    ++allocated;
+    if (mem_buffer_ref_count(buffers[i]) != 1u) abort();
+    mem_buffer_release(buffers[i]);
+  }
+  if (atomic_load(&released.count) != allocated) final_status = SALTS_EPROTO;
+  free(storage);
+  return final_status;
+}
+
 spec("FlowMQ internal SG mailbox") {
+  it("mailbox correctness: queue configuration rejects invalid limits and unsupported owners") {
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_owner_t *owner = ctx != NULL ? flowmq_owner_new(ctx, NULL) : NULL;
+    flowmq_socket_t *pair = owner != NULL ? flowmq_owner_socket(owner, FLOWMQ_PAIR) : NULL;
+    flowmq_socket_t *push = owner != NULL ? flowmq_owner_socket(owner, FLOWMQ_PUSH) : NULL;
+    flowmq_socket_t *ordinary = ctx != NULL ? flowmq_socket(ctx, FLOWMQ_PAIR) : NULL;
+    int status = pair != NULL && push != NULL && ordinary != NULL ? SALTS_OK : SALTS_ENOMEM;
+    if (status == SALTS_OK &&
+        (flowmq_socket_internal_retained_queue(NULL, 1u) != SALTS_EINVAL ||
+         flowmq_socket_internal_retained_queue(pair, 0u) != SALTS_EINVAL ||
+         flowmq_socket_internal_retained_queue(pair, MAIL_BATCH + 1u) != SALTS_EINVAL ||
+         flowmq_socket_internal_retained_queue(push, 1u) != SALTS_ENOTSUP ||
+         flowmq_socket_internal_retained_queue(ordinary, 1u) != SALTS_ENOTSUP ||
+         flowmq_socket_internal_retained_queue(pair, 1u) != SALTS_OK ||
+         flowmq_socket_internal_retained_queue(pair, MAIL_BATCH) != SALTS_OK)) status = SALTS_EPROTO;
+    if (ordinary != NULL) { const int closed = flowmq_close(ordinary); if (status == SALTS_OK) status = closed; }
+    if (push != NULL) { const int closed = flowmq_owner_close_socket(owner, push); if (status == SALTS_OK) status = closed; }
+    if (pair != NULL) { const int closed = flowmq_owner_close_socket(owner, pair); if (status == SALTS_OK) status = closed; }
+    if (owner != NULL) { const int closed = flowmq_owner_term(owner); if (status == SALTS_OK) status = closed; }
+    if (ctx != NULL) { const int closed = flowmq_ctx_term(ctx); if (status == SALTS_OK) status = closed; }
+    check_equal(status, SALTS_OK);
+  }
+  it("mailbox correctness: batches distinct frames within range bounds and preserves mixed FIFO") {
+    check_equal(mail_batch_case(64u, 0, 0, 0), SALTS_OK);
+    check_equal(mail_batch_case(64u, 1, 1, 0), SALTS_OK);
+    check_equal(mail_batch_case(65537u, 0, 1, 0), SALTS_OK);
+    check_equal(mail_batch_case(1024u * 1024u, 0, 0, 0), SALTS_OK);
+  }
+  it("mailbox correctness: closing drops queued frames and drains the native retained write") {
+    check_equal(mail_batch_case(65537u, 1, 1, 1), SALTS_OK);
+  }
   it("mailbox correctness: full admission preserves ownership and publication gaps preserve order") {
     check_equal(mail_queue_case(), SALTS_OK);
   }
@@ -510,31 +670,34 @@ spec("FlowMQ internal SG mailbox") {
     const size_t counts[] = {1u, MAIL_LANES};
     for (size_t size = 0u; size < 2u; ++size)
       for (size_t lane = 0u; lane < 2u; ++lane)
-        for (int retained = 0; retained <= 1; ++retained)
+        for (int retained = 0; retained < 4; ++retained)
           for (int notify = 0; notify <= 1; ++notify)
             check_equal(mail_run_case(counts[lane], sizes[size], 8u, 0u, retained, notify, 0u, 0, 0u), SALTS_OK);
   }
   it("mailbox correctness: cancellation joins producers and releases pending SG references") {
-    check_equal(mail_run_case(1u, MAIL_MAX_BYTES, 32u, 0u, 1, 1, 0u, 0, MAIL_BATCH), SALTS_ECANCELED);
-    check_equal(mail_run_case(MAIL_LANES, MAIL_MAX_BYTES, 32u, 0u, 1, 1, 0u, 0, MAIL_BATCH), SALTS_ECANCELED);
+    for (int retained = 1; retained < 4; ++retained) {
+      check_equal(mail_run_case(1u, MAIL_MAX_BYTES, 32u, 0u, retained, 1, 0u, 0, MAIL_BATCH), SALTS_ECANCELED);
+      check_equal(mail_run_case(MAIL_LANES, MAIL_MAX_BYTES, 32u, 0u, retained, 1, 0u, 0, MAIL_BATCH), SALTS_ECANCELED);
+    }
   }
   bench("mailbox comparison: retained SG and copy with spin and wake") {
     const size_t sizes[] = {64u, MAIL_MAX_BYTES};
     const size_t counts[] = {1u, MAIL_LANES};
     printf("MAILBOX_CONFIG,producers_per_lane=%d,capacity=%d,buffers_per_producer=%d,batch=%d,rounds=%d,small_saturated_rounds=%d,repeats=%d,affinity=unbound,receive=slicev\n",
            MAIL_PRODUCERS, MAIL_CAPACITY, MAIL_BUFFERS, MAIL_BATCH, MAIL_ROUNDS, MAIL_SATURATED_ROUNDS, MAIL_REPEATS);
-    printf("MAILBOX_HEADER,payload_bytes,lanes,repeat,pause_ms,send,wait,messages,wall_ns,messages_per_second,cpu_ns_per_message,cpu_cycles_available,cpu_cycles_per_message,prepare_receive_p99_ns,poll_calls,send_busy,wake_calls,queue_full,buffer_waits,receive_segments\n");
+    printf("MAILBOX_HEADER,payload_bytes,lanes,repeat,pause_ms,send,wait,messages,wall_ns,messages_per_second,cpu_ns_per_message,cpu_cycles_available,cpu_cycles_per_message,prepare_receive_p99_ns,poll_calls,send_busy,wake_calls,queue_full,buffer_waits,receive_segments,sg_writes,sg_messages,sg_ranges,sg_max_messages,sg_max_ranges\n");
     for (size_t repeat = 0u; repeat < MAIL_REPEATS; ++repeat)
       for (size_t size = 0u; size < 2u; ++size)
         for (size_t lane = 0u; lane < 2u; ++lane)
           for (size_t load = 0u; load < 2u; ++load)
+          for (size_t wait = 0u; wait < 2u; ++wait)
             for (size_t mode = 0u; mode < 4u; ++mode) {
               const size_t policy = (mode + repeat) % 4u;
               const size_t bytes = sizes[(size + repeat) % 2u];
               const size_t rounds = load == 0u && bytes == 64u ? MAIL_SATURATED_ROUNDS : MAIL_ROUNDS;
               check_equal(mail_run_case(counts[(lane + repeat) % 2u], bytes,
                                         rounds, load != 0u ? 5u : 0u,
-                                        (int)(policy / 2u), (int)(policy % 2u), repeat + 1u, 1, 0u), SALTS_OK);
+                                        (int)policy, (int)((wait + repeat) % 2u), repeat + 1u, 1, 0u), SALTS_OK);
             }
   }
 }

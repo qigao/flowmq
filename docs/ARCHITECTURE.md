@@ -359,8 +359,23 @@ SG 的实际接入使用现有 `flowmq_send_slice()`：FlowMQ 将 framing 与原
 `flowmq_recv_slicev()` 并直接遍历 ranges，不先 coalesce。复制 API 对照的后续发送
 也可能使用 CNet SG，故对照比较的是 payload admission 方式，而不是有无系统 SG。
 当前 retained PAIR 即时发送仍要求 peer write idle，不能由 Disruptor 批量发布推导出
-网络也批量提交。后续跨消息 retained batching 必须保留每条 FMQ 消息边界、credit、
+网络也批量提交。跨消息 retained batching 必须保留每条 FMQ 消息边界、credit、
 HWM、FIFO 与终态释放，不能用 SNDMORE 将独立消息合成一个 multipart 来替代。
+
+当前内部 PAIR qualification 使用相同 outbound 存储比较单消息 flush 与最多 16
+消息 SG flush，同时限制 32 个 CNet ranges 和既有 max_encoded_size。每个 slot
+拥有完整 FMQ 消息的 publication；接纳时一次提交 credit/HWM，失败不留下引用。
+首条 idle 消息直接提交，不等待凑批。后续只合并相邻 retained entries，遇到复制项、
+消息数/range/字节边界即停止；CNet 接纳失败保留全部 slots 和引用，成功后 CNet
+接管 backing 寿命，FlowMQ 以该批消息数/字节数处理一个逻辑完成。关闭复用现有
+queued release 和 native terminal drain。公开 immediate slice 和 fanout 契约保持
+原行为；私有 queued send 只接受 owner 上的 TCP PAIR 单部消息。
+
+模式归属：NativeIO/CNet 是 Proactor 的完成事实源，FlowMQ owner 串行管理协议状态，
+mailbox 是有界 owning handoff；不引入 Leader/Followers、第二个 ACT 终态表或隐藏
+executor。CMeta 继续提供已有类型/接口契约，本轮没有新增反射或动态策略需求，
+不把运行时队列算法塞进 metadata/schema。RC2 skill 是审查指引，实际编译仍依据
+当前 pinned SDK，不将 RC2 的头文件或测试清单视为已完成 SDK 升级。
 
 每个 live peer 独占 heartbeat deadline、pending-PONG 和双向累计 credit 状态。
 peer 的可变协议状态拆成三个独立维度，而不是一个乘积型大 FSM：
