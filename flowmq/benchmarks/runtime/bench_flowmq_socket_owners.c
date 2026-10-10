@@ -27,6 +27,9 @@ enum {
   OWNER_LANE_WARMUPS = 8,
   OWNER_LANE_REPEATS = 8,
   OWNER_LANE_STEPS = 4,
+  OWNER_PACED_PERIOD_MS = 5,
+  OWNER_PACED_ROUNDS = 256,
+  OWNER_PACED_REPEATS = 6,
   OWNER_WINDOW = 16,
   OWNER_SMALL_BYTES = 64,
   OWNER_LARGE_BYTES = 64 * 1024,
@@ -85,6 +88,8 @@ typedef struct owner_run_s {
   int lane_scaling;
   int use_zmq;
   int shared_owner;
+  uint32_t period_ms;
+  int idle_wait;
   size_t payload_bytes;
   size_t rounds;
   const owner_tls_files_t *files;
@@ -103,9 +108,12 @@ typedef struct owner_worker_s {
   unsigned char *payload;
   unsigned char *received;
   uint64_t *latencies;
+  uint64_t *scheduled_latencies;
+  uint64_t release_ns;
   size_t sample_count;
   size_t retries;
   size_t poll_calls;
+  uint64_t max_release_lag_ns;
   uint64_t started_ns;
   uint64_t finished_ns;
   int workload_status;
@@ -143,6 +151,41 @@ static int owner_progress(owner_worker_t *worker, owner_pair_t *pair, uint64_t d
 
 static int owner_socket_option(flowmq_socket_t *socket, int option, const char *value) {
   return flowmq_setsockopt(socket, option, value, strlen(value));
+}
+
+/* Fixed scheduled releases, not a sleep added after each burst. Both policies
+ * offer the same work on the same cadence; late releases catch up without loss.
+ * Only receivers are interesting while idle. POLLOUT would keep a healthy lane
+ * awake. Other sockets and their control/credit deadlines still progress. */
+static int owner_wait_release(owner_worker_t *worker, size_t round) {
+  const uint64_t release = worker->started_ns +
+      (uint64_t)(round + 1u) * worker->run->period_ms * 1000000u;
+  worker->release_ns = release;
+  flowmq_pollitem_t items[OWNER_LANE_PAIRS] = {0};
+  for (size_t i = 0u; i < worker->pair_count; ++i)
+    items[i] = (flowmq_pollitem_t){worker->pairs[i].receiver, FLOWMQ_POLLIN, 0};
+  worker->operation = "scheduled release";
+  for (;;) {
+    const uint64_t now = cmeta_hrtime();
+    size_t ready = 0u;
+    int status = atomic_load_explicit(&worker->run->error, memory_order_relaxed);
+    if (status != SALTS_OK) return status;
+    if (now >= release) {
+      const uint64_t lag = now - release;
+      if (lag > worker->max_release_lag_ns) worker->max_release_lag_ns = lag;
+      return SALTS_OK;
+    }
+    /* Round up the remaining fraction of a millisecond. Overshoot is recorded
+     * as release lag, never excluded from the total measurement interval. */
+    const uint32_t wait_ms = worker->run->idle_wait
+        ? (uint32_t)((release - now + 999999u) / 1000000u) : 0u;
+    ++worker->poll_calls;
+    status = flowmq_owner_poll(worker->owner, items, worker->pair_count, wait_ms, &ready);
+    if (status != SALTS_OK) return status;
+    /* Previous round consumed every expected message. Unexpected data/errors
+     * must fail, rather than turning a ready socket into an idle spin loop. */
+    if (ready != 0u) return SALTS_EPROTO;
+  }
 }
 
 #if defined(FLOWMQ_BENCH_WITH_ZMQ)
@@ -343,8 +386,12 @@ static int owner_lane_round(owner_worker_t *worker, int measured) {
       if (received_size != bytes || memcmp(worker->received, worker->payload, bytes) != 0)
         return SALTS_EPROTO;
     }
-    if (measured)
-      worker->latencies[worker->sample_count++] = cmeta_hrtime() - pair->burst_started_ns;
+    if (measured) {
+      const uint64_t completed_ns = cmeta_hrtime();
+      if (worker->scheduled_latencies != NULL)
+        worker->scheduled_latencies[worker->sample_count] = completed_ns - worker->release_ns;
+      worker->latencies[worker->sample_count++] = completed_ns - pair->burst_started_ns;
+    }
     pair->sequence += OWNER_LANE_WINDOW;
   }
   /* libzmq's I/O thread drives transport and credit in the background. */
@@ -456,6 +503,8 @@ static void owner_worker_entry(void *arg) {
   if (status == SALTS_OK) worker->phase = "measured";
   for (size_t round = 0u; status == SALTS_OK && round < run->rounds; ++round) {
     status = atomic_load_explicit(&run->error, memory_order_relaxed);
+    if (status == SALTS_OK && run->period_ms != 0u)
+      status = owner_wait_release(worker, round);
     if (status == SALTS_OK && run->lane_scaling) status = owner_lane_round(worker, 1);
     if (!run->lane_scaling)
       for (size_t i = 0u; status == SALTS_OK && i < worker->pair_count; ++i)
@@ -485,10 +534,10 @@ static int owner_compare_ns(const void *left, const void *right) {
   return (a > b) - (a < b);
 }
 
-static int owner_run_configured(size_t owners, size_t payload_bytes, size_t rounds, int tls,
+static int owner_run_policy(size_t owners, size_t payload_bytes, size_t rounds, int tls,
                      const owner_tls_files_t *files, int measured, size_t repetition,
                      int peer_pool, int lane_scaling, size_t order, owner_engine_t engine,
-                     size_t engine_order) {
+                     size_t engine_order, uint32_t period_ms, int idle_wait) {
   owner_run_t run = {0};
   owner_worker_t workers[OWNER_LANE_THREADS] = {0};
   cmeta_thread_t threads[OWNER_LANE_THREADS] = {0};
@@ -496,6 +545,7 @@ static int owner_run_configured(size_t owners, size_t payload_bytes, size_t roun
   const size_t window = lane_scaling ? OWNER_LANE_WINDOW : OWNER_WINDOW;
   size_t messages, expected_samples;
   uint64_t *latencies;
+  uint64_t *scheduled_latencies = NULL;
   flowmq_bench_metrics_t before = {0}, after = {0};
   uint64_t started_ns = 0u, finished_ns = 0u;
   size_t created = 0u, samples = 0u, retries = 0u;
@@ -510,6 +560,7 @@ static int owner_run_configured(size_t owners, size_t payload_bytes, size_t roun
 #endif
   if (use_zmq && (!lane_scaling || tls || peer_pool)) return SALTS_EINVAL;
   if (shared_owner && (!lane_scaling || tls)) return SALTS_EINVAL;
+  if (period_ms != 0u && (!shared_owner || period_ms > OWNER_TIMEOUT_MS)) return SALTS_EINVAL;
   if (owners == 0u || owners > OWNER_LANE_THREADS || pairs % owners != 0u ||
       rounds == 0u || rounds > OWNER_MAX_ROUNDS || payload_bytes < 2u * sizeof(uint64_t))
     return SALTS_EINVAL;
@@ -520,6 +571,13 @@ static int owner_run_configured(size_t owners, size_t payload_bytes, size_t roun
     return SALTS_ERANGE;
   latencies = calloc(expected_samples, sizeof(*latencies));
   if (latencies == NULL) return SALTS_ENOMEM;
+  if (period_ms != 0u) {
+    scheduled_latencies = calloc(expected_samples, sizeof(*scheduled_latencies));
+    if (scheduled_latencies == NULL) {
+      free(latencies);
+      return SALTS_ENOMEM;
+    }
+  }
   atomic_init(&run.error, SALTS_OK);
   cmeta_mutex_init(&run.mutex);
   cmeta_cond_init(&run.changed);
@@ -528,6 +586,8 @@ static int owner_run_configured(size_t owners, size_t payload_bytes, size_t roun
   run.lane_scaling = lane_scaling;
   run.use_zmq = use_zmq;
   run.shared_owner = shared_owner;
+  run.period_ms = period_ms;
+  run.idle_wait = idle_wait;
   run.payload_bytes = payload_bytes;
   run.rounds = rounds;
   run.files = files;
@@ -536,6 +596,8 @@ static int owner_run_configured(size_t owners, size_t payload_bytes, size_t roun
     workers[i].first_pair = i * (pairs / owners);
     workers[i].pair_count = pairs / owners;
     workers[i].latencies = latencies + i * (expected_samples / owners);
+    if (scheduled_latencies != NULL)
+      workers[i].scheduled_latencies = scheduled_latencies + i * (expected_samples / owners);
     status = cmeta_thread_create(&threads[i], owner_worker_entry, &workers[i]);
     if (status != SALTS_OK) break;
     ++created;
@@ -598,6 +660,7 @@ measurement_finished:
         (samples * OWNER_PERCENTILE + OWNER_PERCENT_SCALE - 1u) / OWNER_PERCENT_SCALE - 1u;
     if (lane_scaling) {
       size_t polls = 0u;
+      uint64_t max_release_lag_ns = 0u;
       for (size_t i = 0u; i < created; ++i) {
         owner_worker_t *worker = &workers[i];
         if (worker->sample_count != expected_samples / owners) {
@@ -608,7 +671,9 @@ measurement_finished:
         const size_t lane_p99 =
             (worker->sample_count * OWNER_PERCENTILE + OWNER_PERCENT_SCALE - 1u) /
                 OWNER_PERCENT_SCALE - 1u;
-        if (measured == 2)
+        if (measured == 3)
+          printf("LANE_CPU_WORKER,%s,%u,%zu,", idle_wait ? "wait" : "spin", period_ms, engine_order);
+        else if (measured == 2)
           printf("LANE_COMPARE_WORKER,%s,%zu,", engine_name, engine_order);
         else printf("LANE_WORKER,");
         printf("%zu,%zu,%zu,%zu,%zu,%zu,%zu,%llu,%llu,%llu,%zu,%zu\n",
@@ -618,10 +683,19 @@ measurement_finished:
                (unsigned long long)(worker->finished_ns - started_ns),
                (unsigned long long)worker->latencies[lane_p99], worker->poll_calls, worker->retries);
         polls += worker->poll_calls;
+        if (worker->max_release_lag_ns > max_release_lag_ns)
+          max_release_lag_ns = worker->max_release_lag_ns;
       }
       if (status == SALTS_OK) {
         qsort(latencies, samples, sizeof(*latencies), owner_compare_ns);
-        if (measured == 2)
+        if (measured == 3) {
+          qsort(scheduled_latencies, samples, sizeof(*scheduled_latencies), owner_compare_ns);
+          printf("LANE_CPU_RESULT,%s,%u,%zu,%llu,%llu,%d,%.3f,", idle_wait ? "wait" : "spin",
+                 period_ms, engine_order, (unsigned long long)max_release_lag_ns,
+                 (unsigned long long)scheduled_latencies[p99], after.cpu_cycles_available,
+                 (double)(after.cpu_cycles - before.cpu_cycles) / messages);
+        }
+        else if (measured == 2)
           printf("LANE_COMPARE_RESULT,%s,%zu,", engine_name, engine_order);
         else printf("LANE_RESULT,");
         printf("%zu,%zu,%zu,%zu,%zu,%zu,%zu,%llu,%.3f,%.3f,%llu,%llu,%zu,%zu,%llu\n",
@@ -644,7 +718,16 @@ measurement_finished:
   cmeta_cond_destroy(&run.changed);
   cmeta_mutex_destroy(&run.mutex);
   free(latencies);
+  free(scheduled_latencies);
   return status;
+}
+
+static int owner_run_configured(size_t owners, size_t payload_bytes, size_t rounds, int tls,
+                     const owner_tls_files_t *files, int measured, size_t repetition,
+                     int peer_pool, int lane_scaling, size_t order, owner_engine_t engine,
+                     size_t engine_order) {
+  return owner_run_policy(owners, payload_bytes, rounds, tls, files, measured, repetition,
+                          peer_pool, lane_scaling, order, engine, engine_order, 0u, 0);
 }
 
 static int owner_run(size_t owners, size_t payload_bytes, size_t rounds, int tls,
@@ -766,6 +849,42 @@ spec("FlowMQ independent owners") {
           check_equal(owner_run_configured(owners, sizes[size], OWNER_CHECK_ROUNDS,
                                             0, &files, 0, 0u, pool, 1, 0u,
                                             OWNER_ENGINE_SHARED, 0u), SALTS_OK);
+  }
+
+  it("correctness: paced shared lanes preserve content and order across idle waits") {
+    const size_t sizes[] = {64u, 1024u};
+    for (size_t size = 0u; size < 2u; ++size)
+      for (size_t owners = 1u; owners <= OWNER_LANE_THREADS; owners *= OWNER_LANE_THREADS)
+        for (int wait = 0; wait <= 1; ++wait)
+          check_equal(owner_run_policy(owners, sizes[size], OWNER_CHECK_ROUNDS, 0, &files,
+                                        0, 0u, 0, 1, 0u, OWNER_ENGINE_SHARED, 0u,
+                                        OWNER_PACED_PERIOD_MS, wait), SALTS_OK);
+  }
+
+  bench("paced lanes: shared owner idle spin versus deadline wait") {
+    const size_t sizes[] = {64u, 1024u};
+    printf("LANE_CPU_CONFIG,pairs=%d,batch=%d,period_ms=%d,rounds=%d,repeats=%d,"
+           "active_poll_timeout_ms=0,release=fixed-schedule,logical_cpus=%d,affinity=unbound\n",
+           OWNER_LANE_PAIRS, OWNER_LANE_WINDOW, OWNER_PACED_PERIOD_MS,
+           OWNER_PACED_ROUNDS, OWNER_PACED_REPEATS, cmeta_cpu_count());
+    printf("LANE_CPU_HEADER,policy,period_ms,policy_order,max_release_lag_ns,"
+           "scheduled_completion_p99_ns,cpu_cycles_available,cpu_cycles_per_message,payload_bytes,"
+           "lanes,repeat,order,connections,batch,messages,wall_ns,messages_per_second,"
+           "cpu_ns_per_message,burst_p95_ns,burst_p99_ns,poll_calls,send_retries,process_peak_rss_bytes\n");
+    printf("LANE_CPU_WORKER_HEADER,policy,period_ms,policy_order,payload_bytes,lanes,repeat,"
+           "order,lane,connections,messages,start_offset_ns,finish_offset_ns,burst_p99_ns,"
+           "poll_calls,send_retries\n");
+    for (size_t repeat = 0u; repeat < OWNER_PACED_REPEATS; ++repeat)
+      for (size_t size = 0u; size < 2u; ++size)
+        for (size_t order = 0u; order < 2u; ++order) {
+          const size_t owners = (order + repeat) % 2u == 0u ? 1u : OWNER_LANE_THREADS;
+          for (size_t policy = 0u; policy < 2u; ++policy)
+            check_equal(owner_run_policy(owners, sizes[(size + repeat) % 2u],
+                                          OWNER_PACED_ROUNDS, 0, &files, 3, repeat + 1u,
+                                          0, 1, order, OWNER_ENGINE_SHARED, policy,
+                                          OWNER_PACED_PERIOD_MS, (int)((repeat + policy) % 2u)),
+                        SALTS_OK);
+        }
   }
 
   bench("shared lanes: ordinary and shared owners on independent threads") {

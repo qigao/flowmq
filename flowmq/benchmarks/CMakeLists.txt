@@ -21,6 +21,18 @@ if(WIN32)
   target_link_libraries(bench_flowmq_socket_owners PRIVATE psapi)
 endif()
 if(BUILD_TESTS)
+  add_test(NAME bench_flowmq_paced_lanes
+           COMMAND bench_flowmq_socket_owners --filter "paced lanes:")
+  set_tests_properties(bench_flowmq_paced_lanes PROPERTIES
+    LABELS "flowmq;benchmark" RUN_SERIAL TRUE TIMEOUT 300)
+  add_test(NAME test_flowmq_paced_lanes
+           COMMAND bench_flowmq_socket_owners --filter "correctness: paced shared lanes")
+  set_tests_properties(test_flowmq_paced_lanes PROPERTIES
+    LABELS "flowmq;flowmq-transport" RUN_SERIAL TRUE TIMEOUT 120)
+  if(WIN32)
+    set_tests_properties(bench_flowmq_paced_lanes test_flowmq_paced_lanes PROPERTIES
+      ENVIRONMENT_MODIFICATION "${FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS}")
+  endif()
   add_test(NAME bench_flowmq_shared_lanes
            COMMAND bench_flowmq_socket_owners --filter "shared lanes:")
   set_tests_properties(bench_flowmq_shared_lanes PROPERTIES

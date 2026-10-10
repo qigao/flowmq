@@ -222,6 +222,21 @@ spec("FlowMQ explicit owner lane") {
                     owner, clients, peers, OWNER_TEST_LANES, 0x21u),
                 SALTS_OK);
 
+    /* Flags zero do not supply a second progress domain for owner sockets.
+     * An empty receive must use DONTWAIT + owner_poll instead. */
+    {
+      unsigned char received[32];
+      size_t size = 0u;
+      flowmq_pollitem_t idle = {.socket = clients[0], .events = FLOWMQ_POLLIN};
+      check_equal(flowmq_recv(clients[0], received, sizeof(received), &size,
+                              FLOWMQ_DONTWAIT), SALTS_EBUSY);
+      check_equal(flowmq_recv(clients[0], received, sizeof(received), &size, 0),
+                  SALTS_ENOTSUP);
+      check_equal(flowmq_owner_poll(owner, &idle, 1u, 5u, &ready), SALTS_OK);
+      check_equal(ready, 0u);
+      check_equal(idle.revents, 0);
+    }
+
     /*
      * Retire lane 0 while lane 1 remains live. Close the ordinary peer first
      * so owner close can observe the terminal path without another thread.

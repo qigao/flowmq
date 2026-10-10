@@ -392,3 +392,132 @@ benchmark 默认 2,048 rounds、8 repeats；沿用 `FLOWMQ_LANE_BENCH_ROUNDS`（
 `FLOWMQ_LANE_BENCH_REPEATS`（1–9），完整位置平衡需要 8 repeats。日志为
 `build/shared-lanes-build-final.log`、`build/shared-lanes-correctness.log`、
 `build/shared-lanes-regression.log`、`build/shared-lanes-comparison.log`。
+
+## 低负载 CPU 与等待策略（2026-10-10）
+
+### 问题与候选方式
+
+**事实：**饱和测试持续使用 `owner_poll(..., 0)`，shared backend 不会让调用方的
+忙循环自动休眠。当前 owner poll 先执行零等待推进，再按剩余调用超时等待；各个
+socket 的 CNet/FlowMQ deadline 可进一步缩短 backend wait。一次 owner wait 仍
+推进所有 owner-local sockets，items 只决定哪些 readiness 可以让调用提前返回。
+
+| 方式 | CPU 与延迟取舍 | 本轮处理 |
+| --- | --- | --- |
+| 全程零超时 poll | 空闲仍扫描；避免等待超时引入的定时迟到 | 保留对照和调用方选择 |
+| 有工作时批量处理，空闲时事件等待 | 减少空转；须核实平台等待和调度迟到 | 测量现有 API，不改变默认语义 |
+| 有限自旋后等待 | 可能兼顾短间隔到达与空闲 CPU；不能自动解决定时等待过冲 | 尚未测量，不指定猜测的自旋阈值 |
+| 减少独立 lanes | 减少扫描、线程和唤醒；单 lane 容量/延迟可能成为约束 | 同批比较 1/8 lanes，连接静态归属 |
+| 多线程竞争同一 owner / Leader-Follower | 需要新的同步、移交和关闭协议，不直接消除空转 | 当前 owner 契约不支持，不采用 |
+
+**选择：**延续每线程独立 context + owner + sockets，调用方按负载和延迟目标选择
+lane 数与 poll timeout。等待时监听接收侧 POLLIN，仅在确实有待发送工作时监听对应
+POLLOUT；常驻可写事件会让 poll 立即返回。`events=0` 可以推进，但不能靠普通数据
+readiness 提前结束正超时调用。owner socket 使用 DONTWAIT 收发，并由 owner poll
+推进；initialized owner socket 需要普通阻塞 progress 时返回 ENOTSUP。头文件此次
+补充这些已有契约以及 context 生命周期串行化要求，没有改变签名、ABI 或协议。
+
+跨线程应用命令不能只排入队列后假定 native wait 自动醒来。未来若需要此能力，须
+先明确有界队列、payload 移交、空转为非空时合并唤醒、取消/关闭和 drain 协议。
+当前 owner poll 不提供这种应用命令唤醒契约，不引入动态连接迁移或共享 owner 锁。
+
+### 测量协议
+
+基于 `583e66d` 的正式 TinyTest harness 增加 `bench_flowmq_paced_lanes`，沿用上述
+Windows/SDK/编译器配置。固定八条 TCP PAIR 连接、每连接 batch=128、收发 HWM=128，
+两端同 lane，listener 仍走私有 qualification 入口。比较 64 B/1 KiB、1/8 lanes、
+spin/wait；每组 256 轮、六次配对重复，共 48 组，每组 **262,144 条**，合计
+**12,582,912 条**计时消息。两种策略各在三次重复中领先；payload 和 lane 顺序轮转。
+每条消息核对长度、连接 ID、FIFO 和完整内容，全部发送重试计数为零。
+
+每个 worker 的固定释放计划为第 k 轮在 `start + k * 5 ms` 释放下一批，全局计划
+速率为 `8 * 128 / 0.005 = 204,800 条/秒`。迟到后补齐所有批次，不丢弃工作，也不在
+每轮完成后重新计算完整的 5 ms sleep。有数据时两种策略执行相同零超时推进/credit
+循环；等待下一次释放时，spin 在接收侧 POLLIN items 上反复 poll(0)，wait 在同一
+owner 上等待距下一次释放的剩余时间，向上取整到毫秒。控制/credit 仍正常推进；
+已有数据全部接收后若出现意外 readiness/error 则测试失败，不继续空转掩盖问题。
+
+这是**本地定时突发测试**，不是远端报文或外部线程随机到达时的唤醒延迟测试。
+burst P99 是首次实际发送到该连接最后接收；scheduled completion P99 是计划释放到
+最后接收，包含迟到和同 lane 排队；max release lag 是全组最坏释放迟到。平均完成
+速率包含全部等待。setup/warmup/cleanup 不计入测量；先采样，再允许 worker 清理，
+所有线程 join 后汇总。scheduled latency 数组按固定总量预分配，每线程写自己的
+区间，热循环不新增分配或跨线程消息共享。
+
+CPU 时间沿用进程 user+kernel 增量。本轮部分短促执行的 64 B 单 lane wait 样本
+出现零 CPU 时间增量，不能解释为零成本。因此 Windows metrics 适配层补充
+[QueryProcessCycleTime](https://learn.microsoft.com/en-us/windows/win32/api/realtimeapiset/nf-realtimeapiset-queryprocesscycletime)
+作为独立工作量计数，覆盖所有线程的 user/kernel cycles。本轮所有 cycle 增量均为正；
+保留原单位，不折算时间、频率、能耗或跨机器性能。非 Windows 明确标为
+`cpu_cycles_available=0`，仍保留原 getrusage CPU 时间，不伪造 cycle 数。
+
+### 六轮结果
+
+原始 [48 组 CSV](flowmq-paced-lanes-windows-20261010.csv) 和
+[216 个 worker CSV](flowmq-paced-lanes-workers-windows-20261010.csv) 保留全部重复。
+表中分别取各自六轮中位数；配对变化逐轮计算 `wait/spin - 1` 再取中位数。
+CPU/wall=1 表示一个逻辑 CPU 的执行时间，不是整机 100%。
+
+| payload | lanes | spin CPU/wall | wait CPU/wall | spin cycles/条 | wait cycles/条 | 配对 cycles 下降 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 64 B | 1 | 0.994 | 0.097 | 11,636 | 1,570 | 86.5% |
+| 64 B | 8 | 7.958 | 0.327 | 92,933 | 3,975 | 95.7% |
+| 1 KiB | 1 | 0.994 | 0.353 | 11,653 | 3,508 | 69.9% |
+| 1 KiB | 8 | 7.939 | 0.419 | 92,638 | 5,648 | 93.9% |
+
+CPU/wall 来自上述存在零读数/离散变化的 OS 时间计数，尤其单 lane wait 的精确比例
+不应过度解读。cycles 也受平台计数实现与频率条件影响，只比较同机配对结果。
+
+| payload | lanes | 完成速率 spin→wait（万条/s） | burst P99 spin→wait（ms） | scheduled completion P99 spin→wait（ms） |
+| --- | ---: | ---: | ---: | ---: |
+| 64 B | 1 | 20.472 → 20.349 | 0.679 → 1.210 | 0.828 → 18.331 |
+| 64 B | 8 | 20.477 → 20.344 | 0.251 → 0.485 | 0.259 → 16.796 |
+| 1 KiB | 1 | 20.458 → 20.382 | 1.629 → 2.387 | 1.794 → 16.939 |
+| 1 KiB | 8 | 20.474 → 20.406 | 0.371 → 0.691 | 0.389 → 16.570 |
+
+配对平均完成速率下降依次为 **0.60% / 0.65% / 0.37% / 0.34%**。但它们会补发迟到
+批次，不能由平均速率接近就声称满足 5 ms 实时周期。wait 的组内最坏 release lag
+中位数约 18.65–21.83 ms，全批最大 **27.48 ms**。尚未分离 native wait 超时精度、
+OS 调度、CPU 频率与其他进程的贡献，不能把所有迟到直接归因于 CNet。
+
+poll 次数中位数从 64 B 单/八 lane 的 **281,979 / 12,231,431** 降至
+**1,107 / 8,880**；1 KiB 从 **244,882 / 11,326,686** 降至 **2,898 / 23,208**。
+这直接支持低负载存在大量可避免的空转。这是应用 owner_poll 次数，不是内部
+observe/system-call 次数；未收集硬件能耗或上下文切换计数。
+
+**MED：**等待省 CPU，但本配置显著增加定时迟到和尾延迟，不宜作为所有低延迟场景
+的默认策略。严格周期应先验证平台 timer/native wait，再评估有限自旋；简单给每次
+poll 加固定 sleep 或将 timeout 一律改为 1 ms 没有本轮依据。
+
+**推论：**此约 20 万条/秒目标下，单 lane 已能完成同样消息量，八 lane 不会提高受
+发送计划限制的平均速率，反而增加 CPU 工作量；八 lane busy 模式有更低 burst 和
+scheduled P99。应按目标吞吐与 P99 选最少足够的静态 lanes，不能只按核数配置。
+结论不覆盖单热点连接、非 PAIR、跨机、TLS 或更高目标负载。
+
+### 验证与迁移边界
+
+Release 完整 build 通过。`test_flowmq_paced_lanes` 与 `test_flowmq_owner` 各连续
+十轮通过；前者覆盖 80 个定时配置，后者验证空接收的 DONTWAIT 返回 EBUSY、flags=0
+返回 ENOTSUP，以及正超时无接收 readiness 的结果。48 组 benchmark 全部通过
+（63.77 s），随后 14 个相邻 owner/lane/batch CTest 全部通过（8.59 s），包括旧
+ordinary/TLS/multipart/ZMQ 正确性路径。CSV 审核了唯一组、策略位置、worker
+消息/poll/retry 汇总和时间区间，无缺组或短跑。
+
+没有修改生产 runtime、公开签名、协议、默认等待策略或 listener 发布门槛，无需
+数据迁移。调用方可在既有 API 范围内逐 lane 选择等待，P99 不满足则恢复原 poll
+策略，不在运行中迁移 socket。未运行 Linux/macOS、sanitizer、完整 core/transport
+suite，也未在本批次比较 ZMQ CPU 或外部到达唤醒延迟。
+
+在 VS developer environment 复现：
+
+```powershell
+cmake --build --preset win-release-user
+ctest --preset win-release-user -R "^test_flowmq_(paced_lanes|owner)$" --repeat until-fail:10 --output-on-failure
+ctest --preset bench-win-release-user -R "^bench_flowmq_paced_lanes$" -V
+ctest --preset win-release-user -R "^test_(flowmq_(socket_owners|shared_lanes|paced_lanes|owner|owner_batch|owner_fault|owner_fault_pool|owner_listener|owner_listener_pool|owner_listener_fault|owner_listener_fault_pool)|bench_flowmq_batch.*)$" --output-on-failure
+```
+
+本对照固定 256 rounds、6 repeats、5 ms period，不受饱和 lane benchmark 环境变量
+影响。最终日志为 `build/paced-lanes-build-final.log`、`build/paced-lanes-repeat.log`、
+`build/paced-lanes-cycles.log`、`build/paced-lanes-regression.log`。早期
+`build/paced-lanes-comparison.log` 没有 cycle/计划完成 P99，不与最终 CSV 混合统计。

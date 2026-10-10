@@ -317,6 +317,14 @@ TCP PAIR 连接、batch=128，连接两端固定在同一 ordinary owner 线程�
 完整结果及 CPU/P99 见 [每线程 shared owner 报告](FLOWMQ_LANE_SCALING.md#每线程独立-shared-owner2026-10-10)。
 该实验使用内部 TCP listener 入口，不扩展公开 bind 契约，也未验证非 PAIR 多 lane。
 
+低负载的 lane 数和等待策略需另行选择。[定时突发 CPU 对照](FLOWMQ_LANE_SCALING.md#低负载-cpu-与等待策略2026-10-10)
+在相同约 20.48 万条/秒发送计划下比较 1/8 lanes 和 idle spin/native wait：等待显著减少
+CPU cycles，但 Windows 上计划释放到完成的 P99 增加到约 16–18 ms。当前保留调用方
+选择 `owner_poll` timeout，不新增默认等待策略、隐式线程或跨 lane 状态迁移。
+采用一线程一 context/owner；context 的生命周期计数不因多个 owner 而成为线程安全。
+低 CPU 场景只等待真正需要的 POLLIN/待发送 POLLOUT，并使用最近的应用 deadline；
+严格定时场景还需验证平台等待精度，不能用平均完成速率掩盖迟到。
+
 每个 live peer 独占 heartbeat deadline、pending-PONG 和双向累计 credit 状态。
 peer 的可变协议状态拆成三个独立维度，而不是一个乘积型大 FSM：
 
