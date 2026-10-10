@@ -1289,3 +1289,58 @@ ctest --preset bench-win-release-user -R "^bench_flowmq_lane_sg_sweep$" -V
 同等减少 native 开销”的判断，不能宣称确定了全部 CPU 瓶颈。
 代码中的 retained publication 固定存储 32 个 slice 描述符，而本负载实际只用
 两个；按实际 range 数分配是下一项可单独测量的候选，尚未实现或宣称收益。
+
+## Salts rc.10 三平台消费端基线（2026-10-11）
+
+本轮从 FlowMQ `d532a27` 主线建立独立工作树，使用已发布的 Salts
+`2.3.0-rc.10`。不包含其他工作树未提交的 retained 分配或 owner progress 优化，
+不能与上文不同 SDK、机器和源码的绝对数值相减来声称升级收益。
+
+### 复现与测量边界
+
+手动运行 `.github/workflows/native-sdk-release.yml`，设置 `run_benchmarks=true`。
+Linux、Windows、macOS 的正式 Release preset 显式开启现有
+`FLOWMQ_BUILD_ZMQ_BENCHMARK`；常规 PR 和发布构建默认仍关闭该对照。
+Unix 静态 vcpkg 包的 `libzmq` 是转发到 `libzmq-static` 的 INTERFACE target，
+Release artifact 校验检查实际 archive；链接继续使用包提供的 `libzmq`。
+
+完成正常 build/test/install 后，CI 通过 CTest 执行：
+
+```sh
+ctest --preset bench-host-release-ci --no-tests=error -R '^bench_flowmq_zmq_comparison$' --repeat until-fail:5 -V --output-log build/flowmq-zmq-paired.log
+ctest --preset bench-host-release-ci --no-tests=error -R '^bench_flowmq_lane_handoff$' -V --output-log build/flowmq-zmq-lanes.log
+```
+
+macOS 使用 `bench-mac-release-ci`；Windows 在 MSVC 开发环境使用双引号表达式。
+`flowmq-zmq-<platform>` artifact 保存两个原始日志以及源码 SHA、SDK 版本、RID、
+逻辑 CPU 数和重复次数的 `flowmq-zmq-provenance.json`。
+
+- paired TCP 测试重复整个进程五次，包含 64 B 单条、64 KiB 单条和 64 条 queued
+  batch；各组均先建立连接并预热。这个测试固定先 FlowMQ 后 ZMQ，没有平衡执行顺序。
+- lane handoff 测试在一次进程中完成每配置五次重复，共 160 组。64 B 使用
+  copy / batch SG，64 KiB 使用 copy / immediate SG，并分别与 ZMQ copy / owned
+  sender-events 路径对照。尺寸、lane、模式和 direct/mailbox 顺序轮换；五次重复
+  不能使所有执行位置完全平衡。
+- direct 每 lane 一个应用线程、两个逻辑数据源；mailbox 每 lane 一个 owner 加两个
+  producer。后者仅作为 benchmark 对照，不代表生产路径采用 Actor 或 mailbox。
+- 每 lane 一条 loopback TCP PAIR 连接，1/8 lane 同时改变连接数和总工作量，
+  **不是上文固定八条连接的强扩展实验**。每 lane 的 64 B 组为 65,536 条，
+  64 KiB 组为 1,024 条；应用在途窗口上限 128，direct staging 为 16。
+- ZMQ 每 lane 一个 context，设一个后台 I/O 线程；FlowMQ 在应用 owner 内推进。
+  相同 lane 数不等于相同总线程预算。CPU/条包含进程内全部线程。
+- P99 从 payload 填充前的准备时间戳到接收内容校验，包含 staging、排队和进度等待；
+  不是纯网络 RTT。吞吐也包含逐条 payload 生成、长度、内容和 FIFO 校验。
+- CI 未绑定亲和；8 lane 不代表分配了八个物理核。只在同平台、同负载内计算比值，
+  不按平台绝对值排名。本轮饱和负载不能回答 idle CPU、低负载唤醒或跨机延迟。
+
+### Poll strategy 的归属
+
+`flowmq_socket_drive()` 仍调用 `cnet_client_poll()`；shared owner 由
+`flowmq_owner.c` 观察 NativeIO completion，并通过
+`cnet_client_advance_external()` 推进。升级 rc.10 **不会自动启用**新增的
+`cnet_client_poll_strategy()`。后者只适用于 CNet 内部 backend，external client
+返回 `SALTS_ENOTSUP`。本轮不改变生产 poll、线程归属或 batch 默认值。
+
+后续策略实验须分别验证 standalone bounded drain 和 external owner 的完成批次预算，
+同时比较吞吐、CPU/条、尾延迟与低负载等待，不能把 LF CPU scheduler 直接套在同一个
+I/O owner 上，也不能把 SDK 升级本身标作已经取得的策略收益。
