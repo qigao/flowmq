@@ -3,7 +3,8 @@
 本轮确认了三个局部成本：macOS 单条 exchange 的正超时轮询等待、普通 socket
 progress 中重复检查空闲 listener，以及小消息 retained SG 的底层向量窗口限制。
 这些实验解释了部分已测慢点，尚未解释 FlowMQ/ZMQ 的全部吞吐和尾延迟差距。
-本次只增加 benchmark、CI 与证据，不修改生产 transport、poll 或 batch 默认值。
+初轮归因只增加 benchmark、CI 与证据，不修改生产 transport、poll 或 batch 默认值；
+随后验证的 poll 候选与结果独立记录在文末。
 
 ## 证据与复现
 
@@ -143,7 +144,7 @@ CTest 全部通过。三个 native host 的安装后 C/C++ consumer 各两项通
 
 ## 后续候选：有进展时有界重扫
 
-基于上述等待证据，后续候选在 `flowmq_poll()` 中使用此前丢弃的 completion
+基于上述等待证据，后续候选在 `flowmq_poll()` 中使用此前丢弃的 CNet 回调
 进展计数：有进展且尚无请求的 readiness 时，立即再扫描完整 socket 列表。
 最多连续 32 个有进展的扫描，然后恢复既有休眠；无进展也立即恢复休眠。
 每轮仍检查同一个调用 deadline；零超时仍只有一轮；错误和 readiness 返回不变。
@@ -155,3 +156,54 @@ CTest 全部通过。三个 native host 的安装后 C/C++ consumer 各两项通
 协议进展；增加 handshake 不误报 readiness、列表后部接收和连接空闲 CPU 对照。
 空闲组每配置四次、每次 250 ms，对比 poll 0/1 ms，输出进程 CPU/墙钟之比。
 最终是否保留由三平台功能和性能结果决定，回滚只需撤销本节对应候选改动。
+
+### 三平台结果与保留决定
+
+测量源码 `cbe122d52ea246df8a9d52ea83a76cda1772c603`，
+[CI 与原始 artifacts](https://github.com/qigao/flowmq/actions/runs/38096396399)。
+Salts.Native 仍为 `2.3.0-rc.10`；浮动恢复的 SaltsUtils.Native 已变为
+`4.3.0-rc.8`，与初轮 rc.7 不同。CPU 数仍为 4/4/3、无亲和绑定，但不是同一
+runner 的前后对照；不将两个 run 的绝对吞吐之比标为本补丁的因果收益。
+
+[Exchange CSV](flowmq-rc10-poll-drain-wait-policy-20261011.csv) 有 48 行，
+[连接空闲 CSV](flowmq-rc10-poll-drain-wait-idle-20261011.csv) 有 24 行。
+每配置均四次。下面只比较同一 run、同平台的 1 ms 与 0 ms 策略；吞吐是各自
+中位数，比例是中位数之比。两个策略都使用候选实现，0 ms 仍只扫描一次。
+
+| 平台 | payload | 0 ms：条/s | 1 ms：条/s | 1 ms / 0 ms | CPU ns/条：0 ms → 1 ms |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Linux | 64 B | 72,326 | 72,185 | 0.998× | 13,824 → 13,852 |
+| Linux | 64 KiB | 27,490 | 27,575 | 1.003× | 36,377 → 36,265 |
+| Windows | 64 B | 77,175 | 76,225 | 0.988× | 12,875 → 13,113 |
+| Windows | 64 KiB | 33,511 | 33,790 | 1.008× | 30,518 → 30,518 |
+| macOS | 64 B | 30,612 | 29,702 | 0.970× | 15,885 → 16,952 |
+| macOS | 64 KiB | 22,076 | 20,335 | 0.921× | 29,662 → 31,012 |
+
+| 平台 | 空闲 0 ms：单核占用 | 空闲 1 ms：单核占用 | 空闲 1 ms：poll 次数/s |
+| --- | ---: | ---: | ---: |
+| Linux | 100.00% | 1.41% | 935.3 |
+| Windows | 100.00% | 低于本次 CPU 计时分辨率 | 65.0 |
+| macOS | 22.11% | 0.89% | 125.7 |
+
+空闲占用为每组 `cpu_ns / wall_ns × 100%` 后取中位数，100% 代表占用一个核，
+不是全机 CPU 百分比。Windows 四组 CPU delta 均为零；250 ms 窗口不足以把这种
+粗粒度读数解释成零成本。macOS 零超时轮询在本机也没有占满一个核，不外推平台
+CPU 时间与 wall time 的差异为用户态算法成本。
+
+**决定：保留有界重扫。** 当前等待模式在 64 B 达到同轮零超时吞吐的 97%–100%，
+并保留低空闲 CPU。没有引入新线程、Actor、mailbox、payload 复制或 listener
+跳过策略。预算 32 未做完整最优值扫描，不宣称是通用最优配置。
+
+**MED：空闲唤醒仍未解决。** Windows/macOS 的 1 ms 空闲调用分别平均约
+15.4/8.0 ms 一次（由 `wall_ns / poll_calls` 观察）；调用耗时包含整个扫描和等待，
+不能全部归为 sleep syscall。忙时吞吐接近 spin，不代表低负载首条消息或 P99
+也接近。下一步应比较 completion wait 与周期休眠，保留多 socket 进展、公平性
+和 listener 接纳；现有 `flowmq_owner_poll()` 已有 shared-backend wait，普通
+socket 的多个独立 backend 不能未经设计就塞进一个阻塞等待。
+
+候选的 Linux/Windows 各 47 项、macOS 46 项正式 CTest，以及每 host 四项诊断
+CTest 均通过；打包和安装后 consumer 资格验证全部通过（Android 仅编译/链接）。
+新增两个正式 socket 用例验证 handshake 进展不误报 readiness、
+后部 socket 接收与零超时；原 heartbeat、重连、TLS、pool 等回归同时运行。
+当前没有旧/新实现同进程 A/B、低负载消息 P99 或 sanitizer 新结果；也没有新的
+FlowMQ/ZMQ 同轮比较，因此本节不声称已经反超 ZMQ。

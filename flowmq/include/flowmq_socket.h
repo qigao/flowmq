@@ -322,6 +322,10 @@ FLOWMQ_C_API int flowmq_recv_slicev(flowmq_socket_t *socket,
  * timeout expires, then report the level-triggered ready items. A pending
  * transaction-cancellation error is reported as FLOWMQ_POLLERR until the
  * affected send or receive consumes it.
+ * Zero timeout performs one nonblocking scan. With a positive timeout,
+ * transport progress can trigger bounded full-list rescans before the idle
+ * wait; progress alone does not count as application readiness or reset the
+ * caller's timeout.
  */
 FLOWMQ_C_API int flowmq_poll(flowmq_pollitem_t *items, size_t item_count,
                              uint32_t timeout_ms, size_t *ready);

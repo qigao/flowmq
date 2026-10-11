@@ -62,7 +62,8 @@ enum {
       FLOWMQ_PROTOCOL_MAX_IDENTITY_SIZE + FLOWMQ_PROTOCOL_MAX_TOPIC_SIZE,
   FLOWMQ_SOCKET_BLOCKING_SLICE_MS = 10u,
   /* Bound active full-list scans before yielding even when unrelated transport
-   * completions keep arriving. An idle scan keeps the existing sleep policy. */
+   * transport callbacks keep arriving. An idle scan keeps the existing sleep
+   * policy. */
   FLOWMQ_SOCKET_POLL_ACTIVE_PASSES = 32u,
   FLOWMQ_SOCKET_SHUTDOWN_TIMEOUT_MS = 1000u,
   FLOWMQ_SOCKET_DEFAULT_TIMEOUT_MS = 1000u,
@@ -5395,8 +5396,8 @@ int flowmq_poll(flowmq_pollitem_t *items, size_t item_count,
       const uint64_t remaining_ms =
           elapsed_ms >= timeout_ms ? 0u : (uint64_t)timeout_ms - elapsed_ms;
       if (remaining_ms == 0u) return SALTS_OK;
-      /* A completion can enqueue the next protocol step without making the
-       * requested application event ready yet. Give every socket another turn
+      /* A transport callback can enqueue the next protocol step without making
+       * the requested application event ready yet. Give every socket another turn
        * before sleeping, but preserve the call-wide deadline and idle yield. */
       if (progressed && ++active_passes < FLOWMQ_SOCKET_POLL_ACTIVE_PASSES)
         continue;
