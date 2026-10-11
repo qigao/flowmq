@@ -235,7 +235,37 @@ FlowMQ/ZMQ 同轮比较，因此本节不声称已经反超 ZMQ。
   和中途接收失败；join 失败时测试进程终止，不能假装已经 quiescent。
 - 进程 CPU 包含 sender、receiver 与 controller；不是 receiver 单线程 CPU。
   每配置五次，共 40 组，轮换 period 和策略顺序；五次不能完全平衡四种顺序。
-  暂不修改生产等待策略，以该对照决定 completion-wait 的后续边界。
+  基准本身不修改生产等待策略，以该对照决定 completion-wait 的后续边界。
+
+### 唤醒基线结果
+
+源码 `cdf805800c86ebbe37269a2ff638919054a98822`，
+[基线 CI](https://github.com/qigao/flowmq/actions/runs/38097913356)，
+[120 行原始 CSV](flowmq-rc10-wake-baseline-20261011.csv)。三个 host 使用
+Salts.Native `2.3.0-rc.10` / SaltsUtils.Native `4.3.0-rc.8`；CPU 为 4/4/3，
+无亲和绑定。以下是五次运行的 P99 中位数，单位 ms，起点为首次发送尝试。
+
+| 平台 | 计划周期 | ordinary 0 ms | ordinary 1 ms | owner 0 ms | owner 20 ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Linux | 5 ms | 0.046 | 1.090 | 0.042 | 0.103 |
+| Linux | 20 ms | 0.048 | 1.091 | 0.046 | 0.104 |
+| Windows | 5 ms | 0.064 | 16.072 | 0.070 | 0.103 |
+| Windows | 20 ms | 0.106 | 15.745 | 0.087 | 0.122 |
+| macOS | 5 ms | 0.841 | 10.662 | 0.343 | 0.812 |
+| macOS | 20 ms | 0.560 | 21.692 | 0.750 | 1.028 |
+
+owner 的 20 ms 是等待上限，不是固定休眠长度；数据到达可以提前唤醒。
+20 ms 周期下，ordinary 1 ms / owner 20 ms 的进程 CPU 中位数分别为 Linux
+1.636% / 0.854%、macOS 1.502% / 0.922% 单核。Windows 两者 CPU 时间中位数
+仍为零，不能解释成零开销；CSV 另有实际 CPU cycles/条。三个平台均无发送 busy。
+
+**MED：发送计划与尾部样本限制。** Windows 的计划释放延误 P99 约 15–16 ms；
+macOS 约 34–38 ms（5 ms 周期）和 128–138 ms（20 ms 周期）。这些是发送侧延误
+的观测，包含 pacing sleep、progress 与 OS 调度，未单独 profile 每一项；实际
+发送会追赶为突发。因此表中是该负载下的到达后延迟，
+不能宣称严格 50/200 Hz 等间隔下的网络 SLO。计划释放至接收的 P99 保留在 CSV，
+没有减掉或隐藏发送延误。macOS owner wait 的 20 ms 周期单轮 P99 范围为
+0.356–3.972 ms；每轮只有 256 条，P99 对少数样本敏感，不能将中位数当作上界。
 
 ### 单 socket 的 completion-wait 候选
 
@@ -252,3 +282,63 @@ completion 提前唤醒；复用 `flowmq_socket_drive()` 原有阻塞进度能�
 生命周期变化。增加单连接 idle deadline / 后续可读回归，重跑同一 wake 矩阵。
 CSV 中 `ordinary_sleep` 名称为跨提交可比较的历史策略标签；候选实现下它表示
 公开 `flowmq_poll(..., 1)`，不再表示一定执行了 sleep。
+
+### Completion-wait 复测结果与决定
+
+源码 `e396c1b07c1a4e2714e67a82b37d292aae20e0b8`，
+[复测 CI](https://github.com/qigao/flowmq/actions/runs/38098268240)，
+[120 行原始 CSV](flowmq-rc10-wake-candidate-20261011.csv)。SDK 版本、Release、
+CPU 数量和无亲和配置与上述唤醒基线一致。每配置五次，以下为每轮 P99 的中位数，
+单位 ms。旧/新数据来自不同 CI 分配的主机，不能当作同机配对的精确加速比；
+右侧保留候选同轮 spin 和 owner wait 对照。
+
+| 平台 | 计划周期 | 旧 ordinary 1 ms | 新 ordinary 1 ms | 新 ordinary 0 ms | 同轮 owner 20 ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Linux | 5 ms | 1.090 | 0.059 | 0.034 | 0.050 |
+| Linux | 20 ms | 1.091 | 0.072 | 0.062 | 0.280 |
+| Windows | 5 ms | 16.072 | 0.129 | 0.088 | 0.126 |
+| Windows | 20 ms | 15.745 | 0.144 | 0.101 | 0.143 |
+| macOS | 5 ms | 10.662 | 0.316 | 0.183 | 0.366 |
+| macOS | 20 ms | 21.692 | 0.208 | 0.243 | 0.213 |
+
+**事实：** 普通单 socket 的到达后 P99 不再稳定落在原来的毫秒级等待区间；
+Windows/macOS 与同轮 owner wait 接近。Linux 的 20 ms 周期 owner wait 本轮
+P99 为 0.280 ms，高于基线 0.104 ms；macOS ordinary 1 ms 的 5 ms 周期单轮
+P99 范围为 0.153–4.099 ms。因此不能据中位数宣称所有尾部样本均低于 1 ms，
+也不能据一个配置给两种 backend 等待方式排出普适优劣。
+
+CPU 是进程时间除以 wall time，100% 表示一个核；以下仍是五次中位数。
+
+| 平台 | 计划周期 | 旧 ordinary 1 ms | 新 ordinary 1 ms | 同轮 owner 20 ms |
+| --- | ---: | ---: | ---: | ---: |
+| Linux | 5 ms | 2.555% | 1.589% | 0.877% |
+| Linux | 20 ms | 1.636% | 0.941% | 0.621% |
+| macOS | 5 ms | 2.493% | 2.227% | 1.344% |
+| macOS | 20 ms | 1.502% | 1.268% | 0.478% |
+
+Windows 两种等待方式的 CPU 时间中位数均低于计时分辨率，不写成零开销。
+新 ordinary 的 CPU cycles/条分别为 180,637 / 361,538（5/20 ms 周期），
+同轮 owner wait 为 188,124 / 359,094。旧 ordinary 为 117,434 / 298,458，
+所以本轮不能宣称 Windows CPU 成本下降，也不能跨 CI 主机将 cycles 差异全部
+归因于补丁。Linux/macOS 下，保留 1 ms 等待上限的 ordinary 比 owner wait
+使用更多 CPU；这是保留普通 listener / 本地 deadline 周期推进的取舍。
+
+**推论与决定：保留单 socket completion wait。** 代码路径、旧版同轮
+ordinary/owner 差异及新版复测共同支持：FlowMQ 外层定时休眠是这类低负载到达
+延迟的主要可修复来源。现有 CNet completion wait 已能支持低延迟与低 CPU，
+不需要为此增加 Actor/mailbox、LF worker 或跨线程 token。该结论只覆盖本测试的
+单连接普通 socket；多 socket 聚合等待继续由显式 owner lane 管理。
+
+发送计划的限制仍在：候选 Windows release-lag P99 约 15–16 ms，macOS
+约 33–37 ms（5 ms 周期）、126–141 ms（20 ms 周期）。CSV 保留计划释放至接收
+的 P99；实际吞吐约 200 / 50 条/s，由发送计划限制，不能当作容量吞吐或用来
+声称反超 ZMQ。这里也没有新的满载吞吐、TLS 唤醒、sanitizer 或严格均匀到达结果。
+
+验证：候选 Linux/Windows 各 42 项、macOS 41 项正式 CTest 全部通过，包含
+idle deadline、readiness、完整 payload/FIFO 与接收失败停止/join 回归；三个 host
+各一项 wake benchmark CTest 通过。CSV 校验了 120 行、每配置五次、消息数、
+吞吐与 CPU 公式、分位数顺序；所有测量的 send busy 为零。
+这些是未启用 ZMQ 对照 target 的 test graph，因此正式 CTest 数与前轮不同。
+打包及四个平台的安装后 consumer 资格验证全部通过（Android 仅编译/链接），
+[同代码 PR CI](https://github.com/qigao/flowmq/actions/runs/38098268741) 也全部通过。
+本地缺少 SDK NuGet `read:packages`，运行验证使用仓库 CI。
