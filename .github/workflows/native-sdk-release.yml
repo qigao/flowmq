@@ -18,6 +18,11 @@ on:
         type: boolean
         required: false
         default: false
+      run_wake_benchmark:
+        description: Compare ordinary polling and owner completion waits with an independent paced sender
+        type: boolean
+        required: false
+        default: false
   pull_request:
     paths:
       - "CMakeLists.txt"
@@ -425,7 +430,7 @@ jobs:
           rm -rf stage
           mv stage-dereferenced stage
       - name: Record host comparison provenance
-        if: matrix.os != 'android' && github.event_name == 'workflow_dispatch' && (inputs.run_benchmarks || inputs.run_diagnostics)
+        if: matrix.os != 'android' && github.event_name == 'workflow_dispatch' && (inputs.run_benchmarks || inputs.run_diagnostics || inputs.run_wake_benchmark)
         shell: pwsh
         run: |
           $evidence = [ordered]@{
@@ -444,8 +449,34 @@ jobs:
             sg_sweep_runs_per_configuration = ${{ inputs.run_diagnostics && 10 || 0 }}
             progress_phase_runs_per_configuration = ${{ inputs.run_diagnostics && 3 || 0 }}
             progress_ablation_runs_per_configuration = ${{ inputs.run_diagnostics && 6 || 0 }}
+            wake_runs_per_configuration = ${{ inputs.run_wake_benchmark && 5 || 0 }}
           }
           $evidence | ConvertTo-Json | Set-Content build/flowmq-zmq-provenance.json
+      - name: Compare incoming wake latency on Unix hosts
+        if: (matrix.os == 'linux' || matrix.os == 'macos') && github.event_name == 'workflow_dispatch' && inputs.run_wake_benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          preset=bench-host-release-ci
+          if [[ "${{ matrix.os }}" == "macos" ]]; then preset=bench-mac-release-ci; fi
+          ctest --preset "$preset" --no-tests=error -R '^bench_flowmq_wake$' -V --output-log build/flowmq-wake.log
+      - name: Compare incoming wake latency on Windows
+        if: matrix.os == 'windows' && github.event_name == 'workflow_dispatch' && inputs.run_wake_benchmark
+        shell: cmd
+        run: |
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          ctest --preset bench-host-release-ci --no-tests=error -R "^bench_flowmq_wake$" -V --output-log build/flowmq-wake.log
+          if errorlevel 1 exit /b 1
+      - name: Upload host wake evidence
+        if: always() && matrix.os != 'android' && github.event_name == 'workflow_dispatch' && inputs.run_wake_benchmark
+        uses: actions/upload-artifact@v4
+        with:
+          name: flowmq-wake-${{ matrix.os }}
+          path: |
+            build/flowmq-zmq-provenance.json
+            build/flowmq-wake.log
+          if-no-files-found: error
       - name: Attribute progress and retained costs on Unix hosts
         if: (matrix.os == 'linux' || matrix.os == 'macos') && github.event_name == 'workflow_dispatch' && inputs.run_diagnostics
         shell: bash

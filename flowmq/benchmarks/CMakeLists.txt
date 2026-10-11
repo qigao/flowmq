@@ -133,6 +133,29 @@ if(BUILD_TESTS)
 endif()
 
 cmake_add_benchmark(
+  bench_flowmq_wake
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_wake.c
+  LIBS FlowMQ::Transport Salts::TinyTest
+  FOLDER "flowmq/benchmarks/runtime")
+if(WIN32)
+  target_link_libraries(bench_flowmq_wake PRIVATE psapi)
+endif()
+if(BUILD_TESTS)
+  add_test(NAME test_flowmq_wake
+           COMMAND bench_flowmq_wake --filter "wake correctness:")
+  add_test(NAME bench_flowmq_wake
+           COMMAND bench_flowmq_wake --filter "wake comparison:")
+  set_tests_properties(test_flowmq_wake PROPERTIES
+    LABELS "flowmq;flowmq-transport" RUN_SERIAL TRUE TIMEOUT 120)
+  set_tests_properties(bench_flowmq_wake PROPERTIES
+    LABELS "flowmq;benchmark" RUN_SERIAL TRUE TIMEOUT 600)
+  if(WIN32)
+    set_tests_properties(test_flowmq_wake bench_flowmq_wake PROPERTIES
+      ENVIRONMENT_MODIFICATION "${FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS}")
+  endif()
+endif()
+
+cmake_add_benchmark(
   bench_flowmq_socket
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_socket.c
   LIBS FlowMQ::Transport Salts::TinyTest

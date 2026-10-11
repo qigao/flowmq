@@ -207,3 +207,32 @@ CTest 均通过；打包和安装后 consumer 资格验证全部通过（Android
 后部 socket 接收与零超时；原 heartbeat、重连、TLS、pool 等回归同时运行。
 当前没有旧/新实现同进程 A/B、低负载消息 P99 或 sanitizer 新结果；也没有新的
 FlowMQ/ZMQ 同轮比较，因此本节不声称已经反超 ZMQ。
+
+## 独立发送线程的低负载唤醒协议
+
+既有 paced-lane 测试由同一个 owner 等到计划时间后发送，不能直接验证另一个
+线程发来数据能否唤醒已经阻塞的 receiver。新增正式 benchmark 使用两个线程、
+一条 loopback TCP PAIR 连接；发送线程绑定普通 socket，接收线程通过公开 API
+连接普通或 owner socket，不借用私有 owner listener 接口。
+
+- 每个线程创建、推进和关闭自己的 context/socket；controller 只管理同步和结果。
+  每个 socket 的 HWM 固定 256 条，每轮最多 256 条 64 B 消息，拒绝时在原发送
+  线程内重试，整体操作有 30 s deadline；不丢弃或无界排队。
+- 使用 copy send，栈 payload 在成功 admission 后可复用；接收端独立 buffer，
+  验证完整字节、序号和 FIFO。每条携带计划释放时间与首次发送尝试时间；后者不因
+  busy 重试而重置。保留发送调度延误、实际发送至接收及计划释放至接收三种指标。
+- 固定 5/20 ms 计划周期，发送线程用既有 sleep 原语等到 release；延误后赶上
+  计划、不跳过样本。OS 调度可能造成突发，因此同时记录 release lag，不能声称
+  实际到达严格等间隔。16 条预热与建立连接不计时。
+- 接收端四种策略：ordinary poll 0/1 ms，owner poll 0/20 ms。POLLIN 为唯一
+  数据 readiness；非阻塞 receive 校验成功才完成样本。测量包括实际排队、接收
+  和校验，不称为纯内核唤醒时间。
+- 共享控制区固定大小：mutex/condition 只发布 endpoint、启动和清理屏障；原子
+  error/received 传递停止与完成进度。每个线程独占统计数组的写入；controller
+  join 后读取，先结束测量，再允许各 owner 销毁 socket/context。
+- 正常发送者推进到所有消息被接收；首个错误原子发布，使两个线程在有限 poll /
+  sleep 后退出，join 完成前不回收控制区。正式 correctness 用例覆盖正常 FIFO
+  和中途接收失败；join 失败时测试进程终止，不能假装已经 quiescent。
+- 进程 CPU 包含 sender、receiver 与 controller；不是 receiver 单线程 CPU。
+  每配置五次，共 40 组，轮换 period 和策略顺序；五次不能完全平衡四种顺序。
+  暂不修改生产等待策略，以该对照决定 completion-wait 的后续边界。
