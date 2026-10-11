@@ -133,6 +133,29 @@ if(BUILD_TESTS)
 endif()
 
 cmake_add_benchmark(
+  bench_flowmq_wake
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_wake.c
+  LIBS FlowMQ::Transport Salts::TinyTest
+  FOLDER "flowmq/benchmarks/runtime")
+if(WIN32)
+  target_link_libraries(bench_flowmq_wake PRIVATE psapi)
+endif()
+if(BUILD_TESTS)
+  add_test(NAME test_flowmq_wake
+           COMMAND bench_flowmq_wake --filter "wake correctness:")
+  add_test(NAME bench_flowmq_wake
+           COMMAND bench_flowmq_wake --filter "wake comparison:")
+  set_tests_properties(test_flowmq_wake PROPERTIES
+    LABELS "flowmq;flowmq-transport" RUN_SERIAL TRUE TIMEOUT 120)
+  set_tests_properties(bench_flowmq_wake PROPERTIES
+    LABELS "flowmq;benchmark" RUN_SERIAL TRUE TIMEOUT 600)
+  if(WIN32)
+    set_tests_properties(test_flowmq_wake bench_flowmq_wake PROPERTIES
+      ENVIRONMENT_MODIFICATION "${FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS}")
+  endif()
+endif()
+
+cmake_add_benchmark(
   bench_flowmq_socket
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_socket.c
   LIBS FlowMQ::Transport Salts::TinyTest
@@ -140,8 +163,23 @@ cmake_add_benchmark(
 target_include_directories(
   bench_flowmq_socket
   PRIVATE ${PROJECT_SOURCE_DIR}/flowmq/tests/runtime)
+if(WIN32)
+  target_link_libraries(bench_flowmq_socket PRIVATE psapi)
+endif()
 
 if(BUILD_TESTS)
+  add_test(NAME test_flowmq_wait_policy
+           COMMAND bench_flowmq_socket --filter "wait-policy correctness:")
+  add_test(NAME bench_flowmq_wait_policy
+           COMMAND bench_flowmq_socket --filter "wait-policy comparison:")
+  set_tests_properties(test_flowmq_wait_policy PROPERTIES
+    LABELS "flowmq;flowmq-transport" RUN_SERIAL TRUE TIMEOUT 120)
+  set_tests_properties(bench_flowmq_wait_policy PROPERTIES
+    LABELS "flowmq;benchmark" RUN_SERIAL TRUE TIMEOUT 600)
+  if(WIN32)
+    set_tests_properties(test_flowmq_wait_policy bench_flowmq_wait_policy PROPERTIES
+      ENVIRONMENT_MODIFICATION "${FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS}")
+  endif()
   add_test(NAME test_flowmq_owned_rx_evidence
            COMMAND bench_flowmq_socket --filter "receive evidence:")
   set_tests_properties(test_flowmq_owned_rx_evidence
@@ -290,11 +328,19 @@ endif()
 
 if(FLOWMQ_BUILD_ZMQ_BENCHMARK)
   find_package(ZeroMQ CONFIG REQUIRED)
+  # vcpkg's static triplets expose libzmq as an INTERFACE forwarding target.
+  # Validate the actual archive while keeping its public link target below.
+  set(_flowmq_zmq_artifact_target libzmq)
+  get_target_property(_flowmq_zmq_target_type libzmq TYPE)
+  if(_flowmq_zmq_target_type STREQUAL "INTERFACE_LIBRARY" AND TARGET libzmq-static)
+    set(_flowmq_zmq_artifact_target libzmq-static)
+  endif()
   string(TOUPPER "${CMAKE_BUILD_TYPE}" _flowmq_zmq_config)
   get_target_property(
-    _flowmq_zmq_config_location libzmq
+    _flowmq_zmq_config_location ${_flowmq_zmq_artifact_target}
     "IMPORTED_LOCATION_${_flowmq_zmq_config}")
-  get_target_property(_flowmq_zmq_generic_location libzmq IMPORTED_LOCATION)
+  get_target_property(_flowmq_zmq_generic_location
+    ${_flowmq_zmq_artifact_target} IMPORTED_LOCATION)
   if(NOT _flowmq_zmq_config_location AND NOT _flowmq_zmq_generic_location)
     message(
       FATAL_ERROR

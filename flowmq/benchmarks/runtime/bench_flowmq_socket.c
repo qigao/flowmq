@@ -1,5 +1,6 @@
 #include "flowmq_socket.h"
 #include "flowmq_protocol.h"
+#include "flowmq_bench_metrics.h"
 #include "flowmq_tls_test_material.h"
 #include "tinytest.h"
 #include "cmeta_error.h"
@@ -31,6 +32,9 @@ enum {
   BENCH_PROGRESS_TIMEOUT_MS = 10000u,
   BENCH_PROGRESS_WAIT_MS = 1u
 };
+
+/* Benchmark-only intervention; ordinary cases retain the 1 ms wait policy. */
+static uint32_t bench_progress_wait_ms = BENCH_PROGRESS_WAIT_MS;
 
 static size_t bench_socket_samples(size_t regular, size_t smoke_samples) {
   const char *smoke = getenv("FLOWMQ_BENCH_SMOKE");
@@ -84,10 +88,9 @@ static int bench_progress_wait(bench_pair_t *pair, uint64_t deadline_ms,
   if (now >= deadline_ms) return SALTS_ETIMEDOUT;
   remaining_ms = deadline_ms - now;
   wait_ms =
-      remaining_ms < BENCH_PROGRESS_WAIT_MS
+      remaining_ms < bench_progress_wait_ms
           ? (uint32_t)remaining_ms
-          : BENCH_PROGRESS_WAIT_MS;
-  if (wait_ms == 0u) wait_ms = 1u;
+          : bench_progress_wait_ms;
   status = flowmq_poll(items, 2u, wait_ms, &ready);
   if (status != SALTS_OK) return status;
   if ((items[0].revents & FLOWMQ_POLLERR) != 0 ||
@@ -1084,6 +1087,96 @@ static void bench_zmq_close(bench_zmq_pair_t *pair) {
 #endif
 
 spec("FlowMQ direct socket benchmark") {
+  group("wait-policy attribution") {
+    static bench_pair_t pair;
+    before_each() { memset(&pair, 0, sizeof(pair)); }
+    after_each() {
+      bench_progress_wait_ms = BENCH_PROGRESS_WAIT_MS;
+      check_equal(bench_pair_close(&pair), SALTS_OK);
+    }
+    it("wait-policy correctness: spin and finite wait preserve payload delivery") {
+      unsigned char payload[BENCH_PAYLOAD_BYTES];
+      memset(payload, 0x5a, sizeof(payload));
+      for (uint32_t wait = 0u; wait <= 1u; ++wait) {
+        bench_progress_wait_ms = wait;
+        check_equal(bench_pair_open(&pair), SALTS_OK);
+        for (size_t i = 0u; i < 32u; ++i)
+          check_equal(bench_exchange(&pair, payload, sizeof(payload)), SALTS_OK);
+        check_equal(bench_pair_close(&pair), SALTS_OK);
+      }
+    }
+    bench("wait-policy comparison: connected idle CPU with zero or one millisecond poll") {
+      unsigned char payload[BENCH_PAYLOAD_BYTES] = {0};
+      printf("WAIT_IDLE_HEADER,repeat,wait_ms,poll_calls,wall_ns,cpu_ns,cpu_cores\n");
+      for (size_t repeat = 0u; repeat < 4u; ++repeat)
+        for (uint32_t order = 0u; order < 2u; ++order) {
+          const uint32_t wait_ms = (order + (uint32_t)repeat) % 2u;
+          flowmq_bench_metrics_t before = {0}, after = {0};
+          flowmq_pollitem_t items[2];
+          uint64_t start, elapsed;
+          size_t calls = 0u, ready = 0u;
+          int status = SALTS_OK;
+          bench_progress_wait_ms = 0u;
+          check_equal(bench_pair_open(&pair), SALTS_OK);
+          for (size_t warmup = 0u; warmup < 16u; ++warmup)
+            check_equal(bench_exchange(&pair, payload, sizeof(payload)), SALTS_OK);
+          items[0] = (flowmq_pollitem_t){.socket = pair.sender, .events = FLOWMQ_POLLIN};
+          items[1] = (flowmq_pollitem_t){.socket = pair.receiver, .events = FLOWMQ_POLLIN};
+          check_equal(flowmq_bench_metrics_read(&before), SALTS_OK);
+          benchmark_ops("connected idle window", 1u, 1u) {
+            start = cmeta_hrtime();
+            do {
+              status = flowmq_poll(items, 2u, wait_ms, &ready);
+              ++calls;
+              elapsed = cmeta_hrtime() - start;
+            } while (status == SALTS_OK && ready == 0u && elapsed < UINT64_C(250000000));
+          }
+          check_equal(flowmq_bench_metrics_read(&after), SALTS_OK);
+          check_equal(status, SALTS_OK);
+          check_equal(ready, 0u);
+          check_greater_equal(elapsed, UINT64_C(250000000));
+          printf("WAIT_IDLE_RESULT,%zu,%u,%zu,%llu,%llu,%.6f\n",
+                 repeat + 1u, wait_ms, calls, (unsigned long long)elapsed,
+                 (unsigned long long)(after.cpu_ns - before.cpu_ns),
+                 (double)(after.cpu_ns - before.cpu_ns) / elapsed);
+          check_equal(bench_pair_close(&pair), SALTS_OK);
+        }
+    }
+    bench("wait-policy comparison: identical exchange with zero or one millisecond poll") {
+      static unsigned char payload[BENCH_LARGE_PAYLOAD_BYTES];
+      const size_t sizes[] = {BENCH_PAYLOAD_BYTES, BENCH_LARGE_PAYLOAD_BYTES};
+      printf("WAIT_POLICY_HEADER,payload_bytes,repeat,wait_ms,messages,wall_ns,messages_per_second,cpu_ns_per_message\n");
+      memset(payload, 0x5a, sizeof(payload));
+      for (size_t repeat = 0u; repeat < 4u; ++repeat)
+        for (size_t size_order = 0u; size_order < 2u; ++size_order)
+          for (uint32_t order = 0u; order < 2u; ++order) {
+            const size_t bytes = sizes[(size_order + repeat) % 2u];
+            const size_t messages = bytes == BENCH_PAYLOAD_BYTES ? 32768u : 4096u;
+            flowmq_bench_metrics_t before = {0}, after = {0};
+            uint64_t start = 0u, elapsed = 0u;
+            int status = SALTS_OK;
+            bench_progress_wait_ms = (order + (uint32_t)repeat) % 2u;
+            check_equal(bench_pair_open(&pair), SALTS_OK);
+            for (size_t warmup = 0u; warmup < 16u; ++warmup)
+              check_equal(bench_exchange(&pair, payload, bytes), SALTS_OK);
+            check_equal(flowmq_bench_metrics_read(&before), SALTS_OK);
+            benchmark_io("wait policy exchange", 1u, messages, messages * bytes) {
+              start = cmeta_hrtime();
+              for (size_t i = 0u; status == SALTS_OK && i < messages; ++i)
+                status = bench_exchange(&pair, payload, bytes);
+              elapsed = cmeta_hrtime() - start;
+            }
+            check_equal(flowmq_bench_metrics_read(&after), SALTS_OK);
+            check_equal(status, SALTS_OK);
+            check_not_equal(elapsed, 0u);
+            printf("WAIT_POLICY_RESULT,%zu,%zu,%u,%zu,%llu,%.3f,%.3f\n",
+                   bytes, repeat + 1u, bench_progress_wait_ms, messages,
+                   (unsigned long long)elapsed, (double)messages * 1e9 / elapsed,
+                   (double)(after.cpu_ns - before.cpu_ns) / messages);
+            check_equal(bench_pair_close(&pair), SALTS_OK);
+          }
+    }
+  }
   it("receive evidence: accepts fragmentation without claiming zero-copy") {
     enum { EVIDENCE_SAMPLES = 31u, EVIDENCE_DIRECT_SAMPLES = 30u };
     bench_owned_rx_result_t observed[] = {

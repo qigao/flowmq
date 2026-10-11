@@ -61,6 +61,10 @@ enum {
       FLOWMQ_SOCKET_FRAME_PACKET_CAPACITY * FLOWMQ_PROTOCOL_HEADER_SIZE +
       FLOWMQ_PROTOCOL_MAX_IDENTITY_SIZE + FLOWMQ_PROTOCOL_MAX_TOPIC_SIZE,
   FLOWMQ_SOCKET_BLOCKING_SLICE_MS = 10u,
+  /* Bound active full-list scans before yielding even when unrelated transport
+   * transport callbacks keep arriving. An idle scan keeps the existing sleep
+   * policy. */
+  FLOWMQ_SOCKET_POLL_ACTIVE_PASSES = 32u,
   FLOWMQ_SOCKET_SHUTDOWN_TIMEOUT_MS = 1000u,
   FLOWMQ_SOCKET_DEFAULT_TIMEOUT_MS = 1000u,
   FLOWMQ_SOCKET_CNET_COMMAND_CAPACITY = 16u,
@@ -5359,9 +5363,12 @@ int flowmq_socket_internal_fanout_match_count(
 int flowmq_poll(flowmq_pollitem_t *items, size_t item_count,
                 uint32_t timeout_ms, size_t *ready) {
   const uint64_t started_ms = cmeta_monotonic_ms();
+  size_t active_passes = 0u;
+  uint32_t backend_wait_ms = 0u;
   if (ready != NULL) *ready = 0u;
   if (items == NULL || item_count == 0u || ready == NULL) return SALTS_EINVAL;
   for (;;) {
+    int progressed = 0;
     *ready = 0u;
     for (size_t i = 0u; i < item_count; ++i) {
       flowmq_socket_t *socket = items[i].socket;
@@ -5369,7 +5376,7 @@ int flowmq_poll(flowmq_pollitem_t *items, size_t item_count,
       int status;
       items[i].revents = 0;
       if (socket == NULL) return SALTS_EINVAL;
-      status = flowmq_socket_drive(socket, 0u, &events);
+      status = flowmq_socket_drive(socket, backend_wait_ms, &events);
       if (status != SALTS_OK) {
         if (socket->async_error == status) {
           items[i].revents |= FLOWMQ_POLLERR;
@@ -5382,14 +5389,29 @@ int flowmq_poll(flowmq_pollitem_t *items, size_t item_count,
           socket, items[i].events, &items[i].revents);
       if (status != SALTS_OK) return status;
       if (items[i].revents != 0) ++*ready;
-      (void)events;
+      if (events != 0u) progressed = 1;
     }
+    backend_wait_ms = 0u;
     if (*ready != 0u || timeout_ms == 0u) return SALTS_OK;
     {
       const uint64_t elapsed_ms = cmeta_monotonic_ms() - started_ms;
       const uint64_t remaining_ms =
           elapsed_ms >= timeout_ms ? 0u : (uint64_t)timeout_ms - elapsed_ms;
       if (remaining_ms == 0u) return SALTS_OK;
+      /* A transport callback can enqueue the next protocol step without making
+       * the requested application event ready yet. Give every socket another turn
+       * before sleeping, but preserve the call-wide deadline and idle yield. */
+      if (progressed && ++active_passes < FLOWMQ_SOCKET_POLL_ACTIVE_PASSES)
+        continue;
+      active_passes = 0u;
+      /* A single initialized socket has one unambiguous progress domain.
+       * Wait there so incoming completions interrupt the idle interval. Keep
+       * the 1 ms bound for listener/local deadlines; independent backends in a
+       * multi-item poll cannot share this wait. Active-budget yields still sleep. */
+      if (!progressed && item_count == 1u && items[0].socket->runtime_initialized) {
+        backend_wait_ms = remaining_ms > 1u ? 1u : (uint32_t)remaining_ms;
+        continue;
+      }
       cmeta_sleep_ms(remaining_ms > 1u ? 1u : (uint32_t)remaining_ms);
     }
   }

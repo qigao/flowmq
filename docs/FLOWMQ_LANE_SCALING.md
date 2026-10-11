@@ -1289,3 +1289,170 @@ ctest --preset bench-win-release-user -R "^bench_flowmq_lane_sg_sweep$" -V
 同等减少 native 开销”的判断，不能宣称确定了全部 CPU 瓶颈。
 代码中的 retained publication 固定存储 32 个 slice 描述符，而本负载实际只用
 两个；按实际 range 数分配是下一项可单独测量的候选，尚未实现或宣称收益。
+
+## Salts rc.10 三平台消费端基线（2026-10-11）
+
+后续 [wait、listener 与 SG 归因实验](FLOWMQ_RC10_CAUSE_ANALYSIS.md) 给出了
+同平台干预对照和原始 CSV；下面保留原基线，不将不同 CI run 的绝对数值混合。
+
+本轮从 FlowMQ `d532a27` 主线建立独立工作树，使用已发布的 Salts
+`2.3.0-rc.10`。不包含其他工作树未提交的 retained 分配或 owner progress 优化，
+不能与上文不同 SDK、机器和源码的绝对数值相减来声称升级收益。
+
+### 复现与测量边界
+
+手动运行 `.github/workflows/native-sdk-release.yml`，设置 `run_benchmarks=true`。
+Linux、Windows、macOS 的正式 Release preset 显式开启现有
+`FLOWMQ_BUILD_ZMQ_BENCHMARK`；常规 PR 和发布构建默认仍关闭该对照。
+Unix 静态 vcpkg 包的 `libzmq` 是转发到 `libzmq-static` 的 INTERFACE target，
+Release artifact 校验检查实际 archive；链接继续使用包提供的 `libzmq`。
+
+完成正常 build/test/install 后，CI 通过 CTest 执行：
+
+```sh
+ctest --preset bench-host-release-ci --no-tests=error -R '^bench_flowmq_zmq_comparison$' --repeat until-fail:5 -V --output-log build/flowmq-zmq-paired.log
+ctest --preset bench-host-release-ci --no-tests=error -R '^bench_flowmq_lane_handoff$' -V --output-log build/flowmq-zmq-lanes.log
+```
+
+macOS 使用 `bench-mac-release-ci`；Windows 在 MSVC 开发环境使用双引号表达式。
+`flowmq-zmq-<platform>` artifact 保存两个原始日志以及源码 SHA、SDK 版本、RID、
+逻辑 CPU 数和重复次数的 `flowmq-zmq-provenance.json`。
+
+- paired TCP 测试重复整个进程五次，包含 64 B 单条、64 KiB 单条和 64 条 queued
+  batch；各组均先建立连接并预热。这个测试固定先 FlowMQ 后 ZMQ，没有平衡执行顺序。
+- lane handoff 测试在一次进程中完成每配置五次重复，共 160 组。64 B 使用
+  copy / batch SG，64 KiB 使用 copy / immediate SG，并分别与 ZMQ copy / owned
+  sender-events 路径对照。尺寸、lane、模式和 direct/mailbox 顺序轮换；五次重复
+  不能使所有执行位置完全平衡。
+- direct 每 lane 一个应用线程、两个逻辑数据源；mailbox 每 lane 一个 owner 加两个
+  producer。后者仅作为 benchmark 对照，不代表生产路径采用 Actor 或 mailbox。
+- 每 lane 一条 loopback TCP PAIR 连接，1/8 lane 同时改变连接数和总工作量，
+  **不是上文固定八条连接的强扩展实验**。每 lane 的 64 B 组为 65,536 条，
+  64 KiB 组为 1,024 条；应用在途窗口上限 128，direct staging 为 16。
+- ZMQ 每 lane 一个 context，设一个后台 I/O 线程；FlowMQ 在应用 owner 内推进。
+  相同 lane 数不等于相同总线程预算。CPU/条包含进程内全部线程。
+- P99 从 payload 填充前的准备时间戳到接收内容校验，包含 staging、排队和进度等待；
+  不是纯网络 RTT。吞吐也包含逐条 payload 生成、长度、内容和 FIFO 校验。
+- CI 未绑定亲和；8 lane 不代表分配了八个物理核。只在同平台、同负载内计算比值，
+  不按平台绝对值排名。本轮饱和负载不能回答 idle CPU、低负载唤醒或跨机延迟。
+
+### Poll strategy 的归属
+
+`flowmq_socket_drive()` 仍调用 `cnet_client_poll()`；shared owner 由
+`flowmq_owner.c` 观察 NativeIO completion，并通过
+`cnet_client_advance_external()` 推进。升级 rc.10 **不会自动启用**新增的
+`cnet_client_poll_strategy()`。后者只适用于 CNet 内部 backend，external client
+返回 `SALTS_ENOTSUP`。本轮不改变生产 poll、线程归属或 batch 默认值。
+
+后续策略实验须分别验证 standalone bounded drain 和 external owner 的完成批次预算，
+同时比较吞吐、CPU/条、尾延迟与低负载等待，不能把 LF CPU scheduler 直接套在同一个
+I/O owner 上，也不能把 SDK 升级本身标作已经取得的策略收益。
+
+
+### 三平台结果
+
+测量源码为 `4eb1afa220937297b14b331fca9eded35cfb718e`，
+[原始 CI 日志及 artifacts](https://github.com/qigao/flowmq/actions/runs/38072310769)。
+三个 host 均恢复 Salts.Native 2.3.0-rc.10、SaltsUtils.Native 4.3.0-rc.7，
+运行时 libzmq 为 4.3.5。Linux x64 / Windows x64 各 4 个逻辑 CPU，macOS arm64
+为 3 个逻辑 CPU；亲和未绑定。此前 `5873e3f` 的首轮 Windows 数据不混入本表。
+
+[Lane 原始 CSV](flowmq-rc10-host-lanes-20261011.csv) 保存全部 480 组，
+共 71,884,800 条计时消息；[paired 原始 CSV](flowmq-rc10-host-paired-20261011.csv)
+保存 90 条记录。逐组核对了预期消息数、32 个配置各五次重复、worker 数、在途峰值
+≤128，以及 `messages × 1e9 / wall_ns` 与报告吞吐一致。正式测试检查消息内容、FIFO
+和引用释放。以下每个数值均为五轮中位数；倍率是两个中位数之比，不是配对比值中位数。
+
+#### Direct copy：FlowMQ / ZMQ
+
+每对数字依次为 FlowMQ / ZMQ。吞吐为百万消息/秒，CPU 为进程 ns/条，P99 为 µs。
+Windows CPU time 在短组上可见计时粒度；CSV 同时保留该平台 cycles/条，不能把小的
+CPU time 差异当作稳定收益。8 lane 超过所有 runner 的逻辑 CPU 数，且 ZMQ 另有
+后台线程，因此不能据此宣称八核强扩展或相同线程预算下的性能差距。
+
+| 平台 | payload | lanes | 吞吐 M条/s：FMQ / ZMQ | 吞吐比 | CPU ns/条：FMQ / ZMQ | P99 µs：FMQ / ZMQ |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Linux | 64 B | 1 | 1.0232 / 2.5594 | 0.400× | 978 / 745 | 107.3 / 68.0 |
+| Linux | 64 B | 8 | 2.9980 / 0.8917 | 3.362× | 1261 / 4376 | 3127.3 / 8997.3 |
+| Linux | 64 KiB | 1 | 0.0126 / 0.0380 | 0.331× | 79480 / 45493 | 10072.7 / 811.5 |
+| Linux | 64 KiB | 8 | 0.0336 / 0.0541 | 0.621× | 114846 / 71987 | 40541.6 / 31179.9 |
+| Windows | 64 B | 1 | 0.7163 / 1.2239 | 0.585× | 1431 / 1669 | 67.8 / 134.7 |
+| Windows | 64 B | 8 | 1.7095 / 1.5323 | 1.116× | 2325 / 2533 | 116.8 / 1637.2 |
+| Windows | 64 KiB | 1 | 0.0077 / 0.0097 | 0.793× | 137329 / 122070 | 17978.4 / 3131.3 |
+| Windows | 64 KiB | 8 | 0.0155 / 0.0159 | 0.972× | 242233 / 244141 | 192216.5 / 207976.7 |
+| macOS | 64 B | 1 | 0.3153 / 0.3140 | 1.004× | 1929 / 3313 | 467.0 / 917.0 |
+| macOS | 64 B | 8 | 1.2765 / 0.7003 | 1.823× | 1947 / 3417 | 1081.0 / 6632.0 |
+| macOS | 64 KiB | 1 | 0.0083 / 0.0090 | 0.919× | 120531 / 156280 | 20756.0 / 7710.0 |
+| macOS | 64 KiB | 8 | 0.0231 / 0.0205 | 1.126× | 116614 / 129402 | 59255.0 / 131977.0 |
+
+**事实：**64 B 单 lane 下 Linux/Windows 的 FlowMQ copy 吞吐分别只有 ZMQ 的
+0.400/0.585；macOS 两者中位数接近。8 lane 下 copy 在三平台均更快，但这是包含
+超额线程调度的观测；尤其 Linux ZMQ 从 1 lane 到 8 lane 的吞吐下降，不能把
+FlowMQ/ZMQ 的 3.362 倍直接归因于单线程 I/O 更快。64 KiB 下 Linux 的 FlowMQ
+copy 在 1/8 lane 都落后，并伴随更高 CPU/条，仍是需要定位的成本。
+
+#### Retained 路径
+
+下表为同平台、同 payload、同 lanes 的吞吐中位数相除。64 B 是 FlowMQ batch SG，
+64 KiB 是 immediate SG；ZMQ owned 使用外部存储保活和 sender events。
+
+| 平台 | payload | lanes | SG / FMQ copy | SG / ZMQ owned |
+| --- | --- | ---: | ---: | ---: |
+| Linux | 64 B | 1 | 0.639× | 0.258× |
+| Linux | 64 B | 8 | 0.642× | 3.476× |
+| Linux | 64 KiB | 1 | 0.995× | 0.304× |
+| Linux | 64 KiB | 8 | 1.050× | 0.606× |
+| Windows | 64 B | 1 | 0.617× | 0.361× |
+| Windows | 64 B | 8 | 0.595× | 0.682× |
+| Windows | 64 KiB | 1 | 1.138× | 0.867× |
+| Windows | 64 KiB | 8 | 1.149× | 1.100× |
+| macOS | 64 B | 1 | 0.729× | 0.695× |
+| macOS | 64 B | 8 | 0.676× | 1.181× |
+| macOS | 64 KiB | 1 | 0.911× | 0.910× |
+| macOS | 64 KiB | 8 | 1.060× | 1.141× |
+
+**事实：**64 B batch SG 的六组中位数全部低于 FlowMQ copy，吞吐低约 27%–40%，
+CPU/条高约 50%–63%。30 个同 repeat 对照只有 macOS 单 lane 的一次 SG 更快。
+这些 SG 组的 source buffer 等待全部为零；Linux/macOS 的 poll/条约从 0.156 增至
+0.219，Windows 从 0.086 增至 0.148。`poll_calls` 是应用层调用计数，不是 syscall
+或 NativeIO completion 数。
+
+**推论：**当前数据支持优先分析 retained admission、publication 分配与 progress 次数，
+不支持把小消息 SG 当作默认优化，也不支持把差距归因于 Actor/mailbox；这些数来自
+完全 direct 的路径。源码中 `flowmq_socket_retained_publication_create()` 每次
+`calloc(1u, sizeof(*publication))`，publication 固定包含 `CNET_RETAINED_VECTOR_MAX`
+个 slice 描述符。这是可验证的分配候选，尚无本轮 allocator/CPU stack 证据证明它占
+主导；修改前应单独 profile，并保持 payload 保活和拒绝路径语义。
+
+64 KiB immediate SG 相对 copy 的中位数收益依平台和 lanes 而变，范围约 −9% 到
++15%，不能推广出通用 batch/SG 策略。尾延迟的显著差距还需更长稳态运行验证；每 lane
+仅 1,024 条的大消息组具有启动和短时调度敏感性。
+
+#### 单连接 paired 测试
+
+这组是不同的调用协议，不能与前面的饱和 lane 表混合：单条 exchange 后等接收，
+或提交 64 条后接收整批。下表只有吞吐比；平均延迟和绝对吞吐保存在 paired CSV，
+没有从平均值推导 P99。
+
+| 平台 | 64 B 单条 FMQ/ZMQ | 64 KiB 单条 FMQ/ZMQ | 64 条 queued batch FMQ/ZMQ |
+| --- | ---: | ---: | ---: |
+| Linux | 2.748× | 1.156× | 0.989× |
+| Windows | 4.699× | 4.231× | 1.297× |
+| macOS | 0.463× | 0.527× | 0.383× |
+
+**事实：**“FlowMQ 比 ZMQ 快几倍”可以在 Linux/Windows 的单条 exchange 协议中出现，
+但不能外推到饱和单 lane、macOS 或 retained 路径。macOS 三个 paired 场景均落后，
+需要独立分析 wait/progress 和调度行为；本轮没有证据把它确定为 CNet 的单一缺陷。
+
+**MED：**这些是共享 CI runner 的 loopback 数据，缺乏固定物理核预算、CPU stack、
+allocation 统计、低负载 CPU、TLS 和跨机延迟。后续优化优先保持固定 owner/lane，
+分别对小消息 retained 成本及 macOS 单条 progress 取证，再测 bounded-drain 策略；
+不因八 lane 的吞吐赢家直接改变公开默认策略。
+
+### 本轮验证
+
+`4eb1afa` 的 Release build/test/install 在三平台通过：Linux/Windows 各 46 项、
+macOS 45 项正式 CTest；paired comparison 各五次、lane handoff 各一次完整五轮矩阵
+均通过，已有 peer-pool 对照也全部通过。Android SDK 编译通过，不计作运行时测试。
+`actionlint` 与 `git diff --check` 通过；本轮未增加生产代码、未重跑 sanitizer。
+本机没有 NuGet `read:packages` 凭据，SDK 恢复及运行验证均使用上述正式 CI 路径。
