@@ -236,3 +236,19 @@ FlowMQ/ZMQ 同轮比较，因此本节不声称已经反超 ZMQ。
 - 进程 CPU 包含 sender、receiver 与 controller；不是 receiver 单线程 CPU。
   每配置五次，共 40 组，轮换 period 和策略顺序；五次不能完全平衡四种顺序。
   暂不修改生产等待策略，以该对照决定 completion-wait 的后续边界。
+
+### 单 socket 的 completion-wait 候选
+
+Linux 对照中，两个周期的 ordinary sleep P99 都约 1.09 ms，owner wait 约
+0.10 ms，且 owner wait 的 CPU 更低。后续候选只改变已初始化的单 socket
+`flowmq_poll()`：无进展时下一轮用 CNet `poll` 等待最多 1 ms，让 incoming
+completion 提前唤醒；复用 `flowmq_socket_drive()` 原有阻塞进度能力。
+
+首轮与零超时仍非阻塞；正超时使用同一个 caller deadline。1 ms 上限继续保证
+普通 listener 与 FlowMQ 本地 deadline 得到周期推进；有进展重扫达到预算后仍
+执行既有 sleep。未初始化 socket 及多个独立 socket 保留原等待策略；后者没有
+统一 backend，不能任选一个阻塞。多个 socket 的统一等待仍归显式 owner lane。
+额外状态为一个局部 timeout，空间 O(1)；没有新线程、分配、API 参数或 payload
+生命周期变化。增加单连接 idle deadline / 后续可读回归，重跑同一 wake 矩阵。
+CSV 中 `ordinary_sleep` 名称为跨提交可比较的历史策略标签；候选实现下它表示
+公开 `flowmq_poll(..., 1)`，不再表示一定执行了 sleep。

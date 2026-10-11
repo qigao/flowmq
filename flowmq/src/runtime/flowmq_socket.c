@@ -5364,6 +5364,7 @@ int flowmq_poll(flowmq_pollitem_t *items, size_t item_count,
                 uint32_t timeout_ms, size_t *ready) {
   const uint64_t started_ms = cmeta_monotonic_ms();
   size_t active_passes = 0u;
+  uint32_t backend_wait_ms = 0u;
   if (ready != NULL) *ready = 0u;
   if (items == NULL || item_count == 0u || ready == NULL) return SALTS_EINVAL;
   for (;;) {
@@ -5375,7 +5376,7 @@ int flowmq_poll(flowmq_pollitem_t *items, size_t item_count,
       int status;
       items[i].revents = 0;
       if (socket == NULL) return SALTS_EINVAL;
-      status = flowmq_socket_drive(socket, 0u, &events);
+      status = flowmq_socket_drive(socket, backend_wait_ms, &events);
       if (status != SALTS_OK) {
         if (socket->async_error == status) {
           items[i].revents |= FLOWMQ_POLLERR;
@@ -5390,6 +5391,7 @@ int flowmq_poll(flowmq_pollitem_t *items, size_t item_count,
       if (items[i].revents != 0) ++*ready;
       if (events != 0u) progressed = 1;
     }
+    backend_wait_ms = 0u;
     if (*ready != 0u || timeout_ms == 0u) return SALTS_OK;
     {
       const uint64_t elapsed_ms = cmeta_monotonic_ms() - started_ms;
@@ -5402,6 +5404,14 @@ int flowmq_poll(flowmq_pollitem_t *items, size_t item_count,
       if (progressed && ++active_passes < FLOWMQ_SOCKET_POLL_ACTIVE_PASSES)
         continue;
       active_passes = 0u;
+      /* A single initialized socket has one unambiguous progress domain.
+       * Wait there so incoming completions interrupt the idle interval. Keep
+       * the 1 ms bound for listener/local deadlines; independent backends in a
+       * multi-item poll cannot share this wait. Active-budget yields still sleep. */
+      if (!progressed && item_count == 1u && items[0].socket->runtime_initialized) {
+        backend_wait_ms = remaining_ms > 1u ? 1u : (uint32_t)remaining_ms;
+        continue;
+      }
       cmeta_sleep_ms(remaining_ms > 1u ? 1u : (uint32_t)remaining_ms);
     }
   }

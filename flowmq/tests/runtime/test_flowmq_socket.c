@@ -2457,6 +2457,32 @@ spec("flowmq_socket lifecycle and pattern surface") {
       check_equal(flowmq_poll(items, 2u, 0u, &ready), SALTS_OK);
       check_equal(ready, 0u);
     }
+    it("waits on one connected socket without ending the idle deadline early") {
+      static const char payload[] = "after-idle";
+      char received[sizeof(payload)] = {0};
+      size_t size = 0u, ready = 0u;
+      flowmq_pollitem_t connected[] = {
+          {.socket = sender, .events = FLOWMQ_POLLOUT}, {.socket = receiver}};
+      flowmq_pollitem_t item = {.socket = receiver, .events = FLOWMQ_POLLIN};
+      uint64_t start;
+      check_equal(flowmq_poll(connected, 2u, 100u, &ready), SALTS_OK);
+      check_equal(ready, 1u);
+      start = cmeta_monotonic_ms();
+      check_equal(flowmq_poll(&item, 1u, 20u, &ready), SALTS_OK);
+      check_equal(ready, 0u);
+      check_equal(item.revents, 0);
+      check_greater_equal(cmeta_monotonic_ms() - start, UINT64_C(20));
+      check_equal(flowmq_send(sender, payload, sizeof(payload), FLOWMQ_DONTWAIT), SALTS_OK);
+      connected[0].events = 0;
+      check_equal(flowmq_poll(connected, 2u, 0u, &ready), SALTS_OK);
+      check_equal(flowmq_poll(&item, 1u, 100u, &ready), SALTS_OK);
+      check_equal(ready, 1u);
+      check_equal(item.revents, FLOWMQ_POLLIN);
+      check_equal(flowmq_recv(receiver, received, sizeof(received), &size,
+                              FLOWMQ_DONTWAIT), SALTS_OK);
+      check_equal(size, sizeof(payload));
+      check_equal(memcmp(received, payload, sizeof(payload)), 0);
+    }
   }
 
   it("keeps an idle connection open without a receive deadline") {
