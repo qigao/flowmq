@@ -189,9 +189,11 @@ jobs:
           persist-credentials: false
       - name: Configure shared vcpkg binary cache
         id: shared_deps
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@v0.1.4
         with:
           mode: read
+          triplet: ${{ matrix.os == 'android' && 'arm64-android' || runner.os == 'Windows' && 'x64-windows' || runner.os == 'macOS' && (runner.arch == 'ARM64' && 'arm64-osx' || 'x64-osx') || 'x64-linux' }}
+          host-triplet: ${{ runner.os == 'Windows' && 'x64-windows' || runner.os == 'macOS' && (runner.arch == 'ARM64' && 'arm64-osx' || 'x64-osx') || 'x64-linux' }}
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
@@ -202,6 +204,9 @@ jobs:
           key: flowmq-nuget-v1-${{ matrix.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             flowmq-nuget-v1-${{ matrix.os }}-${{ runner.arch }}-
+      - name: Install pinned native ccache
+        if: matrix.os != 'windows'
+        uses: qigao/vcpkg-cache/.github/actions/setup-ccache@v0.1.4
       - name: Restore native compiler objects (ccache)
         if: matrix.os != 'windows'
         uses: actions/cache@v4
@@ -216,7 +221,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm ccache
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm
           if [[ "${{ matrix.os }}" == "android" ]]; then test -n "$ANDROID_NDK_HOME"; fi
       - name: Prepare build tools and MSVC environment
         if: matrix.os == 'windows'
@@ -234,7 +239,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          brew install ninja nasm gcc@15 ccache
+          brew install ninja nasm gcc@15
           case "$RUNNER_ARCH" in
             X64) rid=macos-x64; triplet=x64-osx ;;
             ARM64) rid=macos-arm64; triplet=arm64-osx ;;
@@ -934,9 +939,11 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@v0.1.4
         with:
           mode: read
+          triplet: ${{ matrix.os == 'android' && 'arm64-android' || runner.os == 'Windows' && 'x64-windows' || runner.os == 'macOS' && (runner.arch == 'ARM64' && 'arm64-osx' || 'x64-osx') || 'x64-linux' }}
+          host-triplet: ${{ runner.os == 'Windows' && 'x64-windows' || runner.os == 'macOS' && (runner.arch == 'ARM64' && 'arm64-osx' || 'x64-osx') || 'x64-linux' }}
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
