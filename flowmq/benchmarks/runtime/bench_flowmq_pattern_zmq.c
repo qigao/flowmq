@@ -1,5 +1,5 @@
 #include "tinytest.h"
-#include <salts/clock.h>
+#include <core/clock.h>
 #include <zmq.h>
 
 #include <errno.h>
@@ -84,7 +84,7 @@ static int pattern_send(void *socket, const void *data, size_t size, int flags) 
                               flags | (pattern_spin ? ZMQ_DONTWAIT : 0));
     if (sent == (int)size) return 0;
     if (!pattern_spin || sent != -1 || zmq_errno() != EAGAIN) return -1;
-    const uint64_t now = cmeta_monotonic_ms();
+    const uint64_t now = monotonic_ms();
     if (start == 0) start = now;
     if (now - start >= PATTERN_TIMEOUT_MS) return -1;
   }
@@ -97,7 +97,7 @@ static int pattern_receive(void *socket, void *data, size_t capacity) {
                                   pattern_spin ? ZMQ_DONTWAIT : 0);
     if (received >= 0) return received;
     if (!pattern_spin || zmq_errno() != EAGAIN) return -1;
-    const uint64_t now = cmeta_monotonic_ms();
+    const uint64_t now = monotonic_ms();
     if (start == 0) start = now;
     if (now - start >= PATTERN_TIMEOUT_MS) return -1;
   }
@@ -121,9 +121,9 @@ static int pattern_recv(void *socket, const void *expected, size_t size,
  * therefore has its own end-to-end, tagged subscription barrier below. */
 static int pattern_push_ready(void *monitor) {
   unsigned ready = 0;
-  const uint64_t start = cmeta_monotonic_ms();
+  const uint64_t start = monotonic_ms();
   while (ready < PATTERN_PEERS &&
-         cmeta_monotonic_ms() - start < PATTERN_TIMEOUT_MS) {
+         monotonic_ms() - start < PATTERN_TIMEOUT_MS) {
     unsigned char event_bytes[6];
     char endpoint[256];
     uint16_t event;
@@ -150,12 +150,12 @@ static int pattern_push_ready(void *monitor) {
 
 static int pattern_pub_ready(pattern_fixture_t *fixture, const char *topic,
                              unsigned mask) {
-  const uint64_t start = cmeta_monotonic_ms();
+  const uint64_t start = monotonic_ms();
   uint64_t sequence = 0;
   unsigned char warm[PATTERN_BYTES];
-  while (cmeta_monotonic_ms() - start < PATTERN_TIMEOUT_MS) {
+  while (monotonic_ms() - start < PATTERN_TIMEOUT_MS) {
     unsigned received_mask = 0;
-    const uint64_t attempt = cmeta_monotonic_ms();
+    const uint64_t attempt = monotonic_ms();
     memset(warm, 0xa5, sizeof(warm));
     memcpy(warm, topic, strlen(topic));
     ++sequence;
@@ -163,7 +163,7 @@ static int pattern_pub_ready(pattern_fixture_t *fixture, const char *topic,
     if (pattern_send(fixture->sockets[0], warm, sizeof(warm), 0) != 0)
       return -1;
     while (received_mask != mask &&
-           cmeta_monotonic_ms() - attempt < PATTERN_WARM_POLL_MS) {
+           monotonic_ms() - attempt < PATTERN_WARM_POLL_MS) {
       zmq_pollitem_t items[PATTERN_PEERS] = {0};
       for (size_t i = 0; i < PATTERN_PEERS; ++i) {
         items[i].socket = fixture->sockets[i + 1];

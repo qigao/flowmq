@@ -2,8 +2,8 @@
 #include "flowmq_protocol_internal.h"
 
 #include "tinytest.h"
-#include "cmeta_error.h"
-#include "str.h"
+#include <core/error.h>
+#include <core/tstr.h>
 
 #include <string.h>
 

@@ -4,9 +4,9 @@
 #include "flowmq_export.h"
 #include "flowmq_protocol_catalog.h"
 
-#include "platform.h"
-#include "cmeta_error.h"
-#include "str.h"
+#include <core/platform.h>
+#include <core/error.h>
+#include <core/tstr.h>
 
 #include <stddef.h>
 #include <stdint.h>

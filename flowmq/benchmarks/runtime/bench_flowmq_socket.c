@@ -3,8 +3,8 @@
 #include "flowmq_bench_metrics.h"
 #include "flowmq_tls_test_material.h"
 #include "tinytest.h"
-#include "cmeta_error.h"
-#include <salts/clock.h>
+#include <core/error.h>
+#include <core/clock.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -65,7 +65,7 @@ static int bench_progress(bench_pair_t *pair) {
 }
 
 static uint64_t bench_progress_deadline_ms(void) {
-  const uint64_t now = cmeta_monotonic_ms();
+  const uint64_t now = monotonic_ms();
   return now > UINT64_MAX - BENCH_PROGRESS_TIMEOUT_MS
              ? UINT64_MAX
              : now + BENCH_PROGRESS_TIMEOUT_MS;
@@ -80,7 +80,7 @@ static int bench_progress_wait(bench_pair_t *pair, uint64_t deadline_ms,
       {.socket = pair->receiver,
        .events = (short)(FLOWMQ_POLLERR |
                          (waiting_for_send ? 0 : FLOWMQ_POLLIN))}};
-  const uint64_t now = cmeta_monotonic_ms();
+  const uint64_t now = monotonic_ms();
   uint64_t remaining_ms;
   uint32_t wait_ms;
   size_t ready = 0u;
@@ -570,7 +570,7 @@ static int bench_tls_evidence_measure(
   }
 
   for (size_t sample = 0u; sample < workload->samples; ++sample) {
-    const uint64_t started = cmeta_hrtime();
+    const uint64_t started = hrtime();
     uint64_t elapsed;
     status = bench_tls_evidence_exchange(&pair, workload);
     if (status != SALTS_OK) {
@@ -579,7 +579,7 @@ static int bench_tls_evidence_measure(
               workload->name, sample, status);
       goto cleanup;
     }
-    elapsed = cmeta_hrtime() - started;
+    elapsed = hrtime() - started;
     if (elapsed == 0u || elapsed > UINT64_MAX - elapsed_total) {
       status = SALTS_ERANGE;
       goto cleanup;
@@ -817,7 +817,7 @@ static int bench_owned_rx_measure(
   }
 
   for (size_t sample = 0u; sample < samples; ++sample) {
-    const uint64_t started = cmeta_hrtime();
+    const uint64_t started = hrtime();
     uint64_t elapsed;
     int direct = 0;
     size_t range_count = 0u;
@@ -830,7 +830,7 @@ static int bench_owned_rx_measure(
               bench_owned_rx_mode_name(mode), payload_size, sample, status);
       goto cleanup;
     }
-    elapsed = cmeta_hrtime() - started;
+    elapsed = hrtime() - started;
     if (elapsed == 0u || elapsed > UINT64_MAX - elapsed_total) {
       status = SALTS_ERANGE;
       goto cleanup;
@@ -1124,11 +1124,11 @@ spec("FlowMQ direct socket benchmark") {
           items[1] = (flowmq_pollitem_t){.socket = pair.receiver, .events = FLOWMQ_POLLIN};
           check_equal(flowmq_bench_metrics_read(&before), SALTS_OK);
           benchmark_ops("connected idle window", 1u, 1u) {
-            start = cmeta_hrtime();
+            start = hrtime();
             do {
               status = flowmq_poll(items, 2u, wait_ms, &ready);
               ++calls;
-              elapsed = cmeta_hrtime() - start;
+              elapsed = hrtime() - start;
             } while (status == SALTS_OK && ready == 0u && elapsed < UINT64_C(250000000));
           }
           check_equal(flowmq_bench_metrics_read(&after), SALTS_OK);
@@ -1161,10 +1161,10 @@ spec("FlowMQ direct socket benchmark") {
               check_equal(bench_exchange(&pair, payload, bytes), SALTS_OK);
             check_equal(flowmq_bench_metrics_read(&before), SALTS_OK);
             benchmark_io("wait policy exchange", 1u, messages, messages * bytes) {
-              start = cmeta_hrtime();
+              start = hrtime();
               for (size_t i = 0u; status == SALTS_OK && i < messages; ++i)
                 status = bench_exchange(&pair, payload, bytes);
-              elapsed = cmeta_hrtime() - start;
+              elapsed = hrtime() - start;
             }
             check_equal(flowmq_bench_metrics_read(&after), SALTS_OK);
             check_equal(status, SALTS_OK);

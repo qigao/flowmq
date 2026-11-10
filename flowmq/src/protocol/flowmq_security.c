@@ -1,6 +1,6 @@
 #include "flowmq_security.h"
 
-#include "cmeta_error.h"
+#include <core/error.h>
 
 #include <stdint.h>
 #include <string.h>

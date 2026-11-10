@@ -4,8 +4,8 @@
 #include "flowmq_protocol_internal.h"
 #include "flowmq_stream_decoder.h"
 
-#include "cmeta_buffer.h"
-#include "cmeta_error.h"
+#include <memory/buffer.h>
+#include <core/error.h>
 
 #include <stddef.h>
 #include <stdint.h>

@@ -1,13 +1,3 @@
-# DataBind FlowMQ transport plans are generated only for qualification. Reuse
-# the exact host compiler already resolved by the top-level cross-platform
-# build so Android never attempts to execute a target salts-idlc.
-set(SaltsUtils_IDLC_EXECUTABLE
-    "${FLOWMQ_SALTS_IDLC_EXECUTABLE}"
-    CACHE FILEPATH "FlowMQ qualification host salts-idlc" FORCE)
-set(SaltsUtils_IDLC_HOST_SALTS_ROOT
-    "${FLOWMQ_SALTS_HOST_ROOT_PATH}"
-    CACHE PATH "FlowMQ qualification host Salts SDK" FORCE)
-
 salts_idl_target(
   TARGET flowmq_databind_channel_fixture
   IDL "${CMAKE_CURRENT_SOURCE_DIR}/databind/channel.schema"
@@ -84,6 +74,7 @@ foreach(test_name IN ITEMS pattern pattern_state flow_control reconnect subscrip
              ${PROJECT_SOURCE_DIR}/flowmq/src/core/session
     FOLDER "flowmq/tests/core")
 endforeach()
+target_link_libraries(test_flowmq_subscription_set PRIVATE CMeta::CSTL)
 
 cmake_add_test(
   test_flowmq_tls_identity_map
@@ -100,7 +91,7 @@ cmake_add_test(
 cmake_add_test(
   test_flowmq_listener_external
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/transport/test_flowmq_listener_external.c
-  LIBS FlowMQ::Transport Salts::TinyTest
+  LIBS FlowMQ::Transport Salts::CNet Salts::TinyTest
   INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/transport/cnet
            ${PROJECT_SOURCE_DIR}/flowmq/src/runtime
   FOLDER "flowmq/tests/transport")

@@ -1,6 +1,6 @@
 #include "flowmq_pattern_state.h"
 
-#include "cmeta_error.h"
+#include <core/error.h>
 
 #include <string.h>
 

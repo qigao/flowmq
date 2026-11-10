@@ -3,8 +3,8 @@
 #include "flowmq_socket_external_internal.h"
 #include "tinytest.h"
 
-#include <salts/clock.h>
-#include <salts/error_codes.h>
+#include <core/clock.h>
+#include <core/error_codes.h>
 #include <string.h>
 
 enum { LISTENER_OWNED = 2, LISTENER_CLIENTS = 5, LISTENER_DEADLINE_MS = 3000 };
@@ -74,12 +74,12 @@ static void listener_progress(listener_fixture *f) {
 static void listener_exchange(listener_fixture *f, flowmq_socket_t *from,
                                flowmq_socket_t *to, unsigned char seed) {
   unsigned char payload[64], received[64];
-  const uint64_t deadline = cmeta_monotonic_ms() + LISTENER_DEADLINE_MS;
+  const uint64_t deadline = monotonic_ms() + LISTENER_DEADLINE_MS;
   bool sent = false;
   bool got = false;
   for (size_t i = 0u; i < sizeof(payload); ++i)
     payload[i] = (unsigned char)(seed + i * 3u);
-  while (!got && cmeta_monotonic_ms() < deadline) {
+  while (!got && monotonic_ms() < deadline) {
     size_t size = 0u;
     int status;
     listener_progress(f);

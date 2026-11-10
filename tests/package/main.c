@@ -1,5 +1,5 @@
 #include <flowmq.h>
-#include <cmeta_error.h>
+#include <core/error.h>
 
 #include <stddef.h>
 #include <stdint.h>

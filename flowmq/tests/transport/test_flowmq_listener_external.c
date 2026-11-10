@@ -3,8 +3,8 @@
 #include "tinytest.h"
 
 #include <cnet/manager.h>
-#include <salts/clock.h>
-#include <salts/error_codes.h>
+#include <core/clock.h>
+#include <core/error_codes.h>
 #include <string.h>
 
 /* Qualify the released SDK boundary before opening FlowMQ owner bind. These
@@ -154,8 +154,8 @@ static native_io_request accept_submit(accept_fixture *f, size_t slot) {
 }
 
 static void accept_wait_terminal(accept_fixture *f, size_t expected) {
-  const uint64_t deadline = cmeta_monotonic_ms() + ACCEPT_DEADLINE_MS;
-  while (f->accepts < expected && cmeta_monotonic_ms() < deadline)
+  const uint64_t deadline = monotonic_ms() + ACCEPT_DEADLINE_MS;
+  while (f->accepts < expected && monotonic_ms() < deadline)
     check_equal(accept_progress(f, 10u), SALTS_OK);
   check_equal(f->accepts, expected);
 }
@@ -195,7 +195,7 @@ static void accept_connect(accept_fixture *f) {
 }
 
 static void accept_cleanup(accept_fixture *f) {
-  const uint64_t deadline = cmeta_monotonic_ms() + ACCEPT_DEADLINE_MS;
+  const uint64_t deadline = monotonic_ms() + ACCEPT_DEADLINE_MS;
   bool listeners_done = false;
   bool clients_done = false;
   size_t work;
@@ -238,7 +238,7 @@ static void accept_cleanup(accept_fixture *f) {
     }
     if (listeners_done && clients_done) break;
     check_equal(accept_progress(f, 10u), SALTS_OK);
-  } while (cmeta_monotonic_ms() < deadline);
+  } while (monotonic_ms() < deadline);
   check_true(listeners_done && clients_done);
   if (f->manager.impl != NULL) {
     check_equal(cnet_manager_advance(&f->manager, 1u, &work), SALTS_OK);
@@ -258,11 +258,11 @@ static void accept_cleanup(accept_fixture *f) {
 
 static void accept_observe_connect_pair(accept_fixture *f,
                                         native_io_completion completions[2]) {
-  const uint64_t deadline = cmeta_monotonic_ms() + ACCEPT_DEADLINE_MS;
+  const uint64_t deadline = monotonic_ms() + ACCEPT_DEADLINE_MS;
   size_t count = 0u;
   /* Collect the connect and accept terminals before either is routed. Keeping
    * the two actual events makes the close race and mixed batch deterministic. */
-  while (count < 2u && cmeta_monotonic_ms() < deadline) {
+  while (count < 2u && monotonic_ms() < deadline) {
     size_t events = 0u;
     size_t observed = 0u;
     int status;
@@ -395,9 +395,9 @@ spec("FlowMQ external listener SDK qualification") {
     check_equal(cnet_manager_adopt(&f.manager, f.managed, &f.detached, NULL,
                                    &f.incoming), SALTS_OK);
     check_equal(cnet_accepted_stream_close(&f.detached), SALTS_EALREADY);
-    deadline = cmeta_monotonic_ms() + ACCEPT_DEADLINE_MS;
+    deadline = monotonic_ms() + ACCEPT_DEADLINE_MS;
     while ((f.observers[0].connected == 0u || f.observers[1].connected == 0u) &&
-           cmeta_monotonic_ms() < deadline)
+           monotonic_ms() < deadline)
       check_equal(accept_progress(&f, 10u), SALTS_OK);
     check_equal(f.observers[0].connected, 1u);
     check_equal(f.observers[1].connected, 1u);
@@ -417,9 +417,9 @@ spec("FlowMQ external listener SDK qualification") {
     check_equal(cnet_send_buffer(&f.clients[1], f.outgoing, f.buffer), SALTS_OK);
     mem_buffer_release(f.buffer);
     f.buffer = NULL;
-    deadline = cmeta_monotonic_ms() + ACCEPT_DEADLINE_MS;
+    deadline = monotonic_ms() + ACCEPT_DEADLINE_MS;
     while ((f.observers[0].received != sizeof(f.payload) || f.releases == 0u) &&
-           cmeta_monotonic_ms() < deadline)
+           monotonic_ms() < deadline)
       check_equal(accept_progress(&f, 10u), SALTS_OK);
     check_false(f.observers[0].overflow);
     check_equal(f.observers[0].received, sizeof(f.payload));
@@ -490,7 +490,7 @@ spec("FlowMQ external listener SDK qualification") {
     native_io_completion completions[2];
     native_io_request requests[2];
     size_t count = 0u;
-    const uint64_t deadline = cmeta_monotonic_ms() + ACCEPT_DEADLINE_MS;
+    const uint64_t deadline = monotonic_ms() + ACCEPT_DEADLINE_MS;
     accept_backend(&f, 4u, 2u);
     for (size_t i = 0u; i < 2u; ++i) {
       accept_attach(&f, i);
@@ -499,7 +499,7 @@ spec("FlowMQ external listener SDK qualification") {
     }
     /* Accumulate real observations without routing; two terminal events have
      * no payload borrow and fit the declared bounded batch. */
-    while (count < 2u && cmeta_monotonic_ms() < deadline) {
+    while (count < 2u && monotonic_ms() < deadline) {
       size_t observed = 0u;
       const int status = native_io_backend_observe(
           &f.backend, completions + count, 2u - count, 10u, &observed);

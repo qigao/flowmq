@@ -115,8 +115,6 @@
                 "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/flowmq-android/debug"
             },
             "environment": {
-                "SALTS_ROOT": "$env{PKG_ROOT}/salts-android/debug",
-                "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils-android/debug"
             }
         },
         {
@@ -126,8 +124,6 @@
                 "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/flowmq-android/release"
             },
             "environment": {
-                "SALTS_ROOT": "$env{PKG_ROOT}/salts-android/release",
-                "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils-android/release"
             }
         },
         {
@@ -138,9 +134,7 @@
                 "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/flowmq/debug"
             },
             "environment": {
-                "SALTS_ROOT": "$env{PKG_ROOT}/salts/debug",
-                "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/debug",
-                "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/Msvc/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
+                "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/Msvc/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_BASE_ROOT}/bin${pathListSep}$env{SALTSCORE_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
             },
             "inherits": [
                 "base-win-dev-user",
@@ -154,9 +148,7 @@
                 "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/flowmq/release"
             },
             "environment": {
-                "SALTS_ROOT": "${sourceDir}/stage/dependencies/salts/windows-x64",
-                "SALTS_UTILS_ROOT": "${sourceDir}/stage/dependencies/salts-utils/windows-x64",
-                "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/Msvc-Release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
+                "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/Msvc-Release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_BASE_ROOT}/bin${pathListSep}$env{SALTSCORE_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
             },
             "inherits": [
                 "base-win-release-user",
@@ -171,8 +163,7 @@
                 "CMAKE_INSTALL_PREFIX": "${sourceDir}/stage/local-sdk/flowmq/windows-x64"
             },
             "environment": {
-                "SALTS_ROOT": "$penv{FLOWMQ_LOCAL_SALTS_ROOT}",
-                "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/Msvc-Release-LocalSDK/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
+                "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/Msvc-Release-LocalSDK/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_BASE_ROOT}/bin${pathListSep}$env{SALTSCORE_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
             }
         },
         {
@@ -183,9 +174,7 @@
                 "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/flowmq/debug"
             },
             "environment": {
-                "SALTS_ROOT": "$env{PKG_ROOT}/salts/debug",
-                "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/debug",
-                "LD_LIBRARY_PATH": "${sourceDir}/build/linux-gcc-debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
+                "LD_LIBRARY_PATH": "${sourceDir}/build/linux-gcc-debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{SALTS_BASE_ROOT}/lib${pathListSep}$env{SALTSCORE_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
             },
             "inherits": [
                 "base-linux-dev-user",
@@ -199,9 +188,7 @@
                 "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/flowmq/release"
             },
             "environment": {
-                "SALTS_ROOT": "${sourceDir}/stage/dependencies/salts/linux-x64",
-                "SALTS_UTILS_ROOT": "${sourceDir}/stage/dependencies/salts-utils/linux-x64",
-                "LD_LIBRARY_PATH": "${sourceDir}/build/linux-gcc-release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
+                "LD_LIBRARY_PATH": "${sourceDir}/build/linux-gcc-release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{SALTS_BASE_ROOT}/lib${pathListSep}$env{SALTSCORE_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
             },
             "inherits": [
                 "release-linux-ninja",
@@ -217,10 +204,6 @@
                 "ENABLE_ASAN": "OFF",
                 "BUILD_TESTS": "OFF",
                 "BUILD_EXAMPLES": "OFF"
-            },
-            "environment": {
-                "SALTS_ROOT": "${sourceDir}/stage/dependencies/salts/linux-x64",
-                "SALTS_UTILS_ROOT": "${sourceDir}/stage/dependencies/salts-utils/linux-x64"
             },
             "inherits": [
                 "release-linux-ninja",
@@ -319,9 +302,7 @@
                 "BUILD_EXAMPLES": "OFF"
             },
             "environment": {
-                "SALTS_ROOT": "$penv{SALTS_ROOT}",
-                "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
-                "DYLD_LIBRARY_PATH": "${sourceDir}/build/flowmq/bin${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}${sourceDir}/vcpkg_installed/$penv{FLOWMQ_TRIPLET}/lib${pathListSep}$penv{DYLD_LIBRARY_PATH}"
+                "DYLD_LIBRARY_PATH": "${sourceDir}/build/flowmq/bin${pathListSep}$env{SALTS_BASE_ROOT}/lib${pathListSep}$env{SALTSCORE_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}${sourceDir}/vcpkg_installed/$penv{FLOWMQ_TRIPLET}/lib${pathListSep}$penv{DYLD_LIBRARY_PATH}"
             }
         },
         {
@@ -340,10 +321,8 @@
                 "BUILD_EXAMPLES": false
             },
             "environment": {
-                "SALTS_ROOT": "$penv{SALTS_ROOT}",
-                "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
-                "PATH": "${sourceDir}/build/flowmq/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}${sourceDir}/vcpkg_installed/$penv{FLOWMQ_TRIPLET}/bin${pathListSep}$penv{PATH}",
-                "LD_LIBRARY_PATH": "${sourceDir}/build/flowmq/bin${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}${sourceDir}/vcpkg_installed/$penv{FLOWMQ_TRIPLET}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
+                "PATH": "${sourceDir}/build/flowmq/bin${pathListSep}$env{SALTS_BASE_ROOT}/bin${pathListSep}$env{SALTSCORE_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}${sourceDir}/vcpkg_installed/$penv{FLOWMQ_TRIPLET}/bin${pathListSep}$penv{PATH}",
+                "LD_LIBRARY_PATH": "${sourceDir}/build/flowmq/bin${pathListSep}$env{SALTS_BASE_ROOT}/lib${pathListSep}$env{SALTSCORE_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}${sourceDir}/vcpkg_installed/$penv{FLOWMQ_TRIPLET}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
             }
         }
     ],

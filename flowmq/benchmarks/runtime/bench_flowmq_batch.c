@@ -1,7 +1,7 @@
 #include "flowmq_socket.h"
 #include "flowmq_bench_metrics.h"
 #include "tinytest.h"
-#include <salts/clock.h>
+#include <core/clock.h>
 #include <zmq.h>
 
 #if defined(FLOWMQ_BATCH_PROBE)
@@ -132,13 +132,13 @@ static int batch_pair_open(batch_pair_t *pair, int use_zmq, int coalesce,
 static int batch_progress(batch_pair_t *pair, uint64_t deadline) {
   flowmq_pollitem_t items[] = {{.socket = pair->sender}, {.socket = pair->receiver}};
   size_t ready = 0u;
-  if (cmeta_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
+  if (monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
   ++pair->poll_calls;
 #if defined(FLOWMQ_BATCH_PHASE_TIMING)
   {
-    const uint64_t started = cmeta_hrtime();
+    const uint64_t started = hrtime();
     const int status = flowmq_poll(items, 2u, 0u, &ready);
-    pair->poll_ns += cmeta_hrtime() - started;
+    pair->poll_ns += hrtime() - started;
     return status;
   }
 #else
@@ -155,7 +155,7 @@ static int batch_exchange(batch_pair_t *pair, size_t count) {
   unsigned char *payload = pair->payload;
   unsigned char *received = pair->received;
   const size_t bytes = pair->payload_bytes;
-  const uint64_t now = cmeta_monotonic_ms();
+  const uint64_t now = monotonic_ms();
   uint64_t deadline;
   int status;
   if (count == 0u || count > BATCH_MAX_MESSAGES ||
@@ -172,12 +172,12 @@ static int batch_exchange(batch_pair_t *pair, size_t count) {
     } else {
       for (;;) {
 #if defined(FLOWMQ_BATCH_PHASE_TIMING)
-        const uint64_t started = cmeta_hrtime();
+        const uint64_t started = hrtime();
 #endif
         status = flowmq_send(pair->sender, payload + i * bytes, bytes,
                              FLOWMQ_DONTWAIT);
 #if defined(FLOWMQ_BATCH_PHASE_TIMING)
-        pair->send_ns += cmeta_hrtime() - started;
+        pair->send_ns += hrtime() - started;
 #endif
         if (status != SALTS_EBUSY && status != SALTS_ENOBUFS) break;
         ++pair->send_retries;
@@ -195,12 +195,12 @@ static int batch_exchange(batch_pair_t *pair, size_t count) {
       size_t received_size = 0u;
       for (;;) {
 #if defined(FLOWMQ_BATCH_PHASE_TIMING)
-        const uint64_t started = cmeta_hrtime();
+        const uint64_t started = hrtime();
 #endif
         status = flowmq_recv(pair->receiver, received, bytes,
                              &received_size, FLOWMQ_DONTWAIT);
 #if defined(FLOWMQ_BATCH_PHASE_TIMING)
-        pair->recv_ns += cmeta_hrtime() - started;
+        pair->recv_ns += hrtime() - started;
 #endif
         if (status != SALTS_EBUSY) break;
         status = batch_progress(pair, deadline);
@@ -306,14 +306,14 @@ static int batch_run_sized(int use_zmq, size_t batch, size_t messages,
   benchmark_io("fixed-total TCP batch workload", 1u, messages,
                messages * bytes) {
 #endif
-    started = cmeta_hrtime();
+    started = hrtime();
     for (; completed < messages; completed += batch) {
-      const uint64_t burst_start = burst_ns == NULL ? 0u : cmeta_hrtime();
+      const uint64_t burst_start = burst_ns == NULL ? 0u : hrtime();
       status = batch_exchange(&pair, batch);
-      if (burst_ns != NULL) burst_ns[completed / batch] = cmeta_hrtime() - burst_start;
+      if (burst_ns != NULL) burst_ns[completed / batch] = hrtime() - burst_start;
       if (status != SALTS_OK) goto measurement_finished;
     }
-    finished = cmeta_hrtime();
+    finished = hrtime();
     status = flowmq_bench_metrics_read(&after);
     if (status != SALTS_OK) goto measurement_finished;
 #if !defined(FLOWMQ_BATCH_PROBE)

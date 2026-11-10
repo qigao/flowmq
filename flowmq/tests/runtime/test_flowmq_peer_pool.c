@@ -1,7 +1,7 @@
 #include "flowmq_peer_pool.h"
 #include "flowmq_owner.h"
 #include "tinytest.h"
-#include "cmeta_error.h"
+#include <core/error.h>
 
 #include <string.h>
 

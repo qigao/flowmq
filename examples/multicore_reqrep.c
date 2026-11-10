@@ -1,8 +1,8 @@
 #include "flowmq_socket.h"
 
 #include <errno.h>
-#include <salts/clock.h>
-#include <salts/thread.h>
+#include <core/clock.h>
+#include <threads/threads.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,8 +23,8 @@ enum {
 };
 
 typedef struct example_run_s {
-  cmeta_mutex_t mutex;
-  cmeta_cond_t changed;
+  sync_mutex_t mutex;
+  sync_cond_t changed;
   atomic_int error;
   atomic_bool stop;
   size_t ready;
@@ -64,7 +64,7 @@ static int example_progress(example_run_t *run, flowmq_socket_t *socket, short e
   size_t ready = 0u;
   int status = atomic_load(&run->error);
   if (status != SALTS_OK) return status;
-  if (cmeta_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
+  if (monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
   status = flowmq_poll(&item, 1u, EXAMPLE_POLL_MS, &ready);
   if (status == SALTS_OK && (item.revents & FLOWMQ_POLLERR)) return SALTS_ENOTCONN;
   return status;
@@ -72,7 +72,7 @@ static int example_progress(example_run_t *run, flowmq_socket_t *socket, short e
 
 static int example_send(example_run_t *run, flowmq_socket_t *socket, const char *message,
                         size_t size) {
-  const uint64_t deadline = cmeta_monotonic_ms() + run->timeout_ms;
+  const uint64_t deadline = monotonic_ms() + run->timeout_ms;
   for (;;) {
     int status = atomic_load(&run->error);
     if (status != SALTS_OK) return status;
@@ -85,7 +85,7 @@ static int example_send(example_run_t *run, flowmq_socket_t *socket, const char 
 
 static int example_receive(example_run_t *run, flowmq_socket_t *socket, char *message,
                            size_t capacity, size_t *size) {
-  const uint64_t deadline = cmeta_monotonic_ms() + run->timeout_ms;
+  const uint64_t deadline = monotonic_ms() + run->timeout_ms;
   for (;;) {
     int status = atomic_load(&run->error);
     if (status != SALTS_OK) return status;
@@ -121,10 +121,10 @@ static void example_worker_entry(void *arg) {
     status =
         flowmq_last_endpoint(socket, worker->endpoint, sizeof(worker->endpoint), &endpoint_size);
   example_error(run, status);
-  cmeta_mutex_lock(&run->mutex);
+  sync_mutex_lock(&run->mutex);
   ++run->ready;
-  cmeta_cond_signal(&run->changed);
-  cmeta_mutex_unlock(&run->mutex);
+  sync_cond_signal(&run->changed);
+  sync_mutex_unlock(&run->mutex);
 
   for (size_t sequence = 0u; status == SALTS_OK && sequence < run->requests; ++sequence) {
     char expected[EXAMPLE_MESSAGE_BYTES];
@@ -144,7 +144,7 @@ static void example_worker_entry(void *arg) {
   /* Send admission does not establish delivery. Keep progressing the last
    * reply until the client has consumed every reply and explicitly stops us. */
   if (status == SALTS_OK) {
-    const uint64_t deadline = cmeta_monotonic_ms() + run->timeout_ms;
+    const uint64_t deadline = monotonic_ms() + run->timeout_ms;
     worker->phase = "drain";
     while (status == SALTS_OK && !atomic_load(&run->stop))
       status = example_progress(run, socket, 0, deadline);
@@ -153,10 +153,10 @@ static void example_worker_entry(void *arg) {
   example_error(run, status);
   if (socket != NULL) example_error(run, flowmq_close(socket));
   if (ctx != NULL) example_error(run, flowmq_ctx_term(ctx));
-  cmeta_mutex_lock(&run->mutex);
+  sync_mutex_lock(&run->mutex);
   ++run->exited;
-  cmeta_cond_signal(&run->changed);
-  cmeta_mutex_unlock(&run->mutex);
+  sync_cond_signal(&run->changed);
+  sync_mutex_unlock(&run->mutex);
 }
 
 static int example_round(example_run_t *run, flowmq_pollitem_t *items, size_t count,
@@ -164,7 +164,7 @@ static int example_round(example_run_t *run, flowmq_pollitem_t *items, size_t co
   char expected[EXAMPLE_MAX_WORKERS][EXAMPLE_MESSAGE_BYTES];
   bool sent[EXAMPLE_MAX_WORKERS] = {false};
   bool received[EXAMPLE_MAX_WORKERS] = {false};
-  const uint64_t deadline = cmeta_monotonic_ms() + run->timeout_ms;
+  const uint64_t deadline = monotonic_ms() + run->timeout_ms;
   size_t completed = 0u;
   for (size_t i = 0u; i < count; ++i) {
     int status = example_message(expected[i], sizeof(expected[i]), i, sequence);
@@ -175,7 +175,7 @@ static int example_round(example_run_t *run, flowmq_pollitem_t *items, size_t co
     size_t ready = 0u;
     int status = atomic_load(&run->error);
     if (status != SALTS_OK) return status;
-    if (cmeta_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
+    if (monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
     for (size_t i = 0u; i < count; ++i) {
       char message[EXAMPLE_MESSAGE_BYTES];
       size_t size = 0u;
@@ -227,10 +227,10 @@ static int example_exchange(example_run_t *run, example_worker_t *workers, size_
   atomic_store(&run->stop, true);
   /* Keep clients alive until workers finish progress, avoiding a peer-close
    * race with the successful final reply's transport completion. */
-  cmeta_mutex_lock(&run->mutex);
+  sync_mutex_lock(&run->mutex);
   while (run->exited != count)
-    cmeta_cond_wait(&run->changed, &run->mutex);
-  cmeta_mutex_unlock(&run->mutex);
+    sync_cond_wait(&run->changed, &run->mutex);
+  sync_mutex_unlock(&run->mutex);
   for (size_t i = 0u; i < count; ++i)
     if (clients[i].socket != NULL) example_error(run, flowmq_close(clients[i].socket));
   if (ctx != NULL) example_error(run, flowmq_ctx_term(ctx));
@@ -251,7 +251,7 @@ static int example_count(const char *value, size_t maximum, size_t *out) {
 int main(int argc, char **argv) {
   example_run_t run = {0};
   example_worker_t workers[EXAMPLE_MAX_WORKERS] = {0};
-  cmeta_thread_t threads[EXAMPLE_MAX_WORKERS] = {0};
+  sync_thread_t threads[EXAMPLE_MAX_WORKERS] = {0};
   size_t count = EXAMPLE_DEFAULT_WORKERS;
   size_t requests = EXAMPLE_DEFAULT_REQUESTS;
   size_t timeout = EXAMPLE_DEFAULT_TIMEOUT_MS;
@@ -269,24 +269,24 @@ int main(int argc, char **argv) {
   run.timeout_ms = (uint32_t)timeout;
   atomic_init(&run.error, SALTS_OK);
   atomic_init(&run.stop, false);
-  cmeta_mutex_init(&run.mutex);
-  cmeta_cond_init(&run.changed);
+  sync_mutex_init(&run.mutex);
+  sync_cond_init(&run.changed);
   for (size_t i = 0u; status == SALTS_OK && i < count; ++i) {
     workers[i].run = &run;
     workers[i].id = i;
-    status = cmeta_thread_create(&threads[i], example_worker_entry, &workers[i]);
+    status = sync_thread_create(&threads[i], example_worker_entry, &workers[i]);
     if (status == SALTS_OK) ++created;
   }
   example_error(&run, status);
-  cmeta_mutex_lock(&run.mutex);
+  sync_mutex_lock(&run.mutex);
   while (run.ready != created)
-    cmeta_cond_wait(&run.changed, &run.mutex);
-  cmeta_mutex_unlock(&run.mutex);
+    sync_cond_wait(&run.changed, &run.mutex);
+  sync_mutex_unlock(&run.mutex);
   if (atomic_load(&run.error) == SALTS_OK)
     example_error(&run, example_exchange(&run, workers, count));
   atomic_store(&run.stop, true);
   for (size_t i = 0u; i < created; ++i) {
-    status = cmeta_thread_join(&threads[i]);
+    status = sync_thread_join(&threads[i]);
     if (status != SALTS_OK) {
       /* A failed join cannot establish that stack-owned state is quiescent. */
       fprintf(stderr, "worker=%zu join failed: %d\n", i, status);
@@ -298,8 +298,8 @@ int main(int argc, char **argv) {
   }
   status = atomic_load(&run.error);
   if (status == SALTS_OK && completed != count * requests) status = SALTS_EPROTO;
-  cmeta_cond_destroy(&run.changed);
-  cmeta_mutex_destroy(&run.mutex);
+  sync_cond_destroy(&run.changed);
+  sync_mutex_destroy(&run.mutex);
   if (status != SALTS_OK) {
     fprintf(stderr, "multicore exchange failed: status=%d\n", status);
     return EXIT_FAILURE;

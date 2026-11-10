@@ -1,6 +1,6 @@
 #include "flowmq_media_provider.h"
 
-#include "cmeta_error.h"
+#include <core/error.h>
 
 #include <stdint.h>
 #include <string.h>

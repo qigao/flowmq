@@ -1,7 +1,7 @@
 #include "flowmq_peer_state.h"
 #include "flowmq_peer_state_schema.h"
 
-#include "cmeta_error.h"
+#include <core/error.h>
 
 #include <string.h>
 

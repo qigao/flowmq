@@ -1,12 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
-foreach(_package_root IN ITEMS FLOWMQ_ROOT SALTS_ROOT SALTS_UTILS_ROOT
-                               VCPKG_ROOT VCPKG_CACHE_REPOSITORY_ROOT)
-  if(NOT DEFINED ENV{${_package_root}} OR "$ENV{${_package_root}}" STREQUAL "")
-    message(FATAL_ERROR "${_package_root} must name the selected package/toolchain root")
-  endif()
-endforeach()
-if(NOT DEFINED VCPKG_TARGET_TRIPLET OR "${VCPKG_TARGET_TRIPLET}" STREQUAL "")
-  message(FATAL_ERROR "Select a package user preset and set FLOWMQ_TRIPLET")
+if("$ENV{FLOWMQ_ROOT}" STREQUAL "")
+  message(FATAL_ERROR "FLOWMQ_ROOT must name the installed FlowMQ SDK")
 endif()
 project(flowmq_package_consumer C CXX)
 
@@ -32,9 +26,9 @@ endforeach()
 foreach(_flowmq_forbidden_dependency IN ITEMS
         Salts::TbeSchema
         Salts::DataBindSchema
-        Salts::CMeta
-        Salts::CFlow
-        Salts::CSTL
+        CMeta::CMeta
+        CMeta::CFlow
+        CMeta::CSTL
         Salts::CNet
         Salts::NativeIO
         OpenSSL::SSL

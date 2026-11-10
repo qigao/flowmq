@@ -1,7 +1,7 @@
 #include "flowmq_esb.h"
 #include "flowmq_protocol.h"
 #include "tinytest.h"
-#include "cmeta_error.h"
+#include <core/error.h>
 
 #include <string.h>
 
