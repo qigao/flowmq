@@ -324,11 +324,17 @@ endif()
 
 if(FLOWMQ_BUILD_ZMQ_BENCHMARK)
   find_package(ZeroMQ CONFIG REQUIRED)
-  target_link_libraries(bench_flowmq_socket PRIVATE libzmq-static)
+  # The locked Windows profile supplies a DLL. Unix profiles supply an archive.
+  if(WIN32)
+    set(_flowmq_zmq_target libzmq)
+  else()
+    set(_flowmq_zmq_target libzmq-static)
+  endif()
+  target_link_libraries(bench_flowmq_socket PRIVATE ${_flowmq_zmq_target})
   target_compile_definitions(bench_flowmq_socket PRIVATE FLOWMQ_BENCH_WITH_ZMQ=1)
-  target_link_libraries(bench_flowmq_socket_owners PRIVATE libzmq-static)
+  target_link_libraries(bench_flowmq_socket_owners PRIVATE ${_flowmq_zmq_target})
   target_compile_definitions(bench_flowmq_socket_owners PRIVATE FLOWMQ_BENCH_WITH_ZMQ=1)
-  target_link_libraries(bench_flowmq_owner_mailbox PRIVATE libzmq-static)
+  target_link_libraries(bench_flowmq_owner_mailbox PRIVATE ${_flowmq_zmq_target})
   target_compile_definitions(bench_flowmq_owner_mailbox PRIVATE FLOWMQ_BENCH_WITH_ZMQ=1)
   if(BUILD_TESTS)
     add_test(NAME test_flowmq_mailbox_zmq
@@ -348,7 +354,7 @@ if(FLOWMQ_BUILD_ZMQ_BENCHMARK)
   endif()
   cmake_add_benchmark(bench_flowmq_pattern_zmq
     SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_pattern_zmq.c
-    LIBS libzmq-static Salts::Core Salts::TinyTest
+    LIBS ${_flowmq_zmq_target} Salts::Core Salts::TinyTest
     FOLDER "flowmq/benchmarks/runtime")
   if(BUILD_TESTS)
     add_test(NAME test_flowmq_pattern_zmq
@@ -398,7 +404,7 @@ if(FLOWMQ_BUILD_ZMQ_BENCHMARK)
     endif()
     cmake_add_benchmark(${batch_target}
       SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_batch.c
-      LIBS ${batch_transport} libzmq-static Salts::TinyTest
+      LIBS ${batch_transport} ${_flowmq_zmq_target} Salts::TinyTest
       INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/runtime
       FOLDER "flowmq/benchmarks/runtime")
     if(WIN32)

@@ -470,7 +470,7 @@ SaltsUtils 0.1.0 的发布归档遗漏了其 CMake 配置引用的 `IDL.cmake`�
 升级到包含此文件的 SDK 时可移除该恢复步骤。
 
 启用 `FLOWMQ_BUILD_ZMQ_BENCHMARK` 可构建同负载 TCP 对照基准，使用锁定依赖归档
-中的 `libzmq-static`。基准数据见 [FlowMQ / libzmq 对照](docs/FLOWMQ_ZMQ_COMPARISON.md)。
+中的 ZeroMQ。基准数据见 [FlowMQ / libzmq 对照](docs/FLOWMQ_ZMQ_COMPARISON.md)。
 
 多核 owner 基准使用现有公开 API：每个工作线程在本线程创建独立 context，
 创建、推进并关闭自己的 PAIR sockets。固定 4 条回环连接（8 个 socket），
