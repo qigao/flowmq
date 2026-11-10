@@ -1,388 +1,132 @@
 # FlowMQ
 
-FlowMQ 是 C11 的 pattern-oriented messaging library。它提供 FMQ/6 wire codec、pattern/session
-状态、应用层能力，以及基于 Salts CNet 的 TCP/TLS socket runtime。
+[![CI](https://github.com/qigao/flowmq/actions/workflows/native-sdk-release.yml/badge.svg)](https://github.com/qigao/flowmq/actions/workflows/native-sdk-release.yml)
+[![Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-当前 transport 范围是明确且封闭的：
+**Pattern-oriented messaging for C11 over TCP and TLS.**
 
-- `FLOWMQ_TRANSPORT_TCP`：有序 TCP 字节流。
-- `FLOWMQ_TRANSPORT_TLS`：经证书与主机名校验的 TLS 字节流。
-- UDP、KCP、Pipe、WebSocket 与 WSS 不属于当前 API，也没有静默 fallback。
+FlowMQ provides a ZeroMQ-style context/socket API with its own FMQ/6 wire
+protocol. Applications own socket progress through `send`, `recv`, and `poll`,
+with CNet handling connections and transport completion on the calling thread.
 
-## CMake targets
+This README describes `main`. Build each revision with its accompanying
+[SDK version lock](cmake/sdk-versions.json).
 
-| Target | 用途 |
-| --- | --- |
-| `FlowMQ::Protocol` | build-tree FMQ/6、FMS/3、FES/1 codec 与全局协议目录 |
-| `FlowMQ::Core` | build-tree pattern/session 与应用核心 |
-| `FlowMQ::Transport` | build-tree ZeroMQ-style socket 与 CNet TCP/TLS runtime |
-| `FlowMQ::FlowMQ` | 唯一安装 target；合并上述公开能力 |
+## Contents
 
-> Branch/release boundary: `v1.2.1` 在 `v1.2.0` 的 owner-lane、reuse-port、retained TLS、producer-owned/segmented receive 与公开 `flowmq_recv_slicev()` 基础上，包含 #101/#102 的 atomic retained PUB/XPUB fanout、#104 的 generated DataBind ChannelPlan/ServicePlan qualification，以及 #111/#112 的 CMeta ownership、最新 Salts SDK 适配与显式多 owner 验证。除非显式标记 release，下面的行为描述以 current `main` 为准。
+- [Features](#features)
+- [Build from source](#build-from-source)
+- [Usage](#usage)
+- [CMake integration](#cmake-integration)
+- [Examples](#examples)
+- [Runtime model](#runtime-model)
+- [Documentation](#documentation)
+- [Contributing](#contributing)
+- [License](#license)
 
-`v1.3.0` 迁移到 Salts 2.3 / SaltsUtils 4.3 的 RC/stable SDK 系列，加入可选有界
-CNet peer pool、FMQ/6 READY 后才重置 reconnect backoff、完整 owner completion
-batch 的错误结算，以及有界小消息 copy coalesce。固定 owner 线程归属和既有
-wire protocol 保持不变；独立 lane、共享 Guard 与 retained SG 的测试数据见
-[lane scaling](docs/FLOWMQ_LANE_SCALING.md)。Actor、应用 mailbox 与 queued SG
-扫描属于私有性能资格验证，不作为本版本的公开数据路径。macOS 发布 profile
-使用 AppleClang，匹配当前 Salts SDK 的 TinyTest native Mach-O TLS ABI。
+## Features
 
-当前开发分支使用 [拆分 SDK 版本表](cmake/sdk-versions.json)。
+- **Messaging patterns** with multipart messages, routing identities, and prefix
+  subscriptions.
+- **TCP and TLS** through `tcp://` and `tls://` endpoints, including certificate
+  and hostname verification through CNet.
+- **Bounded flow control** with message and byte high-water marks,
+  receiver-driven credit, reconnect backoff, and heartbeat deadlines.
+- **Explicit memory ownership** with copying and retained-slice send APIs, plus
+  copying, contiguous-slice, and vector-slice receive APIs.
+- **Caller-owned concurrency** with independent socket owners, shared-wait
+  client lanes, and reuse-port listeners where the backend supports them.
+- **Application codecs** for FES/1 envelopes and FMP/1 media-provider payloads,
+  backed by a shared protocol catalog and generated DataBind bindings.
 
-| 仓库 | FlowMQ 用途 | CMake 接口 |
+| Pattern | Socket types | Typical use |
 | --- | --- | --- |
-| salts-base | 时钟、线程、字符串、buffer/slice、NativeIO 和 TinyTest | `SaltsBase`，`Salts::Core`、`Salts::NativeIO`、`Salts::TinyTest` |
-| cmeta | 内部 Schema/Replay、CSTL 和单独的 CFlow 验证 | `CMeta`，`CMeta::CMeta`、`CMeta::CSTL`、`CMeta::CFlow` |
-| salts-cnet | TCP/TLS、listener、连接 manager、peer pool 和目的地策略 | `SaltsCore`，`Salts::CNet` |
-| salts-utils | FMP/1 头文件生成、DataBind 运行时和生成的 FlowMQ plan 验证 | `SaltsUtils`，`Salts::DataBind`、`salts-idlc` |
+| Pair | `PAIR` | One-to-one communication |
+| Request/reply | `REQ`, `REP` | Alternating requests and replies |
+| Asynchronous routing | `DEALER`, `ROUTER` | Concurrent requests and explicit peer routing |
+| Publish/subscribe | `PUB`, `SUB` | Topic-prefix fanout |
+| Extended pub/sub | `XPUB`, `XSUB` | Subscription events and commands |
+| Pipeline | `PUSH`, `PULL` | Work distribution and collection |
 
-`FlowMQ::FlowMQ` 的直接公开链接依赖为 `Salts::Core` 和 `Salts::DataBind`。
-TLS 提供者、证书与主机名校验由 CNet 管理。
+## Build from source
 
-每个 socket client 仍使用固定容量的 owner-local manager，接管
-connect/adopt 的绑定与终态记录，queued parts 消费结束后才释放额外
-context hold。外部 owner 通过有界 `advance` 提交关闭，继续由唯一的
-NativeIO/CNet observe 路径处理真实终态。消息、路由、重连与 TLS
-协议状态归 FlowMQ；无 Actor、第二线程或消息重放 fallback。
+### Requirements
 
-## CNet 2.3 explicit remote destination admission (FlowMQ #122)
+- A C11 compiler and a C++17 compiler for the test suite. Native CI uses Clang
+  on Linux and macOS, and llvm-mingw on Windows.
+- CMake 3.25+, Ninja, Python 3.12+, Git, and curl.
+- The released SDKs selected by the version lock.
 
-`flowmq_destination_choose()` uses **Salts CNet's actual destination policy**
-(`cnet_destination_choose`) on a caller-owned, immutable endpoint-set snapshot.
-It performs **one remote endpoint decision**, separate from SG Owner placement,
-physical peer pooling and protocol-level routing. `flowmq_connect_selected()`
-then calls ordinary `flowmq_connect()` **once** for the chosen URI. Later
-reconnect attempts stay pinned to that URI; no hidden discovery, DATA replay,
-background scheduler, per-message rehash or protocol/TLS downgrade is added.
+| Dependency | Version | Role | SDK root variable |
+| --- | --- | --- | --- |
+| [salts-base](https://github.com/qigao/salts-base) | 0.1.4 | Buffers, strings, clocks, threads, NativeIO, and TinyTest | `SALTS_BASE_ROOT` |
+| [cmeta](https://github.com/qigao/cmeta) | 0.1.4 | Metadata, Schema/Replay, and CSTL | `CMETA_ROOT` |
+| [salts-cnet](https://github.com/qigao/salts-cnet) | 0.1.4 | TCP/TLS connections, listeners, and admission policies | `SALTSCORE_ROOT` |
+| [salts-utils](https://github.com/qigao/salts-utils) | 0.1.1 | DataBind and the host `salts-idlc` generator | `SALTS_UTILS_ROOT` |
+| [vcpkg-cache](https://github.com/qigao/vcpkg-cache) | 0.1.3 | Prebuilt third-party dependency archives and Windows compiler setup | — |
 
-```c
-flowmq_destination_endpoint_t peers[] = {
-    { .endpoint_id = 10, .authority_id = 7, .uri = "tls://10.0.0.1:443",
-      .weight = 1, .eligible = 1 },
-    { .endpoint_id = 20, .authority_id = 7, .uri = "tls://10.0.0.2:443",
-      .weight = 1, .eligible = 1 },
-};
-flowmq_destination_selection_t policy = FLOWMQ_DESTINATION_SELECTION_INIT;
-flowmq_destination_result_t selected = FLOWMQ_DESTINATION_RESULT_INIT;
-policy.kind = FLOWMQ_DESTINATION_STRICT_KEY;
-policy.snapshot_generation = 42;
-policy.key_known = 1;
-policy.key_hash = 1234;
-/* Configure verified TLS credentials/SNI on the socket before admission.
- * The host must prefilter authorized/healthy endpoints and present a uniform
- * authority_id and tcp/tls scheme; CNet verifies the actual TLS peer. */
-int status = flowmq_connect_selected(socket, peers, 2, &policy, &selected);
+The restore script downloads the pinned release archives with curl and checks
+their SHA-256 digests. The salts-cnet SDK publishes the `SaltsCore` CMake package
+and the `Salts::CNet` target.
+
+### Linux x64 quick start
+
+```sh
+git clone https://github.com/qigao/flowmq.git
+cd flowmq
+
+python cmake/ci/restore-split-sdks.py --profile linux-clang-x64 \
+  --triplet x64-linux --destination build/dependencies
+
+deps="$PWD/build/dependencies"
+export SALTS_BASE_ROOT="$deps/linux-clang-x64/salts-base"
+export CMETA_ROOT="$deps/linux-clang-x64/cmeta"
+export SALTSCORE_ROOT="$deps/linux-clang-x64/salts-cnet"
+export SALTS_UTILS_ROOT="$deps/linux-clang-x64/salts-utils"
+
+cmake -S . -B build/flowmq -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON \
+  -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+  -DCMAKE_PREFIX_PATH="$deps/vcpkg_installed/x64-linux"
+cmake --build build/flowmq --parallel 2
+ctest --test-dir build/flowmq -LE benchmark --no-tests=error --output-on-failure
 ```
 
-Selection returns an ID and snapshot generation; successful connect means only
-*dial admission*, not verified FMQ/6 readiness or DATA delivery. Strict-key
-HRW winner FULL fails `SALTS_ENOBUFS` instead of silently choosing another
-peer. Invalid IDs, mixed authorities, mixed TLS/plaintext schemes and expired
-snapshots fail before any socket or network mutation. Endpoint sets are bounded
-to four entries in this first slice. The application owns any choice of
-destination set, sequence ticket, authority eligibility and TLS configuration.
+### Other platforms
 
-## CNet 2.3 bounded peer pool (FlowMQ #123)
+| Platform | Restore profile | Dependency triplet | CI qualification |
+| --- | --- | --- | --- |
+| Linux x64 | `linux-clang-x64` | `x64-linux` | Build, CTest, and install |
+| Windows x64 | `windows-llvm-mingw-x64` | `qigao-x64-windows-llvm-mingw` | Build, CTest, and install |
+| macOS arm64 | `macos-clang-arm64` | `arm64-osx` | Build, CTest, and install |
+| Android arm64 | `android-arm64` | `arm64-android` | Cross-build, link, and install |
 
-`flowmq_peer_pool.h` provides optional startup-only admission limits for
-long-lived FMQ/6 connections. Each socket owns its pool on the same progress
-owner as its Manager. Defaults remain unchanged until explicitly enabled:
+Use the matching profile and triplet when restoring dependencies. Windows
+requires the llvm-mingw compiler and SDK runtime directories on `PATH`. Android
+builds also require the NDK and Linux host SDK roots in `SALTS_BASE_HOST_ROOT`,
+`CMETA_HOST_ROOT`, and `SALTS_UTILS_HOST_ROOT` for code generation. The restore
+script downloads those host SDKs when selecting `android-arm64`.
 
-```c
-flowmq_peer_pool_config_t pool = FLOWMQ_PEER_POOL_CONFIG_INIT;
-pool.max_peers = 2;
-pool.max_connecting = 1;
-int status = flowmq_socket_set_peer_pool(socket, &pool); /* Before bind/connect. */
-```
+The [native SDK workflow](.github/workflows/native-sdk-release.yml) contains the
+complete compiler, toolchain, and runtime setup for each platform.
 
-Valid limits are `1 <= max_connecting <= max_peers <= 4`. An active dial reserves
-capacity before opening a connection and fails `SALTS_ENOBUFS` when full.
-Only a fully validated HELLO/SETTINGS exchange can acquire the peer's single
-session lease. Sends keep using existing HWM and credit; they do not acquire
-per-message leases. Socket, TLS policy, pattern and connection generation never
-share leases. Existing reconnect policy stays pinned to its endpoint.
+### Build options
 
-`flowmq_socket_get_peer_pool()` copies connecting, ready, draining and lease
-counts into a `FLOWMQ_PEER_POOL_SNAPSHOT_INIT` snapshot. A terminated peer with
-queued receive parts retains its slot until the last part is consumed or the
-socket closes. A full listener leaves new connections in its OS backlog while
-continuing established-peer progress. See the [ownership and shutdown design](
-docs/CNET_TCP_TLS_ARCHITECTURE.md#可选长期-peer-pool123).
+| CMake option | Default | Purpose |
+| --- | --- | --- |
+| `BUILD_EXAMPLES` | `ON` | Build the programs in `examples/` |
+| `BUILD_TESTS` | `OFF` | Build and register the formal CTest suite |
+| `FLOWMQ_BUILD_ZMQ_BENCHMARK` | `OFF` | Enable comparisons with the pinned libzmq dependency |
 
-## Caller-driven transport
+## Usage
 
-旧的 callback endpoint API 已删除。普通 socket 保留 ZeroMQ 风格的
-`context/socket + bind/connect + send/recv + poll`，入口是 `flowmq_socket.h`。
-FlowMQ 1.2 另外提供显式 owner-lane API（`flowmq_owner.h`），用于一个调用线程同时拥有
-多个 socket 并共享一次 NativeIO wait。
-
-CNet 仍由 owner 线程直接推进，不创建 worker/progress thread，也不把同一个 socket
-包装成 MPSC、Actor 或 Reactive stream。TCP 与 verified TLS 使用同一 peer、decoder、FSM
-和 message queue 路径；TLS 只在连接适配层增加证书与主机名验证。
-
-### Owner lane：多 socket 共用一次 wait
-
-FlowMQ 有两种互斥、生命周期固定的 progress 模式：
-
-```text
-standalone socket:
-  flowmq_socket()
-      -> one socket-owned CNet/NativeIO wait
-      -> flowmq_poll()
-
-owner-lane socket:
-  flowmq_owner_new()
-      -> one owner-owned NativeIO backend
-      -> flowmq_owner_socket() A
-      -> flowmq_owner_socket() B
-      -> ...
-      -> flowmq_owner_poll()  // one shared wait
-```
-
-owner lane **不是线程池**。它不会创建线程，也不会迁移 connection；所有 owner-created
-socket 都必须由调用 `flowmq_owner_poll()` 的同一线程串行拥有。一个 owner poll cycle 会：
-
-1. 对每个 live lane-local CNet client 执行一次 external advance；
-2. 取 CNet deadline、reconnect、heartbeat、FLOW_UPDATE 与 caller timeout 的最小值；
-3. 对共享 NativeIO backend 执行一次 observe；
-4. 把每个 completion 精确路由回唯一 owning socket；
-5. 对每个 live socket 执行一次 FlowMQ-local reconnect/control/flush progress；
-6. 用与普通 `flowmq_poll()` 相同的 readiness 规则返回 `POLLIN/POLLOUT/POLLERR`。
-
-不会在 routed batch 后额外执行第二次 CNet advance，也不会通过 central callback/mailbox
-把每条消息绕回另一条线程。
-
-```c
-#include <flowmq_owner.h>
-
-flowmq_ctx_t *ctx = flowmq_ctx_new();
-flowmq_owner_config_t cfg = FLOWMQ_OWNER_CONFIG_INIT;
-cfg.socket_capacity = 4;
-
-flowmq_owner_t *owner = flowmq_owner_new(ctx, &cfg);
-flowmq_socket_t *a = flowmq_owner_socket(owner, FLOWMQ_PAIR);
-flowmq_socket_t *b = flowmq_owner_socket(owner, FLOWMQ_DEALER);
-
-/* 当前 owner-lane product slice 是 TCP client-side。 */
-flowmq_connect(a, "tcp://127.0.0.1:7001");
-flowmq_connect(b, "tcp://127.0.0.1:7002");
-
-flowmq_pollitem_t items[] = {
-    {.socket = a, .events = FLOWMQ_POLLIN | FLOWMQ_POLLOUT},
-    {.socket = b, .events = FLOWMQ_POLLIN | FLOWMQ_POLLOUT},
-};
-size_t ready = 0;
-flowmq_owner_poll(owner, items, 2, 100, &ready);
-
-/* canonical owner-lane I/O: nonblocking send/recv + owner poll */
-flowmq_send(a, "hello", 5, FLOWMQ_DONTWAIT);
-
-flowmq_owner_close_socket(owner, a);
-flowmq_owner_close_socket(owner, b);
-flowmq_owner_term(owner);
-flowmq_ctx_term(ctx);
-```
-
-owner-lane API 的边界仍然保持窄：
-
-- owner-created socket 不能传给普通 `flowmq_poll()`；会 fail closed；
-- owner-created socket 不能直接 `flowmq_close()`；使用 `flowmq_owner_close_socket()`；
-- owner 存在时 `flowmq_ctx_term()` 返回 `SALTS_EBUSY`；
-- owner-created socket 当前不支持 `flowmq_bind()`；它仍是 client-side shared-wait API；
-- 阻塞 `send/recv` 如果需要 transport progress 会 fail closed；owner lane 的 canonical 路径是
-  `FLOWMQ_DONTWAIT + flowmq_owner_poll()`。
-
-### 同端口多核 listener：独立 owner + reuse-port
-
-server/listener 多核采用另一条显式路径：多个 **ordinary、彼此独立的 owner-affine socket**
-在不同 owner thread/core 上设置 `FLOWMQ_REUSE_PORT=1`，然后 bind 同一个 numeric TCP endpoint。
-
-```text
-owner/core 0
-  ordinary FlowMQ socket 0
-  CNet listener 0 --+
-                    +-- same tcp://host:port
-owner/core 1        |   SO_REUSEPORT
-  ordinary FlowMQ socket 1
-  CNet listener 1 --+
-```
-
-`FLOWMQ_REUSE_PORT` 是 startup-only `int` 选项，只接受 0/1；默认 0。
-值为 1 时，`flowmq_bind()` 通过 released CNet `cnet_listener_init_ex()` 请求
-`SO_REUSEPORT`。平台/backend 不支持时原样返回 `SALTS_ENOTSUP`，不会退化成
-`SO_REUSEADDR` 或普通 bind。accepted connection 从 admission 到 terminal callback
-始终属于实际 accept 它的 socket/owner；FlowMQ 不做 native-handle handoff、connection
-migration 或 central message dispatcher。
-
-```c
-flowmq_ctx_t *ctx = flowmq_ctx_new();
-flowmq_socket_t *service = flowmq_socket(ctx, FLOWMQ_REP);
-int reuse_port = 1;
-
-flowmq_setsockopt(service, FLOWMQ_REUSE_PORT,
-                  &reuse_port, sizeof(reuse_port));
-flowmq_bind(service, "tcp://127.0.0.1:7000");
-```
-
-多个 listener 的 pattern FSM、peer registry、HWM/credit、subscriptions、queues 与 diagnostics
-仍完全独立；需要跨 lane 的全局业务操作时必须由应用显式编排。
-
-#61 已证明独立 FlowMQ owner 在不同 physical core 上可获得约 1.79x–1.95x 的双 owner
-throughput；#67/#69 的 one-owner/two-socket shared-wait qualification 证明 owner lane 相比旧
-multi-socket `flowmq_poll()` sleep loop 属于明显更高效的执行类别。#72/#73 进一步证明
-same-endpoint reuse-port listener 能在饱和的大消息 service workload 下获得真实多核收益：
-64 KiB pipelined DEALER→REP workload 的 two-owner throughput paired median 为约 **1.451x**，
-p99 为约 **0.615x**。小消息结果更依赖 workload/load-generator progress 形状，因此不宣称
-reuse-port 可以线性扩展。上述收益都不依赖隐藏 worker 或 connection migration。
-
-发送 API 有两个明确的 ownership surface：`flowmq_send()` 在返回成功前复制 borrowed
-caller bytes；`flowmq_send_slice()` 接受 canonical owned slice，并把 retained ownership 保持到
-对应 CNet terminal。retained `FLOWMQ_SNDMORE` part 成功后 caller 可立即释放自己的 slice 引用，
-socket 在有界 staging 中保存 canonical ranges；final part 把完整 multipart 作为一个不超过
-`CNET_RETAINED_VECTOR_MAX` ranges 的 logical retained write 提交。copied DATA 与 retained DATA
-不在同一 multipart transaction 中混用；ROUTER routing-id envelope 仍可先通过普通 copy API
-选择 peer。超出 aggregate SG/send bound 显式失败，不 split、不 flatten、不 copy fallback；
-disconnect/cancel/close 精确释放 staged retains。
-
-自 `v1.2.1` 起，PUB/XPUB retained multipart 已不再 fail-closed。第一 retained part 冻结当时
-ready 且 subscription-matching 的 peer generation snapshot；final part 重新验证 generation、
-完整 message HWM/credit/frame bound 与 peer queue slot，在任何 peer queue 可见前完成所有
-fallible allocation/range clone。commit 后每个仍 eligible peer 只持有同一 shared retained
-publication 的一个 bounded reference，并在自己的 owner progress 中独立提交 exactly one
-`cnet_send_slicev()` logical write。snapshot 后的 subscription change 不改写当前 multipart
-peer set；final commit 时已失效/不可 admission 的 peer 按既有 PUB mute/drop 语义被省略。
-不存在 retained-to-copy fallback。该 atomic fanout 来自 #101/#102，随 `v1.2.1` 发布，
-不属于 `v1.2.0` tag。
-
-TCP 与 verified TLS 的 retained send 都沿 CNet retained plaintext cursor 消费 genuinely
-discontiguous framing/payload ranges，不增加 plaintext flatten/copy fallback。该 API 不是小消息
-的默认替代：64-byte retained 会承担额外 slice/refcount/framing 固定成本，而较大 owned payload
-可通过消除 admission copy 获益；普通/小 borrowed payload 继续优先使用 `flowmq_send()`。
-
-接收侧现在有三个显式 surface：
-
-- `flowmq_recv()`：兼容 copy surface。对于 owned/segmented DATA，直接从 queue 持有的 payload
-  ranges 拷贝到 caller storage；必需的 caller copy 是该 API 的语义。
-- `flowmq_recv_slice()`：保持“一个 contiguous canonical slice”的 legacy contract。单 range
-  owned DATA 直接转移；真正 multi-range DATA 会在消费 flow credit/FSM 之前执行一次 targeted
-  coalesce，失败时 queued message 保持完全不变。
-- `flowmq_recv_slicev()`：bounded vector ownership surface。caller 提供空的 `mem_slice_t`
-  descriptor array；single-range 直接返回 1 个 owner，multi-range 可直接转移已经由 inbound
-  queue 持有的 canonical payload vector，不为 vector 形状强制 coalesce。capacity 不足返回
-  `SALTS_ENOBUFS` 并报告 required count，不消费 queued part/FSM/credit。
-
-producer-owned receive fast path 目前针对 plaintext TCP 的可资格形状：CNet backing 可被 bounded
-owned stream 保留，完整 DATA packet 再投影为一个或多个 canonical payload ranges。non-DATA、
-bounded projection overflow，或超出 owned-stream fast path 的 TCP segmentation/coalescing 形状
-继续走显式 copied decoder fallback；文档和 benchmark 不把这些形状伪装成 zero-copy。
-`recv_slicev` 的 1 MiB qualification 因此同时记录 true multi-range vector 与 explicit fallback，
-而不是声称所有 TCP callback shape 都零拷贝。flow credit、HWM occupancy、`RCVMORE` 与
-REQ/REP FSM 都只在成功 dequeue 时推进，不会因为应用继续持有 returned slices 而冻结 transport
-credit；所有 returned `mem_slice_t` 必须由 caller `mem_slice_release()`。
-
-`FLOWMQ_RECONNECT_IVL=18` 与 `FLOWMQ_RECONNECT_IVL_MAX=21` 采用 ZeroMQ 的编号和
-连接级退避语义：IVL 默认 100ms，`-1` 禁止重连，`0` 表示下一轮 owner progress 立即
-尝试；IVL_MAX 默认 `0`，表示固定 IVL，设置为不小于 IVL 的正值后按上限做指数退避。
-实际间隔会随机化以降低重连风暴。断线只调度 endpoint，真正的 TCP/TLS connect、
-HELLO/SETTINGS 与订阅重放仍由应用后续调用普通 `send/recv/poll` 或 owner-lane
-`flowmq_owner_poll()` 推进，不创建 timer thread。
-
-`FLOWMQ_SNDHWM`/`FLOWMQ_RCVHWM` 使用 `int` 消息数，扩展选项
-`FLOWMQ_SNDHWM_BYTES`/`FLOWMQ_RCVHWM_BYTES` 使用 `size_t` payload 字节数。四项都必须在
-首次 bind/connect 前设置且不能为零；普通发送达到 HWM 返回 `SALTS_ENOBUFS`，PUB/XPUB
-按 peer 丢弃无法接纳的 publication。
-
-`FLOWMQ_FLOW_UPDATE_QUANTUM` 使用 `size_t`，默认由 receive byte HWM 推导；
-`FLOWMQ_FLOW_UPDATE_IVL` 使用正 `int` 毫秒值，默认 10 ms。二者必须在首次 bind/connect 前
-设置。DATA 同时受本地 HWM 与对端累计 credit 约束；控制帧不计 credit。
-
-`FLOWMQ_HEARTBEAT_IVL`/`FLOWMQ_HEARTBEAT_TIMEOUT` 使用非负 `int` 毫秒值，也必须在首次
-bind/connect 前设置。IVL 默认为 `0`（禁用）；启用 IVL 且未显式设置 TIMEOUT 时，TIMEOUT
-等于 IVL。心跳与断线检测没有后台线程，只在 ordinary socket 的 `send/recv/poll` 或
-owner-lane 的 `flowmq_owner_poll()` 中推进。
-FMQ/6 PING 不携带对端 TTL，因此当前没有伪装提供 `FLOWMQ_HEARTBEAT_TTL`。
-FMQ/6 在 HELLO 后强制 SETTINGS，并以 receiver-driven cumulative credit 协调 DATA；
-TCP/TLS 不发送同流 FEC repair symbol。credit 与 heartbeat 都由调用线程推进。
-
-重连创建全新的 peer session：generation、credit、decoder 与 multipart 状态不会跨连接
-继承；旧 peer 尚未完成的 outbound 数据也不会自动重播。需要业务级确认或重试时，应在
-DATA payload 层携带 correlation/idempotency 信息。
-
-multipart 接收后可用 `flowmq_getsockopt(socket, FLOWMQ_RCVMORE, ...)` 判断是否还有下一
-part。该查询返回最近一次成功 `flowmq_recv()` 或 `flowmq_recv_slice()` 的 `MORE` 状态，
-不推进网络或 pattern FSM。
-
-ROUTER 的 routing identity 与 ZeroMQ 一样表示当前 live peer，不是可持久化的 session
-token；同 identity 重连后的 delayed reply 会指向新 session。单条 outbound multipart
-内部会绑定 connection generation，peer 断线后取消，不能把剩余 parts 交给 replacement。
-
-需要诊断慢 peer/backpressure 时，可用
-`flowmq_router_peer_status(router, identity, identity_size, &status)` 读取当前 live session 的
-只读快照。该查询不推进网络。它公开 admission/completion/rejection、当前及峰值 outstanding
-payload、剩余 send credit，以及 connected/ready；不会公开内部 slot、generation、CNet
-handle 或累计 wire counter。这里 outstanding 表示已经被 FlowMQ 接纳、但 CNet send completion
-尚未确认的应用 DATA，因此可能在远端 credit 仍为 0 时已经回到 0。同 identity 重连后是新
-session，统计重新开始。
-
-### TLS certificate 与 HELLO identity 绑定
-
-TLS 只证明 peer 持有受信证书；HELLO identity 仍是 peer 自己声明的 routing identity。需要
-授权语义的 TLS ROUTER 应在 bind 前设置 `FLOWMQ_TLS_IDENTITY_POLICY`，把 CNet 已验证证书的
-canonical SHA-256 fingerprint（`sha256:` 加 64 个小写十六进制字符）精确绑定到允许的 HELLO
-identity。FlowMQ 在 identity 进入 peer table 前校验元组，不改变 FMQ/6 wire 格式。
-
-policy setter 同步校验并复制所有 binding 字符串，调用者可在成功返回后释放输入。启用 policy
-的 socket 必须是 ROUTER，且只能 bind 已启用 required client certificate 的 `tls://` listener；
-组合不合法返回 `SALTS_EINVAL`，runtime 已初始化返回 `SALTS_EBUSY`。未授权连接只关闭该 peer，
-不会把错误写入 ROUTER 的全局 async error；可用 `FLOWMQ_TLS_IDENTITY_REJECTIONS` 读取饱和
-`uint64_t` 计数。policy 是启动期配置，不支持热替换；证书轮换可把新旧两个 fingerprint 同时
-映射到同一 identity，然后重启应用。
+This complete loopback example exchanges one message between two `PAIR` sockets
+on the same thread. Nonblocking send/receive calls and `flowmq_poll()` advance
+both sides of the connection.
 
 ```c
 #include <flowmq_socket.h>
-#include <flowmq_tls_identity_map.h>
-#include <salts_error.h>
-
-#include <string.h>
-
-int configure_authenticated_router(flowmq_socket_t *router,
-                                   const char *ca_file,
-                                   const char *cert_file,
-                                   const char *key_file) {
-  static const flowmq_tls_identity_binding_t bindings[] = {{
-      sizeof(flowmq_tls_identity_binding_t),
-      "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-      "raft-node-1"}};
-  flowmq_tls_identity_map_config_t policy =
-      FLOWMQ_TLS_IDENTITY_MAP_CONFIG_INIT;
-  int required = 1;
-  int status;
-
-  policy.bindings = bindings;
-  policy.binding_count = sizeof(bindings) / sizeof(bindings[0]);
-  status = flowmq_setsockopt(router, FLOWMQ_TLS_CA_FILE, ca_file,
-                             strlen(ca_file));
-  if (status == SALTS_OK)
-    status = flowmq_setsockopt(router, FLOWMQ_TLS_CERT_FILE, cert_file,
-                               strlen(cert_file));
-  if (status == SALTS_OK)
-    status = flowmq_setsockopt(router, FLOWMQ_TLS_KEY_FILE, key_file,
-                               strlen(key_file));
-  if (status == SALTS_OK)
-    status = flowmq_setsockopt(router,
-                               FLOWMQ_TLS_REQUIRE_CLIENT_CERTIFICATE,
-                               &required, sizeof(required));
-  if (status == SALTS_OK)
-    status = flowmq_setsockopt(router, FLOWMQ_TLS_IDENTITY_POLICY, &policy,
-                               sizeof(policy));
-  return status;
-}
-```
-
-```c
-#include <flowmq_socket.h>
-#include <cmeta_error.h>
+#include <core/error.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -440,175 +184,121 @@ cleanup:
 }
 ```
 
-## 构建与验证
+A successful send records local message acceptance. Applications can carry
+correlation IDs and delivery acknowledgements in their payload protocol.
 
-安装 CMake 3.25+、Ninja 和 Python 3.12+。SDK 恢复脚本从版本表指定的
-GitHub Releases 下载归档并校验 SHA-256。Linux x64 示例：
+## CMake integration
+
+Install the configured build into a local prefix.
 
 ```sh
-python cmake/ci/restore-split-sdks.py --profile linux-clang-x64 \
-  --triplet x64-linux --destination build/dependencies
-deps="$PWD/build/dependencies"
-export SALTS_BASE_ROOT="$deps/linux-clang-x64/salts-base"
-export CMETA_ROOT="$deps/linux-clang-x64/cmeta"
-export SALTSCORE_ROOT="$deps/linux-clang-x64/salts-cnet"
-export SALTS_UTILS_ROOT="$deps/linux-clang-x64/salts-utils"
-cmake -S . -B build/flowmq -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON \
-  -DCMAKE_PREFIX_PATH="$deps/vcpkg_installed/x64-linux"
-cmake --build build/flowmq
-ctest --test-dir build/flowmq -LE benchmark --output-on-failure
+cmake --install build/flowmq --prefix "$PWD/stage/flowmq"
 ```
 
-Windows CI 使用 `windows-llvm-mingw-x64` / `qigao-x64-windows-llvm-mingw`，
-macOS 使用 `macos-clang-arm64` / `arm64-osx`，Android 使用 `android-arm64` /
-`arm64-android`。为 Android 交叉编译时，四个 target root 指向 Android SDK，
-`SALTS_BASE_HOST_ROOT`、`CMETA_HOST_ROOT` 和 `SALTS_UTILS_HOST_ROOT` 指向 Linux
-宿主 SDK。FMP/1 由宿主 `salts-idlc` 生成。
+Link the installed shared library through `FlowMQ::FlowMQ`.
 
-启用 `FLOWMQ_BUILD_ZMQ_BENCHMARK` 可构建同负载 TCP 对照基准，使用锁定依赖归档
-中的 ZeroMQ。基准数据见 [FlowMQ / libzmq 对照](docs/FLOWMQ_ZMQ_COMPARISON.md)。
+```cmake
+cmake_minimum_required(VERSION 3.25)
+project(flowmq_client LANGUAGES C)
 
-多核 owner 基准使用现有公开 API：每个工作线程在本线程创建独立 context，
-创建、推进并关闭自己的 PAIR sockets。固定 4 条回环连接（8 个 socket），
-分配给 1/2/4 个 owner；每条连接的收发两端位于同一 owner。
-这验证的是独立 socket 工作负载的并行吞吐，不是单个 ROUTER/PUB 的跨核分片。
-生产 runtime、公开 API 和 wire 格式没有因此改变。
+find_package(FlowMQ CONFIG REQUIRED)
 
-业务接入示例见 [multicore_reqrep.c](examples/multicore_reqrep.c)：主线程拥有一组
-REQ sockets，每个 worker 在自己的线程创建 context 与 REP socket，绑定独立的
-回环 TCP 端口。主线程统一 `flowmq_poll` 推进所有 REQ sockets；只推进当前等待
-应答的 socket 会延迟其他请求发出。每轮向每个 worker 发一个请求，逐条校验
-应答中的 worker 标识、序号与单 part 边界，全部完成后才开始下一轮。
-
-示例参数依次为 worker 数（1–16，默认 4）、每 worker 请求数（1–10000，默认 100）、
-等待超时毫秒（1–60000，默认 5000）。worker 的单次收发、最终排空，以及客户端
-整轮等待分别受该超时限制。发送和接收 HWM 均为 1，关闭自动重连，队列满时
-继续推进至成功或超时；首个错误通过 atomic 传播，其他线程停止等待。
-endpoint 仅在启动时通过 mutex 发布，消息通过 TCP 复制传递，无跨线程 socket/context。
-每个 owner 在本线程关闭资源；主线程收齐应答后通知 worker 停止，等 worker 退出后
-再关闭客户端，最后 join 全部线程。示例状态空间为 O(workers)，完整请求数为
-workers × requests，不引入业务线程池或新的公开 API。
-
-在下述修复版 SDK preset 配置完成后：
-
-```powershell
-cmake --build --preset win-release-local-sdk --target flowmq_multicore_reqrep
-ctest --preset win-release-local-sdk -R '^test_flowmq_multicore_reqrep_' -V
+add_executable(client main.c)
+target_compile_features(client PRIVATE c_std_11)
+target_link_libraries(client PRIVATE FlowMQ::FlowMQ)
 ```
 
-CTest 覆盖 1/4/16 个 worker，每个处理 100 条请求；程序只有应答全部验证且所有
-owner 成功关闭后才返回成功。在配置了相同 SDK/vcpkg runtime PATH 的开发者终端，
-可直接运行 `build/Msvc-Release-LocalSDK/bin/flowmq_multicore_reqrep.exe 4 100 5000`，
-成功输出 `workers=4 replies=400 verified; all owners closed`。
-此例展示独立 endpoint 的多核业务接入，不代表单个逻辑 ROUTER 的跨核分片；
-其逐轮同步与低占用等待策略也不作为吞吐基准。
+Keep the four SDK root variables exported and add the FlowMQ installation
+prefix to the consuming project's `CMAKE_PREFIX_PATH`. Its direct public link
+dependencies are `Salts::Core` and `Salts::DataBind`. Deploy the required SDK
+shared libraries alongside FlowMQ and make them available to the platform
+loader.
 
-本次验证使用含下述 CNet 修复的本地 SDK。先在 Salts 仓库按其构建说明安装 SDK；
-本机安装入口为 `cmake --build --preset install-win-release-ci`，产物位于
-`../salts/stage/sdk/windows-x64`。随后在上述 Windows 开发者环境运行：
+| Target | Availability | Purpose |
+| --- | --- | --- |
+| `FlowMQ::FlowMQ` | Installed SDK and build tree | Complete public shared library |
+| `FlowMQ::Protocol` | Build tree | Protocol catalog and wire codecs |
+| `FlowMQ::Core` | Build tree | Pattern/session state and application core |
+| `FlowMQ::Transport` | Build tree | Socket facade and CNet TCP/TLS runtime |
 
-```powershell
-$env:FLOWMQ_LOCAL_SALTS_ROOT = (Resolve-Path ../salts/stage/sdk/windows-x64).Path
-cmake --preset win-release-local-sdk -DBUILD_TESTS=ON
-cmake --build --preset win-release-local-sdk
-ctest --preset win-release-local-sdk -LE benchmark --output-on-failure
-ctest --preset bench-win-release-local-sdk -R '^bench_flowmq_socket_owners_' -V --output-log build/Msvc-Release-LocalSDK/owner-scaling.log
+## Examples
+
+| Source | Executable | Demonstrates |
+| --- | --- | --- |
+| [protocol_roundtrip.c](examples/protocol_roundtrip.c) | `flowmq_protocol_roundtrip` | FMQ/6 frame encoding and decoding |
+| [segmented_frame.c](examples/segmented_frame.c) | `flowmq_segmented_frame` | Segmented frame encoding |
+| [security_hello.c](examples/security_hello.c) | `flowmq_security_hello` | FMS/3 security-envelope encoding |
+| [multicore_reqrep.c](examples/multicore_reqrep.c) | `flowmq_multicore_reqrep` | Independent worker contexts and REQ/REP sockets |
+
+With `BUILD_EXAMPLES=ON` and `BUILD_TESTS=ON`, run the multicore example's
+1-, 4-, and 16-worker cases through CTest.
+
+```sh
+ctest --test-dir build/flowmq -R '^test_flowmq_multicore_reqrep_' \
+  --no-tests=error --output-on-failure
 ```
 
-`win-release-local-sdk` 使用独立 build/install 目录，不替换发布 SDK 的链接；
-`FLOWMQ_LOCAL_SALTS_ROOT` 必须指向完整 SDK，缺失时配置失败。
-发布包验证仍使用 `win-release-user`；Linux 对应使用 `linux-release-user`。
-下文 Salts 2.1.0 本地修复版 SDK 的数字保留为历史记录；CNet 2.3 peer pool
-对照使用已发布的 RC SDK，见后文。普通 test preset 排除 benchmark，性能
-测量必须选 `bench-*` test preset。
-基准同样保留为正式 CTest 项，失败不会被跳过或标记成预期成功。
-每批 16 条消息，每条含两个等长 part，总 payload 为 64 B 或 64 KiB。
-所有消息检查长度、内容、连接身份、序号和 `RCVMORE`；预热同时验证发送 HWM
-拒绝与恢复，关闭和 context 释放的返回值也纳入结果。
+## Runtime model
 
-每个负载重复 3 次，轮换 1/2/4 owner 的运行顺序。TCP 64 B 默认每连接
-4096 批，TCP 64 KiB 和 TLS 64 B 为 256 批，TLS 64 KiB 为 32 批；
-同一负载的所有 owner 配置使用相同总连接数、消息数、字节数和窗口。
-可用父环境 `FLOWMQ_OWNER_BENCH_ROUNDS`（1–4096）覆盖批数，
-`FLOWMQ_OWNER_BENCH_REPEATS`（1–9）覆盖重复次数；非法值直接失败。
+Each started socket belongs to one thread. Its owner advances connections,
+queues, reconnects, and deadlines through socket operations. Independent
+threads should create their own contexts and sockets, with each owner closing
+its resources before terminating its context.
 
-只汇总成功用例的 `OWNER_RESULT` CSV 行（末列 `pool_enabled` 为 0/1）：吞吐按完整应用消息及 payload
-计一次，不计协议/TLS 头；墙钟从统一放行到最后一个 owner 完成，排除建连、
-握手、预热和关闭，包含 FlowMQ 编解码及消息校验成本。
-P99 是从每条消息首次发送尝试到收齐最后一个 part 的实测延迟，包含排队，
-不把批次平均耗时冒充单消息延迟。CPU 为该测量阶段整个进程的 CPU 秒数；
-RSS 为进程生命周期峰值，不是每行独立的内存增量。线程未绑核，Windows
-CPU 时间存在计量粒度限制。诊断适配仅在 benchmark 中使用系统统计 API。
+| Capability | Public entry point | Contract |
+| --- | --- | --- |
+| Socket I/O | [flowmq_socket.h](flowmq/include/flowmq_socket.h) | `bind`, `connect`, `send`, `recv`, and `poll` run on the owning thread |
+| Shared completion wait | [flowmq_owner.h](flowmq/include/flowmq_owner.h) | TCP client sockets use `FLOWMQ_DONTWAIT`, `flowmq_owner_poll()`, and `flowmq_owner_close_socket()` |
+| Reuse-port listeners | `FLOWMQ_REUSE_PORT` | Configure independent listener sockets before binding the same numeric TCP endpoint |
+| Peer admission limits | [flowmq_peer_pool.h](flowmq/include/flowmq_peer_pool.h) | Enable bounded connecting/ready peer capacity before starting a socket |
+| Remote endpoint selection | [flowmq_destination.h](flowmq/include/flowmq_destination.h) | Choose an endpoint from a caller-owned snapshot before connecting |
+| TLS routing authorization | [flowmq_tls_identity_map.h](flowmq/include/flowmq_tls_identity_map.h) | Bind verified certificate fingerprints to allowed ROUTER HELLO identities using required client certificates |
 
-可选 peer pool 的同负载关闭/启用对照使用独立 CTest 项：
+### Message ownership
 
-```powershell
-ctest --preset bench-win-release-user -R '^bench_flowmq_peer_pool_' -V --output-log build/peer-pool-comparison.log
-```
+`flowmq_send()` copies borrowed caller bytes. `flowmq_send_slice()` retains
+canonical slice ownership through transport completion. Keep retained backing
+bytes immutable until completion.
 
-每轮交替两种模式的先后顺序；启用时每 socket 的 physical/connecting 容量为 1，
-预热后及关闭前检查真实 READY lease。默认回归中的
-`test_flowmq_socket_owners` 同时覆盖两种模式，benchmark 不进入默认回归。
-当前 Windows 实测、原始数据及安装 SDK 的 C11/C++17 验收入口见
-[peer pool 验收记录](docs/PEER_POOL_QUALIFICATION.md)。
+`flowmq_recv()` copies into caller storage. `flowmq_recv_slice()` transfers a
+contiguous slice, and `flowmq_recv_slicev()` transfers a bounded payload vector.
+Release every returned slice with `mem_slice_release()` before closing the
+socket. Successful dequeue advances multipart state, flow credit, and queue
+occupancy. Public headers specify capacity errors and ownership on failure.
 
-2026-10-07 合并主线前（`f3192c1`）的本机测量：Windows Release、Salts 2.1.0 加本地 CNet TLS 缓冲区修复、
-Ryzen 9 7940HX（16 核 / 32 逻辑处理器），四类负载三轮吞吐中位数如下。
-版本仅记录测量环境，不构成依赖版本限制；所有行均使用同一修复版 SDK。
+Configure high-water marks, heartbeat settings, TLS credentials, and admission
+policies before the first bind/connect. Reconnect establishes a fresh session
+with its own generation, credit, decoder, and multipart state. Applications
+own delivery retry and idempotency policies.
 
-| 负载 | 1 owner | 2 owners | 4 owners | 4 / 1 |
-| --- | ---: | ---: | ---: | ---: |
-| TCP 64 B（消息/s） | 684,105 | 1,281,235 | 2,444,099 | 3.57× |
-| TCP 64 KiB（MiB/s） | 1,772.93 | 2,169.20 | 3,006.44 | 1.70× |
-| TLS 64 B（消息/s） | 10,519 | 13,142 | 19,957 | 1.90× |
-| TLS 64 KiB（MiB/s） | 14.64 | 20.06 | 40.20 | 2.75× |
+## Documentation
 
-上述倍数计算为 4-owner 吞吐中位数 / 1-owner 吞吐中位数。
-收益是吞吐而非普遍降延迟：TCP 64 B 的 P99 中位数从 25.5 增至 29.7 µs，
-TCP 64 KiB 从 717.8 增至 1828.7 µs，TLS 64 B 从 2063.4 增至 4877.8 µs，
-TLS 64 KiB 从 75.48 增至 112.33 ms。
-TLS 小消息的进程 CPU 秒数中位数也从 1.562 增至 3.234。
-三轮样本存在波动（例如单 owner TCP 64 KiB 为 1072.48–1793.65 MiB/s），
-中位数仅用于本机扩展性观察，不能用前后不同运行的绝对值判定补丁加速。
-本机回环结果不能外推为远程网络、单连接或共享逻辑 socket 的性能承诺。
+| Guide | Topics |
+| --- | --- |
+| [Implementation layout](flowmq/README.md) | Source directories and module boundaries |
+| [Architecture](docs/ARCHITECTURE.md) | Ownership, shutdown, and runtime design |
+| [TCP/TLS transport](docs/CNET_TCP_TLS_ARCHITECTURE.md) | Pattern semantics, CNet integration, and peer pools |
+| [Protocol index](docs/PROTOCOL_SPEC.md) | Protocol families and implementation mapping |
+| [FMQ/6 wire protocol](docs/FMQ_WIRE_PROTOCOL.md) | Frames, negotiation, multipart, credit, and heartbeats |
+| [FES/1 application protocol](docs/FES_APPLICATION_PROTOCOL.md) | Application message kinds and metadata envelopes |
+| [FMP/1 schema](flowmq/extensions/media_provider/schema/flowmq_media_provider_v1.schema) | Generated media-provider wire bindings |
+| [Lane scaling](docs/FLOWMQ_LANE_SCALING.md) | Workloads, measurements, and multicore tradeoffs |
+| [FlowMQ/libzmq comparison](docs/FLOWMQ_ZMQ_COMPARISON.md) | TCP comparison methodology and recorded results |
+| [Peer-pool qualification](docs/PEER_POOL_QUALIFICATION.md) | Capacity, lifetime, and benchmark evidence |
 
-**HIGH｜事实：CNet TLS 接收缓冲区修复已合并上游，尚未发布。**
-修复见 [Salts PR #993](https://github.com/qigao/salts/pull/993)；当前发布的 Salts 2.1.0
-尚不包含该补丁，因此 TLS 完整验证仍使用 `win-release-local-sdk`。
-原 SDK 的 TLS 64 KiB 持续负载曾在单 owner 下返回 `SALTS_EPROTO`。
-`../salts/cnet/src/cnet_owner.c` 将 TLS `read_buffer` 交给异步 NativeIO 接收，
-而 `../salts/cnet/src/cnet_tls.c` 同时用它承载解密结果和未消费的明文后缀，
-两种生命周期会重叠。修复在私有 TLS engine 内分配独立明文区，普通读取、
-无需求探测和部分读取共用该明文区，transport 缓冲区专供接收至完成被消费。
-每 TLS 会话增加 `tls_io_buffer_bytes`（FlowMQ 默认 17 KiB），无热路径新增分配；
-初始化容量溢出或分配失败仍立即报错，释放随 engine 统一完成。
-公开 ABI、TLS 校验、wire 格式和单 owner 进度模型不变。
+Use the public headers for current API contracts. Benchmark reports record
+their own source revision, SDK versions, workload, and measurement limits.
 
-`../salts/cnet/tests/cnet_tls_test.c` 新增 TLS 1.2/1.3 × 普通读取/探测四个
-缓冲区隔离用例，覆盖部分明文读取期间的 transport 存储变化。
-修复版 SDK 实测 CNet 35/35、FlowMQ 普通回归 17/17（含三个跨线程 REQ/REP
-示例用例）、性能用例 4/4 通过。
-合并主线 `4a48261` 后，保留 owner lane、共享等待、owned receive 和 retained fanout，
-并使用重新发布的 SaltsUtils 4.2.0 重新生成 FMP/1 与 ChannelPlan/ServicePlan 测试绑定。
-两个 SDK profile 均已全量构建，不再安装 Lua/QuickJS。修复版 Salts 的 22 项可执行行为
-测试全部通过（5 项重点回归、17 项相邻回归，含三个多核示例）；未执行主线的源码
-marker 检查 `test_flowmq_segmented_receive_contract`，它不计入上述行为测试结果。
-纯发布版组合（Salts 2.1.0 + SaltsUtils 4.2.0）的协议、ESB、流解码、FMP/1 schema
-和 DataBind projection 测试 5/5 通过，此结果不覆盖尚待 Salts 发版的 TLS 修复。
-前述吞吐表和性能用例结果来自合并主线前的 SaltsUtils 本地构建环境，未在当前实现上
-重测，不能作为当前主线的性能结论。
-原始 CSV 位于本次构建目录的 `owner-scaling-fixed.log` 与 `owner-tls-fixed.log`；
-这些日志为本地产物，可用上述 CTest 命令重新生成。
-Linux/macOS 与并发 sanitizer 尚未验证。
+## Contributing
 
-详细所有权和关闭顺序见 [架构说明](docs/ARCHITECTURE.md)，wire 契约见
-[FMQ/6 协议](docs/FMQ_WIRE_PROTOCOL.md)。
+Open an [issue](https://github.com/qigao/flowmq/issues) with a reproducible case,
+platform details, and the source and SDK versions involved. For changes, follow
+the [repository development guidance](AGENTS.md), build the complete configured
+graph, and run the relevant formal CTests. Keep protocol changes synchronized
+with their specifications and examples.
 
-### 拆分 SDK CI 与回滚
+## License
 
-PR 在 Linux x64、Windows x64 和 macOS arm64 运行本机 CTest，Android arm64-v8a
-进行交叉编译与链接。生成的 FlowMQ SDK manifest 记录四个依赖的精确版本。
-
-此次迁移保留 FMQ/6 和 FMP/1 的 wire 格式。FlowMQ 与消费者需用同一组依赖重新
-编译，因为公开头文件使用 SaltsBase 的字符串与切片类型。回滚时将 FlowMQ 与依赖
-一并切回迁移前的 SDK 组合。
+FlowMQ is licensed under [Apache 2.0](LICENSE). See [NOTICE](NOTICE) and
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for attribution and third-party
+license information.
