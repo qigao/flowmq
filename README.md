@@ -465,10 +465,6 @@ macOS 使用 `macos-clang-arm64` / `arm64-osx`，Android 使用 `android-arm64` 
 `SALTS_BASE_HOST_ROOT`、`CMETA_HOST_ROOT` 和 `SALTS_UTILS_HOST_ROOT` 指向 Linux
 宿主 SDK。FMP/1 由宿主 `salts-idlc` 生成。
 
-SaltsUtils 0.1.0 的发布归档遗漏了其 CMake 配置引用的 `IDL.cmake`。恢复脚本
-从 [上游安装修复](https://github.com/qigao/salts-utils/pull/755) 取回并校验该文件。
-升级到包含此文件的 SDK 时可移除该恢复步骤。
-
 启用 `FLOWMQ_BUILD_ZMQ_BENCHMARK` 可构建同负载 TCP 对照基准，使用锁定依赖归档
 中的 ZeroMQ。基准数据见 [FlowMQ / libzmq 对照](docs/FLOWMQ_ZMQ_COMPARISON.md)。
 

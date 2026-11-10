@@ -25,8 +25,6 @@ CNET_PROFILES = {
     "macos-clang-arm64": "macos-arm64",
     "android-arm64": "android-arm64",
 }
-UTILS_IDL_COMMIT = "e28c279508e052f4f121226be72e9cb1ba481c92"
-UTILS_IDL_SHA256 = "1e11a6cdd5b6b38d92628bf1473cc23856b88e9f9c3f0d4b1a0112a2e18ac97e"
 
 
 def download(url, path):
@@ -64,12 +62,6 @@ def restore(repo, asset, destination):
 def restore_sdk(repo, profile, destination):
     platform = CNET_PROFILES[profile] if repo == "salts-cnet" else profile
     restore(repo, f"{repo}-{VERSIONS[repo]}-{platform}.tar", destination)
-    if repo == "salts-utils":
-        # The 0.1.0 tar omitted this file. Install it from the upstream packaging
-        # fix until the SDK lock moves to a release that includes it.
-        module = destination / "lib/cmake/SaltsUtils/IDL.cmake"
-        download(f"https://raw.githubusercontent.com/qigao/salts-utils/{UTILS_IDL_COMMIT}/cmake/IDL.cmake", module)
-        verify(module, UTILS_IDL_SHA256)
 
 
 def main():
