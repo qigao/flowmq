@@ -33,7 +33,7 @@ target_include_directories(
           ${CMAKE_CURRENT_SOURCE_DIR}/stream)
 target_link_libraries(flowmq_protocol
                       PUBLIC Salts::Core
-                      PRIVATE Salts::CMeta)
+                      PRIVATE CMeta::CMeta)
 
 set(FLOWMQ_PROTOCOL_SOURCES ${FLOWMQ_PROTOCOL_SOURCES} PARENT_SCOPE)
 set(FLOWMQ_PROTOCOL_HEADERS ${FLOWMQ_PROTOCOL_HEADERS} PARENT_SCOPE)

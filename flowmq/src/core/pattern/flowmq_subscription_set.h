@@ -1,7 +1,7 @@
 #ifndef FLOWMQ_SUBSCRIPTION_SET_H
 #define FLOWMQ_SUBSCRIPTION_SET_H
 
-#include "str.h"
+#include <core/tstr.h>
 #include <cstl.h>
 
 #include <stddef.h>

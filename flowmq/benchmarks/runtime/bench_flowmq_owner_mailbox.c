@@ -2,9 +2,9 @@
 #include "flowmq_socket_external_internal.h"
 #include "flowmq_bench_metrics.h"
 #include "tinytest.h"
-#include <salts/clock.h>
-#include <salts/disruptor.h>
-#include <salts/thread.h>
+#include <core/clock.h>
+#include <queue/disruptor.h>
+#include <threads/threads.h>
 #include <cmeta/ace_synchronization.h>
 #include <cnet/cnet.h>
 #include <stdatomic.h>
@@ -28,8 +28,8 @@ enum { TOKEN_LOCAL = 2, TOKEN_LOCAL_GUARD = 3, TOKEN_SHARED_GUARD = 4,
        TOKEN_BATCHED_SHARED_GUARD = 7,
        TOKEN_POOL_PER_LANE = MAIL_PRODUCERS * MAIL_BUFFERS };
 
-static void mail_token_acquire(void *self) { cmeta_mutex_lock(self); }
-static void mail_token_release(void *self) { cmeta_mutex_unlock(self); }
+static void mail_token_acquire(void *self) { sync_mutex_lock(self); }
+static void mail_token_release(void *self) { sync_mutex_unlock(self); }
 CMETA_IMPLEMENTS(cmeta_ace_lockable, mail_token_policy, 0u,
     .acquire = mail_token_acquire, .release = mail_token_release);
 
@@ -64,7 +64,7 @@ struct mail_lane_s {
   flowmq_retained_queue_stats_t sg_stats;
   native_io_backend_stats native_before, native_after;
   unsigned native_sampled;
-  cmeta_mutex_t token_mutex;
+  sync_mutex_t token_mutex;
   mem_buffer_t *token_buffers[TOKEN_POOL_PER_LANE];
   size_t token_next, token_calls;
   uint64_t token_enter_ns, token_enter_max_ns;
@@ -74,13 +74,13 @@ struct mail_lane_s {
   uint64_t finished_ns;
 };
 struct mail_run_s {
-  cmeta_mutex_t mutex;
-  cmeta_cond_t changed;
+  sync_mutex_t mutex;
+  sync_cond_t changed;
   atomic_int error;
   size_t ready, writers_ready, done, rounds, bytes, cancel_after, admission_limit;
   int limit_bytes;
   int started, cleanup, notify, retained, direct;
-  cmeta_mutex_t token_mutex;
+  sync_mutex_t token_mutex;
   mem_buffer_t *token_buffers[MAIL_LANES * TOKEN_POOL_PER_LANE];
   size_t token_count, token_next;
   size_t sg_batch_messages;
@@ -93,7 +93,7 @@ static void mail_error(mail_run *run, int status) {
 }
 static int mail_status(mail_run *run, uint64_t deadline) {
   const int status = atomic_load(&run->error);
-  return status != SALTS_OK ? status : cmeta_monotonic_ms() >= deadline ? SALTS_ETIMEDOUT : SALTS_OK;
+  return status != SALTS_OK ? status : monotonic_ms() >= deadline ? SALTS_ETIMEDOUT : SALTS_OK;
 }
 static void mail_released(void *data, void *user) {
   (void)data;
@@ -108,9 +108,9 @@ static void mail_fill(unsigned char *data, size_t bytes, const mail_header *h) {
   for (size_t i = sizeof(*h); i < bytes; ++i) data[i] = mail_byte(h, i);
 }
 static void mail_start_wait(mail_run *run) {
-  cmeta_mutex_lock(&run->mutex);
-  while (!run->started) cmeta_cond_wait(&run->changed, &run->mutex);
-  cmeta_mutex_unlock(&run->mutex);
+  sync_mutex_lock(&run->mutex);
+  while (!run->started) sync_cond_wait(&run->changed, &run->mutex);
+  sync_mutex_unlock(&run->mutex);
 }
 
 /* Exactly one producer owns each base reference. All other users must already
@@ -123,7 +123,7 @@ static int mail_try_prepare(mail_producer *p, uint64_t sequence, mem_slice_t *ou
     mem_buffer_t *buffer = p->buffers[index];
     if (mem_buffer_ref_count(buffer) != 1u) continue;
     p->buffer_probes += i + 1u;
-    const mail_header h = {p->lane->id, p->id, sequence, cmeta_hrtime()};
+    const mail_header h = {p->lane->id, p->id, sequence, hrtime()};
     mail_fill((unsigned char *)mem_buffer_data(buffer), run->bytes, &h);
     *out = mem_slice(buffer, 0u, run->bytes);
     if (out->buffer == NULL) return SALTS_ENOMEM;
@@ -142,7 +142,7 @@ static int mail_prepare(mail_producer *p, uint64_t sequence, mem_slice_t *out,
     if (status != SALTS_OK) return status;
     status = mail_try_prepare(p, sequence, out);
     if (status != SALTS_EBUSY) return status;
-    cmeta_thread_yield();
+    sync_thread_yield();
   }
 }
 
@@ -159,16 +159,16 @@ static int mail_token_prepare(mail_lane *lane, mail_local_batch *batch) {
   const size_t capacity = policy == 2 ? run->token_count : TOKEN_POOL_PER_LANE;
   mail_producer *p = &lane->producers[batch->producer];
   cmeta_ace_guard guard = {0};
-  cmeta_mutex_t *mutex = policy == 2 ? &run->token_mutex : &lane->token_mutex;
+  sync_mutex_t *mutex = policy == 2 ? &run->token_mutex : &lane->token_mutex;
   const cmeta_ace_lockable lock = mail_token_policy_as_cmeta_ace_lockable(mutex);
   const size_t first = batch->count;
-  const uint64_t prepared = cmeta_hrtime();
+  const uint64_t prepared = hrtime();
   int status = SALTS_OK;
   if (policy != 0) {
     if (cmeta_ace_guard_enter(&guard, &lock) != CMETA_OK) return SALTS_EPROTO;
   }
   /* Equal clock instrumentation in all three policies, including no Guard. */
-  const uint64_t elapsed = cmeta_hrtime() - prepared;
+  const uint64_t elapsed = hrtime() - prepared;
   if (policy != 0) {
     ++lane->token_calls;
     lane->token_enter_ns += elapsed;
@@ -234,24 +234,24 @@ static int mail_direct_entry(mail_lane *lane, mail_local_batch *batch, mail_entr
 static void mail_produce(void *arg) {
   mail_producer *p = arg;
   mail_run *run = p->lane->run;
-  cmeta_mutex_lock(&run->mutex);
+  sync_mutex_lock(&run->mutex);
   ++run->writers_ready;
-  cmeta_cond_broadcast(&run->changed);
-  cmeta_mutex_unlock(&run->mutex);
+  sync_cond_broadcast(&run->changed);
+  sync_mutex_unlock(&run->mutex);
   mail_start_wait(run);
-  const uint64_t deadline = cmeta_monotonic_ms() + MAIL_DEADLINE_MS;
+  const uint64_t deadline = monotonic_ms() + MAIL_DEADLINE_MS;
   int status = SALTS_OK;
   for (size_t round = 0u; status == SALTS_OK && round < run->rounds; ++round) {
     mem_slice_t prepared[MAIL_BATCH] = {0};
     disruptor_sequence_range_t range = {0};
-    if (run->pause_ms != 0u) cmeta_sleep_ms(run->pause_ms);
+    if (run->pause_ms != 0u) sleep_ms(run->pause_ms);
     for (size_t i = 0u; status == SALTS_OK && i < MAIL_BATCH; ++i)
       status = mail_prepare(p, round * MAIL_BATCH + i, &prepared[i], deadline);
     while (status == SALTS_OK &&
            !disruptor_publisher_try_claim_n(p->lane->queue, MAIL_BATCH, &range)) {
       ++p->full;
       status = mail_status(run, deadline);
-      cmeta_thread_yield();
+      sync_thread_yield();
     }
     if (status == SALTS_OK) {
       for (size_t i = 0u; i < MAIL_BATCH; ++i) {
@@ -418,7 +418,7 @@ static int mail_open(mail_lane *lane) {
   status = flowmq_socket_internal_bind_external(lane->receiver, "tcp://127.0.0.1:0");
   if (status == SALTS_OK) status = flowmq_last_endpoint(lane->receiver, endpoint, sizeof(endpoint), &size);
   if (status == SALTS_OK) status = flowmq_connect(lane->sender, endpoint);
-  const uint64_t deadline = cmeta_monotonic_ms() + MAIL_DEADLINE_MS;
+  const uint64_t deadline = monotonic_ms() + MAIL_DEADLINE_MS;
   flowmq_pollitem_t items[] = {{lane->sender, FLOWMQ_POLLOUT, 0}, {lane->receiver, FLOWMQ_POLLOUT, 0}};
   while (status == SALTS_OK && ready != 2u) {
     status = mail_status(lane->run, deadline);
@@ -469,7 +469,7 @@ static int mail_receive(mail_lane *lane, uint64_t expected[MAIL_PRODUCERS]) {
       if (status == SALTS_OK) status = checked;
     }
   }
-  const uint64_t completed = cmeta_hrtime();
+  const uint64_t completed = hrtime();
   if (offset != lane->run->bytes || header.lane != lane->id ||
       header.producer >= MAIL_PRODUCERS || header.prepared_ns > completed)
     status = SALTS_EPROTO;
@@ -489,12 +489,12 @@ static int mail_receive(mail_lane *lane, uint64_t expected[MAIL_PRODUCERS]) {
 }
 
 static int mail_warmup(mail_lane *lane) {
-  const mail_header header = {lane->id, 0u, 0u, cmeta_hrtime()};
+  const mail_header header = {lane->id, 0u, 0u, hrtime()};
   uint64_t expected[MAIL_PRODUCERS] = {0};
   mem_buffer_t *buffer = lane->producers[0].buffers[0];
   mem_slice_t slice;
   int status = SALTS_OK, sent = 0;
-  const uint64_t deadline = cmeta_monotonic_ms() + MAIL_DEADLINE_MS;
+  const uint64_t deadline = monotonic_ms() + MAIL_DEADLINE_MS;
   mail_fill((unsigned char *)mem_buffer_data(buffer), lane->run->bytes, &header);
   slice = mem_slice(buffer, 0u, lane->run->bytes);
   if (slice.buffer == NULL) return SALTS_ENOMEM;
@@ -529,12 +529,12 @@ static void mail_consume(void *arg) {
     status = flowmq_owner_internal_native_stats(lane->owner, &lane->native_before);
   if (status == SALTS_OK && run->sg_batch_messages != 0u) lane->native_sampled = 1u;
   mail_error(run, status);
-  cmeta_mutex_lock(&run->mutex);
+  sync_mutex_lock(&run->mutex);
   ++run->ready;
-  cmeta_cond_broadcast(&run->changed);
-  cmeta_mutex_unlock(&run->mutex);
+  sync_cond_broadcast(&run->changed);
+  sync_mutex_unlock(&run->mutex);
   mail_start_wait(run);
-  const uint64_t deadline = cmeta_monotonic_ms() + MAIL_DEADLINE_MS;
+  const uint64_t deadline = monotonic_ms() + MAIL_DEADLINE_MS;
   while (status == SALTS_OK && lane->received != total) {
     int observed_empty = 0;
     status = mail_status(run, deadline);
@@ -601,7 +601,7 @@ static void mail_consume(void *arg) {
         lane->admitted == lane->received ? MAIL_WAIT_MS : 0u;
     status = mail_progress(lane, wait);
   }
-  lane->finished_ns = cmeta_hrtime();
+  lane->finished_ns = hrtime();
   if (lane->native_sampled == 1u) {
     const int snapshot = flowmq_owner_internal_native_stats(lane->owner, &lane->native_after);
     if (snapshot == SALTS_OK) lane->native_sampled = 2u;
@@ -627,11 +627,11 @@ static void mail_consume(void *arg) {
        (run->retained == 3 && lane->sg_stats.max_messages > run->sg_batch_messages)))
     status = SALTS_EPROTO;
   mail_error(run, status);
-  cmeta_mutex_lock(&run->mutex);
+  sync_mutex_lock(&run->mutex);
   ++run->done;
-  cmeta_cond_broadcast(&run->changed);
-  while (!run->cleanup) cmeta_cond_wait(&run->changed, &run->mutex);
-  cmeta_mutex_unlock(&run->mutex);
+  sync_cond_broadcast(&run->changed);
+  while (!run->cleanup) sync_cond_wait(&run->changed, &run->mutex);
+  sync_mutex_unlock(&run->mutex);
   /* All producers are joined before cleanup. Drain references even on error. */
   for (size_t i = local.next; i < local.count; ++i)
     mem_slice_release(&local.entries[i].slice);
@@ -655,8 +655,8 @@ static int mail_compare(const void *a, const void *b) {
   const uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
   return (x > y) - (x < y);
 }
-static void mail_join(cmeta_thread_t *thread) {
-  if (cmeta_thread_join(thread) != SALTS_OK) abort();
+static void mail_join(sync_thread_t *thread) {
+  if (sync_thread_join(thread) != SALTS_OK) abort();
 }
 
 static int mail_run_path_config(size_t lanes, size_t bytes, size_t rounds, uint32_t pause_ms,
@@ -664,7 +664,7 @@ static int mail_run_path_config(size_t lanes, size_t bytes, size_t rounds, uint3
                          int direct, size_t sg_batch_messages) {
   mail_run run = {0};
   mail_lane workers[MAIL_LANES] = {0};
-  cmeta_thread_t consumers[MAIL_LANES] = {0}, producers[MAIL_LANES * MAIL_PRODUCERS] = {0};
+  sync_thread_t consumers[MAIL_LANES] = {0}, producers[MAIL_LANES * MAIL_PRODUCERS] = {0};
   flowmq_bench_metrics_t before = {0}, after = {0};
   const size_t total = lanes * MAIL_PRODUCERS * rounds * MAIL_BATCH;
   uint64_t *latencies = NULL, start = 0u, finish = 0u;
@@ -696,12 +696,12 @@ static int mail_run_path_config(size_t lanes, size_t bytes, size_t rounds, uint3
   run.direct = direct;
   run.sg_batch_messages = sg_batch_messages;
   run.cancel_after = cancel_after;
-  cmeta_mutex_init(&run.mutex); cmeta_cond_init(&run.changed);
+  sync_mutex_init(&run.mutex); sync_cond_init(&run.changed);
   if (direct >= TOKEN_LOCAL) {
-    cmeta_mutex_init(&run.token_mutex);
+    sync_mutex_init(&run.token_mutex);
     if (run.token_mutex == NULL) status = SALTS_ENOMEM;
     for (size_t i = 0u; i < lanes; ++i) {
-      cmeta_mutex_init(&workers[i].token_mutex);
+      sync_mutex_init(&workers[i].token_mutex);
       if (workers[i].token_mutex == NULL) status = SALTS_ENOMEM;
     }
   }
@@ -729,37 +729,37 @@ static int mail_run_path_config(size_t lanes, size_t bytes, size_t rounds, uint3
     }
   }
   for (size_t i = 0u; status == SALTS_OK && i < lanes; ++i) {
-    status = cmeta_thread_create(&consumers[i], mail_consume, &workers[i]);
+    status = sync_thread_create(&consumers[i], mail_consume, &workers[i]);
     if (status == SALTS_OK) ++created;
   }
   mail_error(&run, status);
-  cmeta_mutex_lock(&run.mutex);
-  while (run.ready != created) cmeta_cond_wait(&run.changed, &run.mutex);
-  cmeta_mutex_unlock(&run.mutex);
+  sync_mutex_lock(&run.mutex);
+  while (run.ready != created) sync_cond_wait(&run.changed, &run.mutex);
+  sync_mutex_unlock(&run.mutex);
   status = atomic_load(&run.error);
   for (size_t i = 0u; !direct && status == SALTS_OK && i < created; ++i)
     for (size_t j = 0u; status == SALTS_OK && j < MAIL_PRODUCERS; ++j) {
-      status = cmeta_thread_create(&producers[writers], mail_produce, &workers[i].producers[j]);
+      status = sync_thread_create(&producers[writers], mail_produce, &workers[i].producers[j]);
       if (status == SALTS_OK) ++writers;
     }
   mail_error(&run, status);
-  cmeta_mutex_lock(&run.mutex);
-  while (run.writers_ready != writers) cmeta_cond_wait(&run.changed, &run.mutex);
-  cmeta_mutex_unlock(&run.mutex);
+  sync_mutex_lock(&run.mutex);
+  while (run.writers_ready != writers) sync_cond_wait(&run.changed, &run.mutex);
+  sync_mutex_unlock(&run.mutex);
   mail_error(&run, flowmq_bench_metrics_read(&before));
   benchmark_io("mailbox to TCP receive vector", 1u, total, total * bytes) {
-    cmeta_mutex_lock(&run.mutex);
-    start = cmeta_hrtime(); run.started = 1;
-    cmeta_cond_broadcast(&run.changed);
-    while (run.done != created) cmeta_cond_wait(&run.changed, &run.mutex);
-    cmeta_mutex_unlock(&run.mutex);
+    sync_mutex_lock(&run.mutex);
+    start = hrtime(); run.started = 1;
+    sync_cond_broadcast(&run.changed);
+    while (run.done != created) sync_cond_wait(&run.changed, &run.mutex);
+    sync_mutex_unlock(&run.mutex);
     if (!measured || atomic_load(&run.error) != SALTS_OK) goto measured_done;
   }
 measured_done:
   mail_error(&run, flowmq_bench_metrics_read(&after));
   for (size_t i = 0u; i < writers; ++i) mail_join(&producers[i]);
-  cmeta_mutex_lock(&run.mutex); run.cleanup = 1;
-  cmeta_cond_broadcast(&run.changed); cmeta_mutex_unlock(&run.mutex);
+  sync_mutex_lock(&run.mutex); run.cleanup = 1;
+  sync_cond_broadcast(&run.changed); sync_mutex_unlock(&run.mutex);
   for (size_t i = 0u; i < created; ++i) mail_join(&consumers[i]);
   for (size_t i = 0u; i < lanes; ++i) {
     mail_lane *lane = &workers[i];
@@ -798,7 +798,7 @@ measured_done:
       free(p->storage);
     }
     if (lane->queue != NULL) disruptor_destroy(lane->queue);
-    if (direct >= TOKEN_LOCAL) cmeta_mutex_destroy(&lane->token_mutex);
+    if (direct >= TOKEN_LOCAL) sync_mutex_destroy(&lane->token_mutex);
   }
   status = atomic_load(&run.error);
   if (status == SALTS_OK && (received != total || admitted != total || finish <= start ||
@@ -845,8 +845,8 @@ measured_done:
   if (status != SALTS_OK && !(cancel_after != 0u && status == SALTS_ECANCELED))
     fprintf(stderr, "MAILBOX_ERROR,status=%d,lanes=%zu,bytes=%zu,sg=%d,wake=%d,received=%zu/%zu\n",
                                  status, lanes, bytes, retained, notify, received, total);
-  cmeta_cond_destroy(&run.changed); cmeta_mutex_destroy(&run.mutex); free(latencies);
-  if (direct >= TOKEN_LOCAL) cmeta_mutex_destroy(&run.token_mutex);
+  sync_cond_destroy(&run.changed); sync_mutex_destroy(&run.mutex); free(latencies);
+  if (direct >= TOKEN_LOCAL) sync_mutex_destroy(&run.token_mutex);
   return status;
 }
 
@@ -914,8 +914,8 @@ done:
 typedef struct wake_case_s { flowmq_owner_t *owner; atomic_int entered; int status; } wake_case;
 static void mail_delayed_wake(void *arg) {
   wake_case *test = arg;
-  while (!atomic_load(&test->entered)) cmeta_thread_yield();
-  cmeta_sleep_ms(10u);
+  while (!atomic_load(&test->entered)) sync_thread_yield();
+  sleep_ms(10u);
   test->status = flowmq_owner_internal_wake(test->owner);
 }
 static int mail_wake_case(int delayed) {
@@ -923,16 +923,16 @@ static int mail_wake_case(int delayed) {
   if (ctx == NULL) return SALTS_ENOMEM;
   flowmq_owner_t *owner = flowmq_owner_new(ctx, NULL);
   int status = owner != NULL ? SALTS_OK : SALTS_ENOMEM;
-  wake_case test = {0}; cmeta_thread_t thread = NULL;
+  wake_case test = {0}; sync_thread_t thread = NULL;
   test.owner = owner; atomic_init(&test.entered, 0);
-  if (status == SALTS_OK && delayed) status = cmeta_thread_create(&thread, mail_delayed_wake, &test);
+  if (status == SALTS_OK && delayed) status = sync_thread_create(&thread, mail_delayed_wake, &test);
   if (status == SALTS_OK && !delayed)
     for (size_t i = 0u; status == SALTS_OK && i < 16u; ++i) status = flowmq_owner_internal_wake(owner);
   if (status == SALTS_OK) {
     atomic_store(&test.entered, 1);
-    const uint64_t start = cmeta_monotonic_ms();
+    const uint64_t start = monotonic_ms();
     status = flowmq_owner_internal_step(owner, 2000u);
-    if (status == SALTS_OK && cmeta_monotonic_ms() - start >= 1000u) status = SALTS_ETIMEDOUT;
+    if (status == SALTS_OK && monotonic_ms() - start >= 1000u) status = SALTS_ETIMEDOUT;
   }
   if (thread != NULL) { mail_join(&thread); if (status == SALTS_OK) status = test.status; }
   if (owner != NULL) { const int closed = flowmq_owner_term(owner); if (status == SALTS_OK) status = closed; }
@@ -963,7 +963,7 @@ static int mail_batch_case(size_t bytes, int mixed, int byte_hwm, int close_pend
     status = SALTS_EPROTO;
   for (size_t i = 0u; status == SALTS_OK && i < COUNT; ++i) {
     mem_slice_t slice;
-    const mail_header header = {0u, 0u, i, cmeta_hrtime()};
+    const mail_header header = {0u, 0u, i, hrtime()};
     mail_fill(storage + i * bytes, bytes, &header);
     buffers[i] = mem_wrap_external(storage + i * bytes, bytes, mail_released, &released);
     if (buffers[i] == NULL) { status = SALTS_ENOMEM; break; }
@@ -988,7 +988,7 @@ static int mail_batch_case(size_t bytes, int mixed, int byte_hwm, int close_pend
     if (status == SALTS_OK && (lane.sg_stats.messages != 1u || lane.sg_stats.writes != 1u))
       status = SALTS_EPROTO;
   }
-  const uint64_t deadline = cmeta_monotonic_ms() + MAIL_DEADLINE_MS;
+  const uint64_t deadline = monotonic_ms() + MAIL_DEADLINE_MS;
   while (status == SALTS_OK && !close_pending && lane.received < COUNT) {
     status = mail_status(&run, deadline);
     if (status == SALTS_OK) status = flowmq_owner_internal_step(lane.owner, 0u);
@@ -1053,7 +1053,7 @@ static int mail_token_full_case(void) {
   run.bytes = sizeof(storage[0]); run.rounds = 2u;
   run.direct = TOKEN_BATCHED_SHARED_GUARD;
   atomic_init(&released.count, 0u);
-  cmeta_mutex_init(&run.token_mutex);
+  sync_mutex_init(&run.token_mutex);
   if (run.token_mutex == NULL) return SALTS_ENOMEM;
   for (size_t lane = 0u; lane < 2u; ++lane) {
     lanes[lane].id = lane; lanes[lane].run = &run;
@@ -1092,7 +1092,7 @@ static int mail_token_full_case(void) {
     mem_buffer_release(run.token_buffers[i]);
   }
   if (atomic_load(&released.count) != allocated) status = SALTS_EPROTO;
-  cmeta_mutex_destroy(&run.token_mutex);
+  sync_mutex_destroy(&run.token_mutex);
   return status;
 }
 

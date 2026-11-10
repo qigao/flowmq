@@ -5,8 +5,8 @@
 #include "flowmq_bench_metrics.h"
 #include "flowmq_tls_test_material.h"
 #include "tinytest.h"
-#include <salts/clock.h>
-#include <salts/thread.h>
+#include <core/clock.h>
+#include <threads/threads.h>
 #if defined(FLOWMQ_BENCH_WITH_ZMQ)
 #include <zmq.h>
 #endif
@@ -76,8 +76,8 @@ typedef struct owner_pair_s {
 } owner_pair_t;
 
 typedef struct owner_run_s {
-  cmeta_mutex_t mutex;
-  cmeta_cond_t changed;
+  sync_mutex_t mutex;
+  sync_cond_t changed;
   atomic_int error;
   size_t ready;
   size_t done;
@@ -141,7 +141,7 @@ static int owner_progress(owner_worker_t *worker, owner_pair_t *pair, uint64_t d
   size_t ready = 0u;
   int status = atomic_load_explicit(&worker->run->error, memory_order_relaxed);
   if (status != SALTS_OK) return status;
-  if (cmeta_monotonic_ms() >= deadline_ms) return SALTS_ETIMEDOUT;
+  if (monotonic_ms() >= deadline_ms) return SALTS_ETIMEDOUT;
   worker->operation = "poll";
   ++worker->poll_calls;
   if (worker->owner != NULL)
@@ -166,7 +166,7 @@ static int owner_wait_release(owner_worker_t *worker, size_t round) {
     items[i] = (flowmq_pollitem_t){worker->pairs[i].receiver, FLOWMQ_POLLIN, 0};
   worker->operation = "scheduled release";
   for (;;) {
-    const uint64_t now = cmeta_hrtime();
+    const uint64_t now = hrtime();
     size_t ready = 0u;
     int status = atomic_load_explicit(&worker->run->error, memory_order_relaxed);
     if (status != SALTS_OK) return status;
@@ -275,12 +275,12 @@ static void owner_payload(owner_worker_t *worker, const owner_pair_t *pair, uint
 static int owner_batch(owner_worker_t *worker, owner_pair_t *pair, int check_full, int measured) {
   const size_t bytes = worker->run->payload_bytes;
   const size_t part_bytes = bytes / 2u;
-  const uint64_t deadline = cmeta_monotonic_ms() + OWNER_TIMEOUT_MS;
+  const uint64_t deadline = monotonic_ms() + OWNER_TIMEOUT_MS;
   uint64_t started[OWNER_WINDOW];
   int status;
   for (size_t message = 0u; message < OWNER_WINDOW; ++message) {
     owner_payload(worker, pair, pair->sequence + message);
-    started[message] = cmeta_hrtime();
+    started[message] = hrtime();
     for (size_t part = 0u; part < 2u; ++part) {
       const int flags = FLOWMQ_DONTWAIT | (part == 0u ? FLOWMQ_SNDMORE : 0);
       for (;;) {
@@ -320,7 +320,7 @@ static int owner_batch(owner_worker_t *worker, owner_pair_t *pair, int check_ful
       if (status != SALTS_OK) return status;
       if (more != (part == 0u ? 1 : 0)) return SALTS_EPROTO;
     }
-    if (measured) worker->latencies[worker->sample_count++] = cmeta_hrtime() - started[message];
+    if (measured) worker->latencies[worker->sample_count++] = hrtime() - started[message];
     owner_payload(worker, pair, pair->sequence + message);
     worker->operation = "payload/order";
     if (memcmp(worker->received, worker->payload, bytes) != 0) return SALTS_EPROTO;
@@ -335,11 +335,11 @@ static int owner_batch(owner_worker_t *worker, owner_pair_t *pair, int check_ful
  * local socket. No shared mutable payload or hot-path worker barrier. */
 static int owner_lane_round(owner_worker_t *worker, int measured) {
   const size_t bytes = worker->run->payload_bytes;
-  const uint64_t deadline = cmeta_monotonic_ms() + OWNER_TIMEOUT_MS;
+  const uint64_t deadline = monotonic_ms() + OWNER_TIMEOUT_MS;
   int status;
   for (size_t i = 0u; i < worker->pair_count; ++i) {
     owner_pair_t *pair = &worker->pairs[i];
-    pair->burst_started_ns = cmeta_hrtime();
+    pair->burst_started_ns = hrtime();
     for (size_t message = 0u; message < OWNER_LANE_WINDOW; ++message) {
       owner_payload(worker, pair, pair->sequence + message);
       for (;;) {
@@ -387,7 +387,7 @@ static int owner_lane_round(owner_worker_t *worker, int measured) {
         return SALTS_EPROTO;
     }
     if (measured) {
-      const uint64_t completed_ns = cmeta_hrtime();
+      const uint64_t completed_ns = hrtime();
       if (worker->scheduled_latencies != NULL)
         worker->scheduled_latencies[worker->sample_count] = completed_ns - worker->release_ns;
       worker->latencies[worker->sample_count++] = completed_ns - pair->burst_started_ns;
@@ -490,16 +490,16 @@ static void owner_worker_entry(void *arg) {
       status = owner_pool_check(worker, &worker->pairs[i]);
   }
   owner_error(run, status);
-  cmeta_mutex_lock(&run->mutex);
+  sync_mutex_lock(&run->mutex);
   ++run->ready;
-  cmeta_cond_broadcast(&run->changed);
+  sync_cond_broadcast(&run->changed);
   while (!run->started)
-    cmeta_cond_wait(&run->changed, &run->mutex);
-  cmeta_mutex_unlock(&run->mutex);
+    sync_cond_wait(&run->changed, &run->mutex);
+  sync_mutex_unlock(&run->mutex);
 
   worker->retries = 0u;
   worker->poll_calls = 0u;
-  worker->started_ns = cmeta_hrtime();
+  worker->started_ns = hrtime();
   if (status == SALTS_OK) worker->phase = "measured";
   for (size_t round = 0u; status == SALTS_OK && round < run->rounds; ++round) {
     status = atomic_load_explicit(&run->error, memory_order_relaxed);
@@ -510,17 +510,17 @@ static void owner_worker_entry(void *arg) {
       for (size_t i = 0u; status == SALTS_OK && i < worker->pair_count; ++i)
         status = owner_batch(worker, &worker->pairs[i], 0, 1);
   }
-  worker->finished_ns = cmeta_hrtime();
+  worker->finished_ns = hrtime();
   worker->workload_status = status;
   owner_error(run, status);
-  cmeta_mutex_lock(&run->mutex);
+  sync_mutex_lock(&run->mutex);
   ++run->done;
-  cmeta_cond_broadcast(&run->changed);
+  sync_cond_broadcast(&run->changed);
   /* Keep completed workers asleep until measurement ends: spinning or freeing
    * their sockets here would contaminate other owners' CPU and wall time. */
   while (!run->cleanup)
-    cmeta_cond_wait(&run->changed, &run->mutex);
-  cmeta_mutex_unlock(&run->mutex);
+    sync_cond_wait(&run->changed, &run->mutex);
+  sync_mutex_unlock(&run->mutex);
   if (status == SALTS_OK) {
     for (size_t i = 0u; i < worker->pair_count; ++i)
       owner_error(run, owner_pool_check(worker, &worker->pairs[i]));
@@ -540,7 +540,7 @@ static int owner_run_policy(size_t owners, size_t payload_bytes, size_t rounds, 
                      size_t engine_order, uint32_t period_ms, int idle_wait) {
   owner_run_t run = {0};
   owner_worker_t workers[OWNER_LANE_THREADS] = {0};
-  cmeta_thread_t threads[OWNER_LANE_THREADS] = {0};
+  sync_thread_t threads[OWNER_LANE_THREADS] = {0};
   const size_t pairs = lane_scaling ? OWNER_LANE_PAIRS : OWNER_PAIRS;
   const size_t window = lane_scaling ? OWNER_LANE_WINDOW : OWNER_WINDOW;
   size_t messages, expected_samples;
@@ -579,8 +579,8 @@ static int owner_run_policy(size_t owners, size_t payload_bytes, size_t rounds, 
     }
   }
   atomic_init(&run.error, SALTS_OK);
-  cmeta_mutex_init(&run.mutex);
-  cmeta_cond_init(&run.changed);
+  sync_mutex_init(&run.mutex);
+  sync_cond_init(&run.changed);
   run.tls = tls;
   run.peer_pool = peer_pool;
   run.lane_scaling = lane_scaling;
@@ -598,38 +598,38 @@ static int owner_run_policy(size_t owners, size_t payload_bytes, size_t rounds, 
     workers[i].latencies = latencies + i * (expected_samples / owners);
     if (scheduled_latencies != NULL)
       workers[i].scheduled_latencies = scheduled_latencies + i * (expected_samples / owners);
-    status = cmeta_thread_create(&threads[i], owner_worker_entry, &workers[i]);
+    status = sync_thread_create(&threads[i], owner_worker_entry, &workers[i]);
     if (status != SALTS_OK) break;
     ++created;
   }
   owner_error(&run, status);
-  cmeta_mutex_lock(&run.mutex);
+  sync_mutex_lock(&run.mutex);
   while (run.ready != created)
-    cmeta_cond_wait(&run.changed, &run.mutex);
-  cmeta_mutex_unlock(&run.mutex);
+    sync_cond_wait(&run.changed, &run.mutex);
+  sync_mutex_unlock(&run.mutex);
   owner_error(&run, flowmq_bench_metrics_read(&before));
   /* TinyTest reports the wall cost of the parallel workload once. The CSV
    * interval ends at the last worker, excluding controller wake latency. */
   benchmark_io("fixed-total owner workload", 1u, messages, messages * payload_bytes) {
-    cmeta_mutex_lock(&run.mutex);
-    started_ns = cmeta_hrtime();
+    sync_mutex_lock(&run.mutex);
+    started_ns = hrtime();
     run.started = 1;
-    cmeta_cond_broadcast(&run.changed);
+    sync_cond_broadcast(&run.changed);
     while (run.done != created)
-      cmeta_cond_wait(&run.changed, &run.mutex);
-    cmeta_mutex_unlock(&run.mutex);
+      sync_cond_wait(&run.changed, &run.mutex);
+    sync_mutex_unlock(&run.mutex);
     /* Do not print a nominal full-work throughput for a failed/short run, or
      * performance numbers for the deliberately tiny correctness workload. */
     if (!measured || atomic_load(&run.error) != SALTS_OK) goto measurement_finished;
   }
 measurement_finished:
   owner_error(&run, flowmq_bench_metrics_read(&after));
-  cmeta_mutex_lock(&run.mutex);
+  sync_mutex_lock(&run.mutex);
   run.cleanup = 1;
-  cmeta_cond_broadcast(&run.changed);
-  cmeta_mutex_unlock(&run.mutex);
+  sync_cond_broadcast(&run.changed);
+  sync_mutex_unlock(&run.mutex);
   for (size_t i = 0u; i < created; ++i) {
-    status = cmeta_thread_join(&threads[i]);
+    status = sync_thread_join(&threads[i]);
     /* A failed join cannot establish that stack-owned synchronization and
      * worker storage are quiescent; terminating this test process is required. */
     if (status != SALTS_OK) {
@@ -715,8 +715,8 @@ measurement_finished:
              (double)after.peak_rss_bytes / OWNER_MIB, retries, peer_pool);
     }
   }
-  cmeta_cond_destroy(&run.changed);
-  cmeta_mutex_destroy(&run.mutex);
+  sync_cond_destroy(&run.changed);
+  sync_mutex_destroy(&run.mutex);
   free(latencies);
   free(scheduled_latencies);
   return status;
@@ -763,7 +763,7 @@ static void owner_scaling(int tls, size_t bytes, const owner_tls_files_t *files,
                               OWNER_MAX_ROUNDS, &rounds), SALTS_OK);
   printf("OWNER_CONFIG,pairs=%d,window=%d,parts=2,logical_cpus=%d,affinity=unbound,"
          "pool_comparison=%d,rounds=%zu,repeats=%zu\n",
-         OWNER_PAIRS, OWNER_WINDOW, cmeta_cpu_count(), compare_pool, rounds, repeats);
+         OWNER_PAIRS, OWNER_WINDOW, cpu_count(), compare_pool, rounds, repeats);
   printf("OWNER_COLUMNS,transport,payload_bytes,owners,repeat,messages,seconds,"
          "messages_per_second,MiB_per_second,p99_us,process_cpu_seconds,"
          "process_lifetime_peak_RSS_MiB,admission_retries,pool_enabled\n");
@@ -866,7 +866,7 @@ spec("FlowMQ independent owners") {
     printf("LANE_CPU_CONFIG,pairs=%d,batch=%d,period_ms=%d,rounds=%d,repeats=%d,"
            "active_poll_timeout_ms=0,release=fixed-schedule,logical_cpus=%d,affinity=unbound\n",
            OWNER_LANE_PAIRS, OWNER_LANE_WINDOW, OWNER_PACED_PERIOD_MS,
-           OWNER_PACED_ROUNDS, OWNER_PACED_REPEATS, cmeta_cpu_count());
+           OWNER_PACED_ROUNDS, OWNER_PACED_REPEATS, cpu_count());
     printf("LANE_CPU_HEADER,policy,period_ms,policy_order,max_release_lag_ns,"
            "scheduled_completion_p99_ns,cpu_cycles_available,cpu_cycles_per_message,payload_bytes,"
            "lanes,repeat,order,connections,batch,messages,wall_ns,messages_per_second,"
@@ -899,7 +899,7 @@ spec("FlowMQ independent owners") {
            "private_tcp_listener=1,pairs=%d,window=%d,send_receive_hwm=%d,parts=1,"
            "logical_cpus=%d,affinity=unbound,rounds=%zu,repeats=%zu\n",
            OWNER_LANE_PAIRS, OWNER_LANE_WINDOW, OWNER_LANE_WINDOW,
-           cmeta_cpu_count(), rounds, repeats);
+           cpu_count(), rounds, repeats);
     owner_lane_compare_header();
     for (size_t repeat = 0u; repeat < repeats; ++repeat)
       for (size_t size = 0u; size < 2u; ++size) {
@@ -928,7 +928,7 @@ spec("FlowMQ independent owners") {
                                 OWNER_MAX_REPEATS, &repeats), SALTS_OK);
     printf("LANE_CONFIG,model=ordinary-socket-fixed-owner,pairs=%d,window=%d,parts=1,"
            "logical_cpus=%d,affinity=unbound,rounds=%zu,repeats=%zu\n",
-           OWNER_LANE_PAIRS, OWNER_LANE_WINDOW, cmeta_cpu_count(), rounds, repeats);
+           OWNER_LANE_PAIRS, OWNER_LANE_WINDOW, cpu_count(), rounds, repeats);
     printf("LANE_HEADER,payload_bytes,lanes,repeat,order,connections,batch,messages,wall_ns,"
            "messages_per_second,cpu_ns_per_message,burst_p95_ns,burst_p99_ns,poll_calls,"
            "send_retries,process_peak_rss_bytes\n");
@@ -968,7 +968,7 @@ spec("FlowMQ independent owners") {
     printf("LANE_COMPARE_CONFIG,libzmq=%d.%d.%d,contexts_per_lane=1,zmq_io_threads_per_context=1,"
            "pairs=%d,window=%d,send_receive_hwm=%d,parts=1,logical_cpus=%d,affinity=unbound,"
            "rounds=%zu,repeats=%zu\n", major, minor, patch, OWNER_LANE_PAIRS,
-           OWNER_LANE_WINDOW, OWNER_LANE_WINDOW, cmeta_cpu_count(), rounds, repeats);
+           OWNER_LANE_WINDOW, OWNER_LANE_WINDOW, cpu_count(), rounds, repeats);
     owner_lane_compare_header();
     for (size_t repeat = 0u; repeat < repeats; ++repeat)
       for (size_t size = 0u; size < 2u; ++size) {

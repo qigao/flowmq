@@ -3,9 +3,9 @@
 #include "flowmq_protocol_internal.h"
 #include "flowmq_security.h"
 
-#include "cmeta_buffer.h"
-#include "cmeta_error.h"
-#include "str.h"
+#include <memory/buffer.h>
+#include <core/error.h>
+#include <core/tstr.h>
 
 #include <limits.h>
 #include <string.h>

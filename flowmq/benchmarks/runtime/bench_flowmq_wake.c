@@ -2,8 +2,8 @@
 #include "flowmq_owner.h"
 #include "flowmq_bench_metrics.h"
 #include "tinytest.h"
-#include <salts/clock.h>
-#include <salts/thread.h>
+#include <core/clock.h>
+#include <threads/threads.h>
 
 #include <stdatomic.h>
 #include <stdint.h>
@@ -19,8 +19,8 @@ enum {
 /* Two fixed socket owners; controller storage outlives both joins. Only the
  * receiver writes latency arrays. No application data crosses this barrier. */
 typedef struct wake_run_s {
-  cmeta_mutex_t mutex;
-  cmeta_cond_t changed;
+  sync_mutex_t mutex;
+  sync_cond_t changed;
   atomic_int error;
   atomic_size_t received;
   char endpoint[128];
@@ -46,15 +46,15 @@ static void wake_error(wake_run *run, int status) {
   int expected = SALTS_OK;
   if (status == SALTS_OK) return;
   (void)atomic_compare_exchange_strong(&run->error, &expected, status);
-  cmeta_mutex_lock(&run->mutex);
-  cmeta_cond_broadcast(&run->changed);
-  cmeta_mutex_unlock(&run->mutex);
+  sync_mutex_lock(&run->mutex);
+  sync_cond_broadcast(&run->changed);
+  sync_mutex_unlock(&run->mutex);
 }
 
 static int wake_status(wake_worker *worker) {
   const int status = atomic_load(&worker->run->error);
   if (status != SALTS_OK) return status;
-  return cmeta_monotonic_ms() >= worker->deadline_ms ? SALTS_ETIMEDOUT : SALTS_OK;
+  return monotonic_ms() >= worker->deadline_ms ? SALTS_ETIMEDOUT : SALTS_OK;
 }
 
 static int wake_poll(wake_worker *worker, uint32_t wait_ms, short events) {
@@ -116,7 +116,7 @@ static int wake_receive(wake_worker *worker, size_t sequence, int measured) {
   if (memcmp(payload, expected, sizeof(payload)) != 0 || header[2] < scheduled)
     return SALTS_EPROTO;
   if (measured) {
-    const uint64_t now = cmeta_hrtime();
+    const uint64_t now = hrtime();
     if (now < header[2]) return SALTS_EPROTO;
     run->latency[sequence] = now - header[2];
     run->scheduled_latency[sequence] = now - scheduled;
@@ -153,17 +153,17 @@ static int wake_open(wake_worker *worker) {
     if (status == SALTS_OK)
       status = flowmq_last_endpoint(worker->socket, run->endpoint, sizeof(run->endpoint), &size);
     if (status != SALTS_OK) return status;
-    cmeta_mutex_lock(&run->mutex);
+    sync_mutex_lock(&run->mutex);
     run->endpoint_ready = 1;
-    cmeta_cond_broadcast(&run->changed);
-    cmeta_mutex_unlock(&run->mutex);
+    sync_cond_broadcast(&run->changed);
+    sync_mutex_unlock(&run->mutex);
     return SALTS_OK;
   }
-  cmeta_mutex_lock(&run->mutex);
+  sync_mutex_lock(&run->mutex);
   while (!run->endpoint_ready && atomic_load(&run->error) == SALTS_OK)
-    cmeta_cond_wait(&run->changed, &run->mutex);
+    sync_cond_wait(&run->changed, &run->mutex);
   status = atomic_load(&run->error);
-  cmeta_mutex_unlock(&run->mutex);
+  sync_mutex_unlock(&run->mutex);
   return status != SALTS_OK ? status : flowmq_connect(worker->socket, run->endpoint);
 }
 
@@ -174,10 +174,10 @@ static int wake_sender_work(wake_worker *worker, size_t messages, int measured) 
     int status;
     if (measured) {
       scheduled = run->started_ns + (i + 1u) * (uint64_t)run->period_ms * 1000000u;
-      while ((attempted = cmeta_hrtime()) < scheduled) {
+      while ((attempted = hrtime()) < scheduled) {
         status = wake_status(worker);
         if (status != SALTS_OK) return status;
-        cmeta_sleep_ms((uint32_t)((scheduled - attempted + 999999u) / 1000000u));
+        sleep_ms((uint32_t)((scheduled - attempted + 999999u) / 1000000u));
       }
     }
     status = wake_send(worker, i, scheduled, attempted);
@@ -197,7 +197,7 @@ static int wake_sender_work(wake_worker *worker, size_t messages, int measured) 
 static void wake_entry(void *arg) {
   wake_worker *worker = arg;
   wake_run *run = worker->run;
-  worker->deadline_ms = cmeta_monotonic_ms() + WAKE_DEADLINE_MS;
+  worker->deadline_ms = monotonic_ms() + WAKE_DEADLINE_MS;
   int status = wake_open(worker);
   if (status == SALTS_OK && worker->sender)
     status = wake_sender_work(worker, WAKE_WARMUP, 0);
@@ -205,12 +205,12 @@ static void wake_entry(void *arg) {
     for (size_t i = 0u; status == SALTS_OK && i < WAKE_WARMUP; ++i)
       status = wake_receive(worker, i, 0);
   wake_error(run, status);
-  cmeta_mutex_lock(&run->mutex);
+  sync_mutex_lock(&run->mutex);
   ++run->ready;
-  cmeta_cond_broadcast(&run->changed);
-  while (!run->started) cmeta_cond_wait(&run->changed, &run->mutex);
-  cmeta_mutex_unlock(&run->mutex);
-  worker->deadline_ms = cmeta_monotonic_ms() + WAKE_DEADLINE_MS;
+  sync_cond_broadcast(&run->changed);
+  while (!run->started) sync_cond_wait(&run->changed, &run->mutex);
+  sync_mutex_unlock(&run->mutex);
+  worker->deadline_ms = monotonic_ms() + WAKE_DEADLINE_MS;
   worker->polls = worker->send_busy = 0u;
   status = wake_status(worker);
   if (status == SALTS_OK && worker->sender)
@@ -221,13 +221,13 @@ static void wake_entry(void *arg) {
       if (status == SALTS_OK && run->fail_after != 0u && i + 1u == run->fail_after)
         status = SALTS_ECANCELED;
     }
-  worker->finished_ns = cmeta_hrtime();
+  worker->finished_ns = hrtime();
   wake_error(run, status);
-  cmeta_mutex_lock(&run->mutex);
+  sync_mutex_lock(&run->mutex);
   ++run->done;
-  cmeta_cond_broadcast(&run->changed);
-  while (!run->cleanup) cmeta_cond_wait(&run->changed, &run->mutex);
-  cmeta_mutex_unlock(&run->mutex);
+  sync_cond_broadcast(&run->changed);
+  while (!run->cleanup) sync_cond_wait(&run->changed, &run->mutex);
+  sync_mutex_unlock(&run->mutex);
   if (worker->socket != NULL)
     wake_error(run, worker->owner != NULL ? flowmq_owner_close_socket(worker->owner, worker->socket)
                                         : flowmq_close(worker->socket));
@@ -241,20 +241,20 @@ static int wake_compare(const void *a, const void *b) {
 }
 
 static void wake_start(wake_run *run, size_t created) {
-  cmeta_mutex_lock(&run->mutex);
+  sync_mutex_lock(&run->mutex);
   atomic_store(&run->received, 0u);
-  run->started_ns = cmeta_hrtime();
+  run->started_ns = hrtime();
   run->started = 1;
-  cmeta_cond_broadcast(&run->changed);
-  while ((size_t)run->done != created) cmeta_cond_wait(&run->changed, &run->mutex);
-  cmeta_mutex_unlock(&run->mutex);
+  sync_cond_broadcast(&run->changed);
+  while ((size_t)run->done != created) sync_cond_wait(&run->changed, &run->mutex);
+  sync_mutex_unlock(&run->mutex);
 }
 
 static int wake_measure(unsigned policy, unsigned period_ms, size_t messages,
                         size_t fail_after, size_t repeat, size_t order, int measured) {
   wake_run run = {0};
   wake_worker workers[2] = {{.run = &run, .sender = 1}, {.run = &run}};
-  cmeta_thread_t threads[2] = {0};
+  sync_thread_t threads[2] = {0};
   flowmq_bench_metrics_t before = {0}, after = {0};
   size_t created = 0u;
   int status;
@@ -265,16 +265,16 @@ static int wake_measure(unsigned policy, unsigned period_ms, size_t messages,
   run.fail_after = fail_after;
   atomic_init(&run.error, SALTS_OK);
   atomic_init(&run.received, 0u);
-  cmeta_mutex_init(&run.mutex);
-  cmeta_cond_init(&run.changed);
+  sync_mutex_init(&run.mutex);
+  sync_cond_init(&run.changed);
   for (size_t i = 0u; i < 2u; ++i) {
-    status = cmeta_thread_create(&threads[i], wake_entry, &workers[i]);
+    status = sync_thread_create(&threads[i], wake_entry, &workers[i]);
     if (status != SALTS_OK) { wake_error(&run, status); break; }
     ++created;
   }
-  cmeta_mutex_lock(&run.mutex);
-  while ((size_t)run.ready != created) cmeta_cond_wait(&run.changed, &run.mutex);
-  cmeta_mutex_unlock(&run.mutex);
+  sync_mutex_lock(&run.mutex);
+  while ((size_t)run.ready != created) sync_cond_wait(&run.changed, &run.mutex);
+  sync_mutex_unlock(&run.mutex);
   wake_error(&run, flowmq_bench_metrics_read(&before));
   if (measured) {
     benchmark_io("independent sender wake", 1u, messages, messages * WAKE_BYTES) {
@@ -282,12 +282,12 @@ static int wake_measure(unsigned policy, unsigned period_ms, size_t messages,
     }
   } else wake_start(&run, created);
   wake_error(&run, flowmq_bench_metrics_read(&after));
-  cmeta_mutex_lock(&run.mutex);
+  sync_mutex_lock(&run.mutex);
   run.cleanup = 1;
-  cmeta_cond_broadcast(&run.changed);
-  cmeta_mutex_unlock(&run.mutex);
+  sync_cond_broadcast(&run.changed);
+  sync_mutex_unlock(&run.mutex);
   for (size_t i = 0u; i < created; ++i)
-    if (cmeta_thread_join(&threads[i]) != SALTS_OK) abort();
+    if (sync_thread_join(&threads[i]) != SALTS_OK) abort();
   status = atomic_load(&run.error);
   if (status == SALTS_OK && (workers[1].samples != messages ||
       workers[1].finished_ns <= run.started_ns)) status = SALTS_EPROTO;
@@ -312,8 +312,8 @@ static int wake_measure(unsigned policy, unsigned period_ms, size_t messages,
            (unsigned long long)run.release_lag[p99], workers[1].polls, workers[0].send_busy,
            after.cpu_cycles_available, (double)(after.cpu_cycles - before.cpu_cycles) / messages);
   }
-  cmeta_cond_destroy(&run.changed);
-  cmeta_mutex_destroy(&run.mutex);
+  sync_cond_destroy(&run.changed);
+  sync_mutex_destroy(&run.mutex);
   return status;
 }
 

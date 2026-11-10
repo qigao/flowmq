@@ -4,7 +4,7 @@
 #include "flowmq_peer_state.h"
 #include "flowmq_reconnect.h"
 
-#include "cmeta_error.h"
+#include <core/error.h>
 
 /* Private session gate. TCP/TLS CONNECTED or any partial HELLO/SETTINGS
  * handshake is not a recovered FMQ/6 session. The caller must also validate

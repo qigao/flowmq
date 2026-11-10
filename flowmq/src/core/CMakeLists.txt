@@ -30,7 +30,7 @@ target_include_directories(
 target_link_libraries(
   flowmq_core
   PUBLIC FlowMQ::Protocol Salts::Core
-  PRIVATE Salts::CSTL Salts::CMeta)
+  PRIVATE CMeta::CSTL CMeta::CMeta)
 
 set(FLOWMQ_CORE_SOURCES ${FLOWMQ_CORE_SOURCES} PARENT_SCOPE)
 set(FLOWMQ_CORE_HEADERS ${FLOWMQ_CORE_HEADERS} PARENT_SCOPE)

@@ -1,31 +1,20 @@
 @PACKAGE_INIT@
 
 include(CMakeFindDependencyMacro)
-find_dependency(Threads REQUIRED)
-if(NOT DEFINED ENV{SALTS_ROOT} OR "$ENV{SALTS_ROOT}" STREQUAL "")
-  set(FlowMQ_FOUND FALSE)
-  set(FlowMQ_NOT_FOUND_MESSAGE
-      "SALTS_ROOT must name the installed Salts profile")
-  return()
-endif()
-if(NOT DEFINED ENV{SALTS_UTILS_ROOT} OR "$ENV{SALTS_UTILS_ROOT}" STREQUAL "")
-  set(FlowMQ_FOUND FALSE)
-  set(FlowMQ_NOT_FOUND_MESSAGE
-      "SALTS_UTILS_ROOT must name the installed SaltsUtils profile")
-  return()
-endif()
-file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" FLOWMQ_SALTS_ROOT_PATH)
-file(TO_CMAKE_PATH "$ENV{SALTS_UTILS_ROOT}" FLOWMQ_SALTS_UTILS_ROOT_PATH)
-unset(Salts_DIR CACHE)
-unset(Salts_DIR)
-unset(SaltsUtils_DIR CACHE)
-unset(SaltsUtils_DIR)
-find_dependency(Salts CONFIG REQUIRED PATHS "${FLOWMQ_SALTS_ROOT_PATH}"
-                NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
-find_dependency(SaltsUtils CONFIG REQUIRED PATHS "${FLOWMQ_SALTS_UTILS_ROOT_PATH}"
-                NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+find_dependency(SaltsBase @FLOWMQ_BASE_VERSION@ EXACT CONFIG
+                PATHS "$ENV{SALTS_BASE_ROOT}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+find_dependency(CMeta @FLOWMQ_CMETA_VERSION@ EXACT CONFIG
+                PATHS "$ENV{CMETA_ROOT}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+find_dependency(SaltsCore @FLOWMQ_CNET_VERSION@ EXACT CONFIG
+                PATHS "$ENV{SALTSCORE_ROOT}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+find_dependency(SaltsUtils @FLOWMQ_UTILS_VERSION@ EXACT CONFIG
+                PATHS "$ENV{SALTS_UTILS_ROOT}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 
 include("${CMAKE_CURRENT_LIST_DIR}/FlowMQTargets.cmake")
+# Let linkers resolve FlowMQ's private shared-library dependency without
+# propagating CNet's headers or compile options to FlowMQ callers.
+set_property(TARGET FlowMQ::FlowMQ PROPERTY IMPORTED_LINK_DEPENDENT_LIBRARIES
+             Salts::CNet)
 
 set(FlowMQ_FlowMQ_FOUND TRUE)
 check_required_components(FlowMQ)

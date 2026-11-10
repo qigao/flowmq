@@ -9,17 +9,27 @@ set(FLOWMQ_MEDIA_PROVIDER_GENERATED_HEADER
 
 file(MAKE_DIRECTORY "${FLOWMQ_MEDIA_PROVIDER_GENERATED_DIR}")
 
+if(CMAKE_HOST_WIN32)
+  set(_idlc_library_path PATH)
+  set(_idlc_library_dir bin)
+elseif(CMAKE_HOST_APPLE)
+  set(_idlc_library_path DYLD_LIBRARY_PATH)
+  set(_idlc_library_dir lib)
+else()
+  set(_idlc_library_path LD_LIBRARY_PATH)
+  set(_idlc_library_dir lib)
+endif()
+set(_idlc_environment)
+foreach(sdk IN ITEMS SALTS_UTILS CMETA SALTS_BASE)
+  list(APPEND _idlc_environment --modify
+    "${_idlc_library_path}=path_list_prepend:${${sdk}_HOST_ROOT}/${_idlc_library_dir}")
+endforeach()
 add_custom_command(
   OUTPUT "${FLOWMQ_MEDIA_PROVIDER_GENERATED_HEADER}"
-  COMMAND "${CMAKE_COMMAND}"
-          "-DFLOWMQ_SALTS_IDLC_EXECUTABLE=${FLOWMQ_SALTS_IDLC_EXECUTABLE}"
-          "-DFLOWMQ_DATABIND_SCHEMA=${FLOWMQ_MEDIA_PROVIDER_SCHEMA}"
-          "-DFLOWMQ_DATABIND_OUTPUT=${FLOWMQ_MEDIA_PROVIDER_GENERATED_HEADER}"
-          "-DFLOWMQ_SALTS_HOST_ROOT=${FLOWMQ_SALTS_HOST_ROOT_PATH}"
-          "-DFLOWMQ_SALTS_UTILS_HOST_ROOT=${FLOWMQ_SALTS_UTILS_HOST_ROOT_PATH}"
-          -P "${PROJECT_SOURCE_DIR}/cmake/RunDataBindCompiler.cmake"
-  DEPENDS "${FLOWMQ_MEDIA_PROVIDER_SCHEMA}"
-          "${PROJECT_SOURCE_DIR}/cmake/RunDataBindCompiler.cmake"
+  COMMAND "${CMAKE_COMMAND}" -E env ${_idlc_environment} --
+          "${SaltsUtils_IDLC_EXECUTABLE}" "${FLOWMQ_MEDIA_PROVIDER_SCHEMA}"
+          --lang c --binary-codec --output "${FLOWMQ_MEDIA_PROVIDER_GENERATED_HEADER}"
+  DEPENDS "${FLOWMQ_MEDIA_PROVIDER_SCHEMA}" "${SaltsUtils_IDLC_EXECUTABLE}"
   COMMENT "Generating FlowMQ media-provider FMP/1 DataBind contract"
   VERBATIM)
 

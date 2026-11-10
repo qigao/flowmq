@@ -1,8 +1,8 @@
 #include "flowmq_destination.h"
 
 #include <cnet/destination_policy.h>
-#include <salts/clock.h>
-#include <salts/error_codes.h>
+#include <core/clock.h>
+#include <core/error_codes.h>
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -99,7 +99,7 @@ int flowmq_destination_choose(
       .endpoint_count = endpoint_count,
       .snapshot_generation = selection->snapshot_generation,
       .expires_at_ms = selection->expires_at_ms,
-      .now_ms = cmeta_monotonic_ms(),
+      .now_ms = monotonic_ms(),
       .sequence = selection->sequence,
       .explicit_endpoint_id = selection->explicit_endpoint_id,
       .key_hash = selection->key_hash,

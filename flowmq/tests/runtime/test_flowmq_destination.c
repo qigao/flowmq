@@ -1,7 +1,7 @@
 #include "flowmq_destination.h"
 #include "flowmq_tls_test_material.h"
 
-#include "cmeta_error.h"
+#include <core/error.h>
 #include "tinytest.h"
 
 #include <stdint.h>

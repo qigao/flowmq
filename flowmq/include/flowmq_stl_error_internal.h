@@ -1,7 +1,7 @@
 #ifndef FLOWMQ_STL_ERROR_INTERNAL_H
 #define FLOWMQ_STL_ERROR_INTERNAL_H
 
-#include "cmeta_error.h"
+#include <core/error.h>
 
 #include <cstl.h>
 

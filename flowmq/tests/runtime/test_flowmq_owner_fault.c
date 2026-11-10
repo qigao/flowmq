@@ -2,7 +2,7 @@
 #include "flowmq_socket_external_internal.h"
 #include "flowmq_peer_pool.h"
 #include "tinytest.h"
-#include "cmeta_error.h"
+#include <core/error.h>
 
 #include <stdbool.h>
 #include <stddef.h>

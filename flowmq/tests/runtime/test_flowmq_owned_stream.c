@@ -1,7 +1,7 @@
 #include "flowmq_owned_stream.h"
 
 #include "flowmq_protocol.h"
-#include "cmeta_error.h"
+#include <core/error.h>
 #include "tinytest.h"
 
 #include <stdlib.h>

@@ -1,6 +1,6 @@
 #include "flowmq_subscription_set.h"
 #include "tinytest.h"
-#include "cmeta_error.h"
+#include <core/error.h>
 
 #include <string.h>
 

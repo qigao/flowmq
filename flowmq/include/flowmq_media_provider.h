@@ -4,7 +4,7 @@
 #include "flowmq_export.h"
 #include "flowmq_protocol_catalog.h"
 
-#include "platform.h"
+#include <core/platform.h>
 #include "flowmq_media_provider_v1.h"
 
 #include <stddef.h>

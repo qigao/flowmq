@@ -1,6 +1,6 @@
 #include "flowmq_owner_batch.h"
 
-#include "cmeta_error.h"
+#include <core/error.h>
 #include "tinytest.h"
 
 #include <stdbool.h>

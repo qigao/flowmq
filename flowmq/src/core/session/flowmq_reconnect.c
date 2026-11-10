@@ -1,6 +1,6 @@
 #include "flowmq_reconnect.h"
 
-#include "cmeta_error.h"
+#include <core/error.h>
 
 #include <string.h>
 

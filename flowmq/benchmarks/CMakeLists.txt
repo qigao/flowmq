@@ -1,7 +1,3 @@
-if(NOT TARGET Salts::TinyTest)
-  find_package(Salts CONFIG REQUIRED)
-endif()
-
 cmake_add_benchmark(
   bench_flowmq_protocol
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/protocol/bench_flowmq_protocol.c
@@ -21,7 +17,7 @@ cmake_add_benchmark(
 cmake_add_benchmark(
   bench_flowmq_owner_mailbox
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_owner_mailbox.c
-  LIBS FlowMQ::Transport Salts::Concurrency Salts::CMeta Salts::CNet Salts::TinyTest
+  LIBS FlowMQ::Transport Salts::Core CMeta::CMeta Salts::CNet Salts::TinyTest
   INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/runtime
   FOLDER "flowmq/benchmarks/runtime")
 if(WIN32)
@@ -328,31 +324,11 @@ endif()
 
 if(FLOWMQ_BUILD_ZMQ_BENCHMARK)
   find_package(ZeroMQ CONFIG REQUIRED)
-  # vcpkg's static triplets expose libzmq as an INTERFACE forwarding target.
-  # Validate the actual archive while keeping its public link target below.
-  set(_flowmq_zmq_artifact_target libzmq)
-  get_target_property(_flowmq_zmq_target_type libzmq TYPE)
-  if(_flowmq_zmq_target_type STREQUAL "INTERFACE_LIBRARY" AND TARGET libzmq-static)
-    set(_flowmq_zmq_artifact_target libzmq-static)
-  endif()
-  string(TOUPPER "${CMAKE_BUILD_TYPE}" _flowmq_zmq_config)
-  get_target_property(
-    _flowmq_zmq_config_location ${_flowmq_zmq_artifact_target}
-    "IMPORTED_LOCATION_${_flowmq_zmq_config}")
-  get_target_property(_flowmq_zmq_generic_location
-    ${_flowmq_zmq_artifact_target} IMPORTED_LOCATION)
-  if(NOT _flowmq_zmq_config_location AND NOT _flowmq_zmq_generic_location)
-    message(
-      FATAL_ERROR
-        "FLOWMQ_BUILD_ZMQ_BENCHMARK requires a ${CMAKE_BUILD_TYPE} libzmq "
-        "from the vcpkg manifest; the configured ZeroMQ package has no "
-        "matching imported artifact")
-  endif()
-  target_link_libraries(bench_flowmq_socket PRIVATE libzmq)
+  target_link_libraries(bench_flowmq_socket PRIVATE libzmq-static)
   target_compile_definitions(bench_flowmq_socket PRIVATE FLOWMQ_BENCH_WITH_ZMQ=1)
-  target_link_libraries(bench_flowmq_socket_owners PRIVATE libzmq)
+  target_link_libraries(bench_flowmq_socket_owners PRIVATE libzmq-static)
   target_compile_definitions(bench_flowmq_socket_owners PRIVATE FLOWMQ_BENCH_WITH_ZMQ=1)
-  target_link_libraries(bench_flowmq_owner_mailbox PRIVATE libzmq)
+  target_link_libraries(bench_flowmq_owner_mailbox PRIVATE libzmq-static)
   target_compile_definitions(bench_flowmq_owner_mailbox PRIVATE FLOWMQ_BENCH_WITH_ZMQ=1)
   if(BUILD_TESTS)
     add_test(NAME test_flowmq_mailbox_zmq
@@ -372,7 +348,7 @@ if(FLOWMQ_BUILD_ZMQ_BENCHMARK)
   endif()
   cmake_add_benchmark(bench_flowmq_pattern_zmq
     SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_pattern_zmq.c
-    LIBS libzmq Salts::Core Salts::TinyTest
+    LIBS libzmq-static Salts::Core Salts::TinyTest
     FOLDER "flowmq/benchmarks/runtime")
   if(BUILD_TESTS)
     add_test(NAME test_flowmq_pattern_zmq
@@ -422,7 +398,7 @@ if(FLOWMQ_BUILD_ZMQ_BENCHMARK)
     endif()
     cmake_add_benchmark(${batch_target}
       SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_flowmq_batch.c
-      LIBS ${batch_transport} libzmq Salts::TinyTest
+      LIBS ${batch_transport} libzmq-static Salts::TinyTest
       INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/runtime
       FOLDER "flowmq/benchmarks/runtime")
     if(WIN32)

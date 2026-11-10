@@ -4,8 +4,8 @@
 #include "flowmq_tls_identity_map.h"
 #include "flowmq_tls_test_material.h"
 #include "tinytest.h"
-#include "cmeta_error.h"
-#include <salts/clock.h>
+#include <core/error.h>
+#include <core/clock.h>
 
 #include <stddef.h>
 #include <stdio.h>
@@ -2387,11 +2387,11 @@ spec("flowmq_socket lifecycle and pattern surface") {
     flowmq_pollitem_t items[] = {{.socket = first, .events = FLOWMQ_POLLIN},
                                  {.socket = second, .events = FLOWMQ_POLLIN}};
     size_t ready = 0u;
-    uint64_t started_ms = cmeta_monotonic_ms();
+    uint64_t started_ms = monotonic_ms();
 
     check_equal(flowmq_poll(items, 2u, 20u, &ready), SALTS_OK);
     check_equal(ready, 0u);
-    check_greater_equal(cmeta_monotonic_ms() - started_ms, UINT64_C(15));
+    check_greater_equal(monotonic_ms() - started_ms, UINT64_C(15));
 
     check_equal(flowmq_close(first), SALTS_OK);
     check_equal(flowmq_close(second), SALTS_OK);
@@ -2424,12 +2424,12 @@ spec("flowmq_socket lifecycle and pattern surface") {
     it("does not report handshake progress as application readiness") {
       flowmq_pollitem_t items[] = {{.socket = sender}, {.socket = receiver}};
       size_t ready = 99u;
-      uint64_t start = cmeta_monotonic_ms();
+      uint64_t start = monotonic_ms();
       check_equal(flowmq_poll(items, 2u, 20u, &ready), SALTS_OK);
       check_equal(ready, 0u);
       check_equal(items[0].revents, 0);
       check_equal(items[1].revents, 0);
-      check_greater_equal(cmeta_monotonic_ms() - start, UINT64_C(20));
+      check_greater_equal(monotonic_ms() - start, UINT64_C(20));
       items[0].events = FLOWMQ_POLLOUT;
       check_equal(flowmq_poll(items, 2u, 100u, &ready), SALTS_OK);
       check_equal(ready, 1u);
@@ -2467,11 +2467,11 @@ spec("flowmq_socket lifecycle and pattern surface") {
       uint64_t start;
       check_equal(flowmq_poll(connected, 2u, 100u, &ready), SALTS_OK);
       check_equal(ready, 1u);
-      start = cmeta_monotonic_ms();
+      start = monotonic_ms();
       check_equal(flowmq_poll(&item, 1u, 20u, &ready), SALTS_OK);
       check_equal(ready, 0u);
       check_equal(item.revents, 0);
-      check_greater_equal(cmeta_monotonic_ms() - start, UINT64_C(20));
+      check_greater_equal(monotonic_ms() - start, UINT64_C(20));
       check_equal(flowmq_send(sender, payload, sizeof(payload), FLOWMQ_DONTWAIT), SALTS_OK);
       connected[0].events = 0;
       check_equal(flowmq_poll(connected, 2u, 0u, &ready), SALTS_OK);

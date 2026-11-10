@@ -1,7 +1,7 @@
 #ifndef FLOWMQ_BENCH_METRICS_H
 #define FLOWMQ_BENCH_METRICS_H
 
-#include <salts/error_codes.h>
+#include <core/error_codes.h>
 #include <stdint.h>
 
 /* Test-only OS adapter: Salts exposes a wall clock, but no process CPU/RSS

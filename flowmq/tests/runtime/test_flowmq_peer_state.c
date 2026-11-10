@@ -1,7 +1,7 @@
 #include "flowmq_peer_state.h"
 #include "flowmq_reconnect_ready.h"
 
-#include "cmeta_error.h"
+#include <core/error.h>
 #include "tinytest.h"
 
 spec("flowmq_peer_state") {

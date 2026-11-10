@@ -4,7 +4,7 @@
 #include "flowmq_export.h"
 #include "flowmq_protocol_catalog.h"
 
-#include "str.h"
+#include <core/tstr.h>
 
 #include <stddef.h>
 

@@ -1,6 +1,6 @@
 #include "flowmq_stream_decoder.h"
 #include "tinytest.h"
-#include "cmeta_error.h"
+#include <core/error.h>
 
 #include <string.h>
 

@@ -2,12 +2,12 @@
 #define FLOWMQ_STREAM_DECODER_H
 
 #include "flowmq_protocol.h"
-#include "cmeta_bytes.h"
+#include <core/bytes.h>
 
 #include <stddef.h>
 
 typedef struct flowmq_stream_decoder_s {
-  cmeta_bytes_t buffer;
+  bytes_t buffer;
   size_t max_frame_size;
   int initialized;
 } flowmq_stream_decoder_t;

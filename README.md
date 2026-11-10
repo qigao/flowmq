@@ -28,31 +28,23 @@ wire protocol 保持不变；独立 lane、共享 Guard 与 retained SG 的测�
 扫描属于私有性能资格验证，不作为本版本的公开数据路径。macOS 发布 profile
 使用 AppleClang，匹配当前 Salts SDK 的 TinyTest native Mach-O TLS ABI。
 
-当前开发分支的 NuGet restore 使用 `Salts.Native Version="2.3.0-*"` 与
-`SaltsUtils.Native Version="4.3.0-*"`：选择对应的最新 RC（正式版发布后选择同版本正式版），
-而不是回退到 2.2.x / 4.2.x。公开链接依赖是
-`Salts::Core` 与 SaltsUtils 提供的 `Salts::DataBind`；`Salts::CNet`、`Salts::NativeIO`、
-`Salts::CSTL` 和 `Salts::CMeta` 都是实现私有依赖。FMP/1 保持现有 header-only wire view/builder ABI，
-但生成入口统一使用 DataBind `salts-idlc`，不再依赖已废止的 TBE producer target/tool。
+当前开发分支使用 [拆分 SDK 版本表](cmake/sdk-versions.json)。
 
-BoringSSL 已退出 FlowMQ 的依赖与链接配置。TLS 提供者由发布的 Salts SDK 管理，
-FlowMQ 通过 `Salts::CNet` 使用 TCP/TLS；manifest 声明 `zeromq` 以及已安装 SaltsUtils
-导出配置所需的 `lua`、`quickjs-ng`，证书及主机名
-校验继续由 CNet 负责。
+| 仓库 | FlowMQ 用途 | CMake 接口 |
+| --- | --- | --- |
+| salts-base | 时钟、线程、字符串、buffer/slice、NativeIO 和 TinyTest | `SaltsBase`，`Salts::Core`、`Salts::NativeIO`、`Salts::TinyTest` |
+| cmeta | 内部 Schema/Replay、CSTL 和单独的 CFlow 验证 | `CMeta`，`CMeta::CMeta`、`CMeta::CSTL`、`CMeta::CFlow` |
+| salts-cnet | TCP/TLS、listener、连接 manager、peer pool 和目的地策略 | `SaltsCore`，`Salts::CNet` |
+| salts-utils | FMP/1 头文件生成、DataBind 运行时和生成的 FlowMQ plan 验证 | `SaltsUtils`，`Salts::DataBind`、`salts-idlc` |
 
-Salts 2.3.0-rc.1 已发布统一的 `Salts::CNet` SDK，`<cnet/manager.h>` 中的
-`cnet_manager_*` 不再需要单独链接 `Salts::CNetManager` DSO。
+`FlowMQ::FlowMQ` 的直接公开链接依赖为 `Salts::Core` 和 `Salts::DataBind`。
+TLS 提供者、证书与主机名校验由 CNet 管理。
+
 每个 socket client 仍使用固定容量的 owner-local manager，接管
 connect/adopt 的绑定与终态记录，queued parts 消费结束后才释放额外
 context hold。外部 owner 通过有界 `advance` 提交关闭，继续由唯一的
 NativeIO/CNet observe 路径处理真实终态。消息、路由、重连与 TLS
 协议状态归 FlowMQ；无 Actor、第二线程或消息重放 fallback。
-升级时需要清理旧的分离 manager SDK/DSO 并用统一 Salts CNet 重新编译。
-
-常规 PR/发布使用 GitHub NuGet 的 2.3.0-* / 4.3.0-* 浮动依赖。
-手动 `workflow_dispatch.salts_candidate_sha` 只用于单独的宿主候选 SDK
-资格验证；该模式显式跳过 Android、NuGet pack/qualify/publish。
-没有配置候选 SHA 时不再隐式使用历史候选 pin。
 
 ## CNet 2.3 explicit remote destination admission (FlowMQ #122)
 
@@ -450,65 +442,35 @@ cleanup:
 
 ## 构建与验证
 
-参考 [SaltsUtils](https://github.com/qigao/salts-utils) 的恢复流程，先安装 .NET SDK 8、
-PowerShell 7，并在父环境提供具有 `read:packages` 权限的 `GITHUB_TOKEN`。
-脚本不自动读取 `.env`，也不记录凭据。Windows 在 Visual Studio developer 环境中运行：
+安装 CMake 3.25+、Ninja 和 Python 3.12+。SDK 恢复脚本从版本表指定的
+GitHub Releases 下载归档并校验 SHA-256。Linux x64 示例：
 
-```powershell
-./cmake/ci/restore-native-sdk.ps1 -Rid windows-x64
-cmake --preset win-release-user -DBUILD_TESTS=ON
-cmake --build --preset win-release-user
-ctest --preset win-release-user --output-on-failure
+```sh
+python cmake/ci/restore-split-sdks.py --profile linux-clang-x64 \
+  --triplet x64-linux --destination build/dependencies
+deps="$PWD/build/dependencies"
+export SALTS_BASE_ROOT="$deps/linux-clang-x64/salts-base"
+export CMETA_ROOT="$deps/linux-clang-x64/cmeta"
+export SALTSCORE_ROOT="$deps/linux-clang-x64/salts-cnet"
+export SALTS_UTILS_ROOT="$deps/linux-clang-x64/salts-utils"
+cmake -S . -B build/flowmq -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON \
+  -DCMAKE_PREFIX_PATH="$deps/vcpkg_installed/x64-linux"
+cmake --build build/flowmq
+ctest --test-dir build/flowmq -LE benchmark --output-on-failure
 ```
 
-Linux 使用 `pwsh -File cmake/ci/restore-native-sdk.ps1 -Rid linux-x64`，随后运行
-`linux-release-user` 的 configure/build/test preset。
+Windows CI 使用 `windows-llvm-mingw-x64` / `qigao-x64-windows-llvm-mingw`，
+macOS 使用 `macos-clang-arm64` / `arm64-osx`，Android 使用 `android-arm64` /
+`arm64-android`。为 Android 交叉编译时，四个 target root 指向 Android SDK，
+`SALTS_BASE_HOST_ROOT`、`CMETA_HOST_ROOT` 和 `SALTS_UTILS_HOST_ROOT` 指向 Linux
+宿主 SDK。FMP/1 由宿主 `salts-idlc` 生成。
 
-Salts.Native 使用 `Version="2.3.0-*"`，SaltsUtils.Native 使用
-`Version="4.3.0-*"`，每次 restore 通过 `--no-cache --force-evaluate`
-重新解析对应 RC 或正式版；不会静默回退到旧版稳定 SDK。
-NuGet assets 是版本和路径的事实源，本地脚本默认使用 `stage/nuget`，CI 缓存位于
-`build/nuget-packages`；可通过
-`QIGAO_NUGET_PACKAGES` 指定缓存位置。Release presets 消费
-`stage/dependencies/salts/<RID>` 与 `stage/dependencies/salts-utils/<RID>` 的稳定链接；configure 本身不下载 SDK，
-且清除旧的包路径缓存。恢复步骤只更新链接，拒绝覆盖已有的普通 SDK 目录。
+SaltsUtils 0.1.0 的发布归档遗漏了其 CMake 配置引用的 `IDL.cmake`。恢复脚本
+从 [上游安装修复](https://github.com/qigao/salts-utils/pull/755) 取回并校验该文件。
+升级到包含此文件的 SDK 时可移除该恢复步骤。
 
-SaltsUtils 由各 preset 的 `SALTS_UTILS_ROOT` 指向恢复的发布 SDK，无需本地重编译。
-[SaltsUtils 4.2.0](https://github.com/qigao/salts-utils/releases/tag/v4.2.0) 已适配
-Salts 2.1；其生成接口有不兼容调整，升级后必须重新生成 IDL 并重新编译消费者。
-重新发布的 4.2.0 已移除 Lua/QuickJS 的自动查找，FlowMQ 无需这两个运行时，
-manifest 也不再声明它们。已缓存旧 4.2.0 的环境需重新恢复该版本的包内容；
-本次包 SHA-256 为 `3993b8c5b7245daabf51633f20728fb38ccbdaf568666681e0ba3f6a63ea82ca`。
-这些版本和哈希仅记录验证环境，不是依赖约束。
-首次配置需显式启用 `BUILD_TESTS`；共享 preset 的 `ENABLE_TESTS` 不是本项目的测试开关。
-
-发布 SDK 包含 Release 库。`win-dev-user` / `linux-dev-user` 仍要求在既有
-`PKG_ROOT` 路径安装匹配的 Debug SDK，不能混用旧版或 Release 库。
-Salts 的 Core 头文件与平台调用已采用当前 `cmeta_*` API；升级后需重新构建 FlowMQ
-及其消费者。FlowMQ 公开函数、消息格式与 caller-driven 线程模型保持不变。
-FMP/1 由当前 SaltsUtils 的 `salts-idlc` 生成；工具更新会触发头文件重新生成。
-
-新数据路径 benchmark：
-
-```powershell
-cmake --fresh --preset win-release-user -DBUILD_TESTS=ON -DFLOWMQ_BUILD_ZMQ_BENCHMARK=ON
-cmake --build --preset win-release-user --target bench_flowmq_socket
-ctest --preset bench-win-release-user -R "^bench_flowmq_zmq_comparison$" --repeat until-fail:3 -V
-```
-
-同负载 TCP copy 对照使用双方相同的完整样本数，独立于 smoke/CI 缩减开关。
-Windows 实测、原始数据和限制见 [FlowMQ / libzmq 对照](docs/FLOWMQ_ZMQ_COMPARISON.md)。
-
-ZeroMQ 由 `vcpkg.json` 安装；公平对比必须使用 Release preset，使 FlowMQ 与
-libzmq 都链接 Release 产物。GitHub Actions 通过
-`qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master` 以只读模式消费共享的
-GitHub Packages 二进制缓存，并使用 cache-only gate 防止 CI 静默回退到本地重编依赖。
-
-交叉编译时 target SDK 与 host code-generation 工具必须分开。设置
-`SALTS_ROOT` / `SALTS_UTILS_ROOT` 指向目标平台 SDK，同时设置
-`SALTS_HOST_ROOT` / `SALTS_UTILS_HOST_ROOT` 指向构建主机 SDK；FlowMQ 使用 host
-SaltsUtils 中的 `salts-idlc` 生成 FMP/1 头文件，再用 target Salts/SaltsUtils 编译和链接。
-交叉编译必须显式提供 host roots；native build 的 host tool 则来自同一已解析的 SDK profile。
+启用 `FLOWMQ_BUILD_ZMQ_BENCHMARK` 可构建同负载 TCP 对照基准，使用锁定依赖归档
+中的 `libzmq-static`。基准数据见 [FlowMQ / libzmq 对照](docs/FLOWMQ_ZMQ_COMPARISON.md)。
 
 多核 owner 基准使用现有公开 API：每个工作线程在本线程创建独立 context，
 创建、推进并关闭自己的 PAIR sockets。固定 4 条回环连接（8 个 socket），
@@ -646,14 +608,11 @@ Linux/macOS 与并发 sanitizer 尚未验证。
 详细所有权和关闭顺序见 [架构说明](docs/ARCHITECTURE.md)，wire 契约见
 [FMQ/6 协议](docs/FMQ_WIRE_PROTOCOL.md)。
 
-### Salts 2.3 / SaltsUtils 4.3 NuGet SDK CI
+### 拆分 SDK CI 与回滚
 
-普通 PR、main 和 tag 通过 NuGet 自动选择 `Salts.Native 2.3.0-*` 与
-`SaltsUtils.Native 4.3.0-*` 的最新可匹配版本。NuGet 每次重新求解依赖，
-CI 从 `project.assets.json` 记录解析出的身份，不允许混合旧 DSO。
-缺少可解析包、所需 RID 的 SDK 文件或缓存 binary closure 时直接失败。
+PR 在 Linux x64、Windows x64 和 macOS arm64 运行本机 CTest，Android arm64-v8a
+进行交叉编译与链接。生成的 FlowMQ SDK manifest 记录四个依赖的精确版本。
 
-可通过手动工作流输入 `salts_candidate_sha` 检查一个尚未发布的 Salts
-SDK producer；输入必须是完整 SHA，需存在带 Linux/Windows/macOS
-产物的成功 CI run。此模式仅验证宿主，不执行 Android、打包或发布。
-正常 tag 只可使用发布的 NuGet 包，不接受候选 SDK。
+此次迁移保留 FMQ/6 和 FMP/1 的 wire 格式。FlowMQ 与消费者需用同一组依赖重新
+编译，因为公开头文件使用 SaltsBase 的字符串与切片类型。回滚时将 FlowMQ 与依赖
+一并切回迁移前的 SDK 组合。

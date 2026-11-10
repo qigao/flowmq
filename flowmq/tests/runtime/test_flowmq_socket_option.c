@@ -1,7 +1,7 @@
 #include "flowmq_socket_option.h"
 #include "flowmq_tls_identity_map.h"
 
-#include "cmeta_error.h"
+#include <core/error.h>
 #include "tinytest.h"
 
 #include <stdint.h>

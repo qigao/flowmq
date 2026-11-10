@@ -18,15 +18,15 @@
 #include "flowmq_socket_batch_probe.h"
 #endif
 #include "flowmq_tls_identity_map.h"
-#include "cmeta_error.h"
-#include "cmeta_buffer.h"
-#include "str.h"
+#include <core/error.h>
+#include <memory/buffer.h>
+#include <core/tstr.h>
 
 #include <cnet/cnet.h>
 #include <cnet/manager.h>
 #include <cnet/client_pool.h>
-#include <salts/clock.h>
-#include <salts/thread.h>
+#include <core/clock.h>
+#include <threads/threads.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -342,13 +342,13 @@ static int flowmq_socket_batch_probe_manager(flowmq_socket_t *socket,
                                             int listener) {
   size_t work = 0u;
 #if defined(FLOWMQ_BATCH_PHASE_TIMING)
-  const uint64_t started = cmeta_hrtime();
+  const uint64_t started = hrtime();
 #endif
   const int status = cnet_manager_advance(&socket->manager,
                                          FLOWMQ_SOCKET_PEER_CAPACITY, &work);
 #if defined(FLOWMQ_BATCH_PHASE_TIMING)
-  if (listener) socket->batch_probe.listener_manager_ns += cmeta_hrtime() - started;
-  else socket->batch_probe.local_manager_ns += cmeta_hrtime() - started;
+  if (listener) socket->batch_probe.listener_manager_ns += hrtime() - started;
+  else socket->batch_probe.local_manager_ns += hrtime() - started;
 #else
   (void)listener;
 #endif
@@ -729,7 +729,7 @@ static int flowmq_socket_endpoint_schedule(flowmq_socket_t *socket,
   if (socket->reconnect_interval_ms < 0) return SALTS_OK;
   status = flowmq_reconnect_next(&endpoint->reconnect, &delay_ms);
   if (status != SALTS_OK) return status;
-  now_ms = cmeta_monotonic_ms();
+  now_ms = monotonic_ms();
   endpoint->next_attempt_ms =
       delay_ms > UINT64_MAX - now_ms ? UINT64_MAX : now_ms + delay_ms;
   endpoint->retry_pending = 1u;
@@ -2042,7 +2042,7 @@ static int flowmq_socket_peer_flow_update_progress(
   if (!flowmq_socket_peer_ready(peer) ||
       !flowmq_peer_state_write_idle(&peer->state))
     return SALTS_OK;
-  status = flowmq_flow_control_next_update(&peer->flow_control, cmeta_hrtime(),
+  status = flowmq_flow_control_next_update(&peer->flow_control, hrtime(),
                                            &update);
   if (status == FLOWMQ_FLOW_CONTROL_NO_UPDATE) return SALTS_OK;
   if (status != SALTS_OK) return status;
@@ -2070,7 +2070,7 @@ static int flowmq_socket_peer_heartbeat_progress(flowmq_socket_peer_t *peer) {
     peer->pong_pending = 0u;
   }
   if (!peer->heartbeat_active) return SALTS_OK;
-  now_ns = cmeta_hrtime();
+  now_ns = hrtime();
   action = flowmq_protocol_heartbeat_deadlines_next(
       &peer->heartbeat, now_ns, &wait_deadline_ns);
   (void)wait_deadline_ns;
@@ -2185,7 +2185,7 @@ static int flowmq_socket_process_receive(flowmq_socket_peer_t *peer) {
               &peer->state, FLOWMQ_PEER_HANDSHAKE_HELLO_RX);
         if (status == SALTS_OK && peer->heartbeat_active)
           flowmq_protocol_heartbeat_deadlines_on_receive(
-              &peer->heartbeat, cmeta_hrtime());
+              &peer->heartbeat, hrtime());
       }
     } else if (!flowmq_peer_state_handshake_has(
                    &peer->state, FLOWMQ_PEER_HANDSHAKE_SETTINGS_RX)) {
@@ -2207,7 +2207,7 @@ static int flowmq_socket_process_receive(flowmq_socket_peer_t *peer) {
         flowmq_socket_peer_reconnect_protocol_ready(peer);
       if (status == SALTS_OK && peer->heartbeat_active)
         flowmq_protocol_heartbeat_deadlines_on_receive(
-            &peer->heartbeat, cmeta_hrtime());
+            &peer->heartbeat, hrtime());
     } else {
       status = frame.pattern == peer->remote_pattern
                    ? flowmq_pattern_data_direction_validate(
@@ -2217,7 +2217,7 @@ static int flowmq_socket_process_receive(flowmq_socket_peer_t *peer) {
         status = SALTS_EPROTO;
       if (status == SALTS_OK && peer->heartbeat_active)
         flowmq_protocol_heartbeat_deadlines_on_receive(&peer->heartbeat,
-                                                       cmeta_hrtime());
+                                                       hrtime());
       if (status == SALTS_OK && frame.kind == FLOWMQ_PROTOCOL_FRAME_FLOW_UPDATE) {
         flowmq_protocol_flow_update_t update;
         status = flowmq_protocol_flow_update_decode(frame.payload, &update);
@@ -2280,7 +2280,7 @@ static int flowmq_socket_process_owned_stream(
                    : SALTS_EPROTO;
       if (status == SALTS_OK && peer->heartbeat_active)
         flowmq_protocol_heartbeat_deadlines_on_receive(
-            &peer->heartbeat, cmeta_hrtime());
+            &peer->heartbeat, hrtime());
       if (status == SALTS_OK)
         status = flowmq_socket_process_data_frame(
             peer, &frame, NULL, &projection, pause_receive);
@@ -2381,7 +2381,7 @@ static void flowmq_socket_on_state(void *user, cnet_connection connection,
                            ? socket->heartbeat_timeout_ms
                            : socket->heartbeat_interval_ms;
       flowmq_protocol_heartbeat_deadlines_init(
-          &peer->heartbeat, cmeta_hrtime(),
+          &peer->heartbeat, hrtime(),
           (uint64_t)socket->heartbeat_interval_ms, (uint64_t)timeout_ms, 0u);
       peer->heartbeat_active = 1u;
     }
@@ -2447,7 +2447,7 @@ static void flowmq_socket_on_receive_slice(
   flowmq_socket_t *socket = peer->owner;
 #if defined(FLOWMQ_BATCH_PROBE)
 #if defined(FLOWMQ_BATCH_PHASE_TIMING)
-  const uint64_t probe_started = cmeta_hrtime();
+  const uint64_t probe_started = hrtime();
 #endif
   ++socket->batch_probe.receive_callbacks;
   socket->batch_probe.receive_bytes += slice.length;
@@ -2490,7 +2490,7 @@ static void flowmq_socket_on_receive_slice(
                    : SALTS_EPROTO;
       if (status == SALTS_OK && peer->heartbeat_active)
         flowmq_protocol_heartbeat_deadlines_on_receive(
-            &peer->heartbeat, cmeta_hrtime());
+            &peer->heartbeat, hrtime());
       if (status == SALTS_OK)
         status = flowmq_socket_process_data_frame(
             peer, &frame, &slice, NULL, &pause_receive);
@@ -2546,7 +2546,7 @@ static void flowmq_socket_on_receive_slice(
   if (status != SALTS_OK)
     flowmq_socket_peer_fail(peer);
 #if defined(FLOWMQ_BATCH_PHASE_TIMING)
-  socket->batch_probe.receive_callback_ns += cmeta_hrtime() - probe_started;
+  socket->batch_probe.receive_callback_ns += hrtime() - probe_started;
 #endif
 }
 
@@ -2655,7 +2655,7 @@ static int flowmq_socket_endpoint_connect(flowmq_socket_t *socket,
 }
 
 static int flowmq_socket_reconnect_progress(flowmq_socket_t *socket) {
-  const uint64_t now_ms = cmeta_monotonic_ms();
+  const uint64_t now_ms = monotonic_ms();
   /* Keep established-connection progress at one predictable branch. */
   if (!socket->reconnect_pending) return SALTS_OK;
   socket->reconnect_pending = 0u;
@@ -3255,7 +3255,7 @@ int flowmq_connect(flowmq_socket_t *socket, const char *endpoint) {
       socket->reconnect_interval_ms >= 0
           ? (uint64_t)socket->reconnect_interval_ms
           : 0u,
-      reconnect_max_ms, cmeta_hrtime() ^ (uint64_t)(endpoint_index + 1u));
+      reconnect_max_ms, hrtime() ^ (uint64_t)(endpoint_index + 1u));
   if (status == SALTS_OK)
     status = flowmq_socket_endpoint_connect(socket, endpoint_index);
   if (status != SALTS_OK) {
@@ -4304,7 +4304,7 @@ static int flowmq_socket_receive_consume_credit(
       !flowmq_peer_state_is_retired(&peer->state)) {
     uint64_t consumed_at_ns = peer->flow_control.update_pending
                                   ? 0u
-                                  : cmeta_hrtime();
+                                  : hrtime();
     return flowmq_flow_control_consume(
         &peer->flow_control, message->credit_size, consumed_at_ns);
   }
@@ -4547,11 +4547,11 @@ static int flowmq_socket_listener_progress(flowmq_socket_t *socket) {
     ++socket->batch_probe.listener_checks;
 #endif
 #if defined(FLOWMQ_BATCH_PHASE_TIMING)
-    const uint64_t started = cmeta_hrtime();
+    const uint64_t started = hrtime();
 #endif
     status = cnet_listener_wait(&socket->listener, 0u, &ready);
 #if defined(FLOWMQ_BATCH_PHASE_TIMING)
-    socket->batch_probe.listener_wait_ns += cmeta_hrtime() - started;
+    socket->batch_probe.listener_wait_ns += hrtime() - started;
 #endif
 #if defined(FLOWMQ_BATCH_PROBE)
     socket->batch_probe.listener_ready += ready != 0;
@@ -4697,11 +4697,11 @@ static int flowmq_socket_progress_local(flowmq_socket_t *socket) {
 #endif
   if (status != SALTS_OK) return status;
 #if defined(FLOWMQ_BATCH_PHASE_TIMING)
-  const uint64_t reconnect_started = cmeta_hrtime();
+  const uint64_t reconnect_started = hrtime();
 #endif
   status = flowmq_socket_reconnect_progress(socket);
 #if defined(FLOWMQ_BATCH_PHASE_TIMING)
-  socket->batch_probe.reconnect_ns += cmeta_hrtime() - reconnect_started;
+  socket->batch_probe.reconnect_ns += hrtime() - reconnect_started;
 #endif
   if (status != SALTS_OK) return status;
   for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
@@ -4795,27 +4795,27 @@ static int flowmq_socket_drive(flowmq_socket_t *socket, uint32_t timeout_ms,
   ++socket->batch_probe.drive_calls;
 #endif
 #if defined(FLOWMQ_BATCH_PHASE_TIMING)
-  probe_started = cmeta_hrtime();
+  probe_started = hrtime();
 #endif
   status = flowmq_socket_listener_progress(socket);
 #if defined(FLOWMQ_BATCH_PHASE_TIMING)
-  socket->batch_probe.listener_ns += cmeta_hrtime() - probe_started;
+  socket->batch_probe.listener_ns += hrtime() - probe_started;
 #endif
   if (status != SALTS_OK) return status;
 #if defined(FLOWMQ_BATCH_PHASE_TIMING)
-  probe_started = cmeta_hrtime();
+  probe_started = hrtime();
 #endif
   status = cnet_client_poll(&socket->client, timeout_ms, &client_events);
 #if defined(FLOWMQ_BATCH_PHASE_TIMING)
-  socket->batch_probe.client_poll_ns += cmeta_hrtime() - probe_started;
+  socket->batch_probe.client_poll_ns += hrtime() - probe_started;
 #endif
   if (status != SALTS_OK) return status;
 #if defined(FLOWMQ_BATCH_PHASE_TIMING)
-  probe_started = cmeta_hrtime();
+  probe_started = hrtime();
 #endif
   status = flowmq_socket_progress_local(socket);
 #if defined(FLOWMQ_BATCH_PHASE_TIMING)
-  socket->batch_probe.local_progress_ns += cmeta_hrtime() - probe_started;
+  socket->batch_probe.local_progress_ns += hrtime() - probe_started;
 #endif
   if (status != SALTS_OK) return status;
   if (events != NULL) *events = client_events;
@@ -4968,8 +4968,8 @@ static int flowmq_socket_subscription_sync_pending(
 static uint32_t flowmq_socket_local_external_timeout(
     const flowmq_socket_t *socket, uint32_t max_wait_ms) {
   uint32_t wait_ms = max_wait_ms;
-  const uint64_t now_ms = cmeta_monotonic_ms();
-  const uint64_t now_ns = cmeta_hrtime();
+  const uint64_t now_ms = monotonic_ms();
+  const uint64_t now_ns = hrtime();
   if (socket->async_error != SALTS_OK ||
       socket->send_cancel_error != SALTS_OK ||
       socket->recv_cancel_error != SALTS_OK)
@@ -5362,7 +5362,7 @@ int flowmq_socket_internal_fanout_match_count(
 
 int flowmq_poll(flowmq_pollitem_t *items, size_t item_count,
                 uint32_t timeout_ms, size_t *ready) {
-  const uint64_t started_ms = cmeta_monotonic_ms();
+  const uint64_t started_ms = monotonic_ms();
   size_t active_passes = 0u;
   uint32_t backend_wait_ms = 0u;
   if (ready != NULL) *ready = 0u;
@@ -5394,7 +5394,7 @@ int flowmq_poll(flowmq_pollitem_t *items, size_t item_count,
     backend_wait_ms = 0u;
     if (*ready != 0u || timeout_ms == 0u) return SALTS_OK;
     {
-      const uint64_t elapsed_ms = cmeta_monotonic_ms() - started_ms;
+      const uint64_t elapsed_ms = monotonic_ms() - started_ms;
       const uint64_t remaining_ms =
           elapsed_ms >= timeout_ms ? 0u : (uint64_t)timeout_ms - elapsed_ms;
       if (remaining_ms == 0u) return SALTS_OK;
@@ -5412,7 +5412,7 @@ int flowmq_poll(flowmq_pollitem_t *items, size_t item_count,
         backend_wait_ms = remaining_ms > 1u ? 1u : (uint32_t)remaining_ms;
         continue;
       }
-      cmeta_sleep_ms(remaining_ms > 1u ? 1u : (uint32_t)remaining_ms);
+      sleep_ms(remaining_ms > 1u ? 1u : (uint32_t)remaining_ms);
     }
   }
 }

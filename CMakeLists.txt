@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.25)
 
 if(POLICY CMP0144)
   cmake_policy(SET CMP0144 NEW)
@@ -10,6 +10,10 @@ project(
   DESCRIPTION "Pattern-oriented messaging library for C"
   HOMEPAGE_URL "https://github.com/qigao/flowmq"
   LANGUAGES C)
+
+if(ANDROID)
+  add_link_options("LINKER:-z,max-page-size=16384" "LINKER:-z,common-page-size=16384")
+endif()
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -35,71 +39,30 @@ include(Sanitizers)
 include(CmakeUtils)
 
 
-foreach(_flowmq_dependency_root IN ITEMS SALTS_ROOT SALTS_UTILS_ROOT)
-  if(NOT DEFINED ENV{${_flowmq_dependency_root}} OR
-     "$ENV{${_flowmq_dependency_root}}" STREQUAL "")
-    message(FATAL_ERROR
-            "${_flowmq_dependency_root} must name an installed dependency profile")
-  endif()
-  file(TO_CMAKE_PATH "$ENV{${_flowmq_dependency_root}}"
-       FLOWMQ_${_flowmq_dependency_root}_PATH)
-  if(NOT IS_DIRECTORY "${FLOWMQ_${_flowmq_dependency_root}_PATH}")
-    message(FATAL_ERROR
-            "${_flowmq_dependency_root} is not a directory: $ENV{${_flowmq_dependency_root}}")
-  endif()
-endforeach()
+include(FlowMQDependencies)
 
-if(CMAKE_CROSSCOMPILING)
-  foreach(_flowmq_host_root IN ITEMS SALTS_HOST_ROOT SALTS_UTILS_HOST_ROOT)
-    if(NOT DEFINED ENV{${_flowmq_host_root}} OR
-       "$ENV{${_flowmq_host_root}}" STREQUAL "")
-      message(FATAL_ERROR
-              "${_flowmq_host_root} must name a host SDK profile for cross builds")
+# A same-architecture Windows llvm-mingw toolchain also sets CMAKE_CROSSCOMPILING.
+if(CMAKE_CROSSCOMPILING AND
+   (NOT CMAKE_HOST_SYSTEM_NAME STREQUAL CMAKE_SYSTEM_NAME OR
+    NOT CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL CMAKE_SYSTEM_PROCESSOR))
+  foreach(sdk IN ITEMS SALTS_BASE CMETA SALTS_UTILS)
+    file(TO_CMAKE_PATH "$ENV{${sdk}_HOST_ROOT}" ${sdk}_HOST_ROOT)
+    if(NOT IS_DIRECTORY "${${sdk}_HOST_ROOT}")
+      message(FATAL_ERROR "${sdk}_HOST_ROOT must name an installed host SDK")
     endif()
+  endforeach()
+else()
+  foreach(sdk IN ITEMS SALTS_BASE CMETA SALTS_UTILS)
+    file(TO_CMAKE_PATH "$ENV{${sdk}_ROOT}" ${sdk}_HOST_ROOT)
   endforeach()
 endif()
 
-foreach(_flowmq_host_root IN ITEMS SALTS_HOST_ROOT SALTS_UTILS_HOST_ROOT)
-  if(DEFINED ENV{${_flowmq_host_root}} AND
-     NOT "$ENV{${_flowmq_host_root}}" STREQUAL "")
-    file(TO_CMAKE_PATH "$ENV{${_flowmq_host_root}}"
-         FLOWMQ_${_flowmq_host_root}_PATH)
-  elseif(_flowmq_host_root STREQUAL "SALTS_HOST_ROOT")
-    set(FLOWMQ_SALTS_HOST_ROOT_PATH "${FLOWMQ_SALTS_ROOT_PATH}")
-  else()
-    set(FLOWMQ_SALTS_UTILS_HOST_ROOT_PATH "${FLOWMQ_SALTS_UTILS_ROOT_PATH}")
-  endif()
-  if(NOT IS_DIRECTORY "${FLOWMQ_${_flowmq_host_root}_PATH}")
-    message(FATAL_ERROR
-            "${_flowmq_host_root} is not a directory: ${FLOWMQ_${_flowmq_host_root}_PATH}")
-  endif()
-endforeach()
-
-# Resolve the configured SDK anew after restore.
-unset(Salts_DIR CACHE)
-unset(Salts_DIR)
-unset(SaltsUtils_DIR CACHE)
-unset(SaltsUtils_DIR)
-find_package(
-  Salts CONFIG REQUIRED
-  PATHS "${FLOWMQ_SALTS_ROOT_PATH}"
-  NO_DEFAULT_PATH
-  NO_CMAKE_FIND_ROOT_PATH)
-find_package(
-  SaltsUtils CONFIG REQUIRED
-  PATHS "${FLOWMQ_SALTS_UTILS_ROOT_PATH}"
-  NO_DEFAULT_PATH
-  NO_CMAKE_FIND_ROOT_PATH)
-unset(FLOWMQ_SALTS_IDLC_EXECUTABLE)
-unset(FLOWMQ_SALTS_IDLC_EXECUTABLE CACHE)
-find_program(FLOWMQ_SALTS_IDLC_EXECUTABLE NAMES salts-idlc
-             PATHS "${FLOWMQ_SALTS_UTILS_HOST_ROOT_PATH}/bin"
-             NO_DEFAULT_PATH
-             NO_CMAKE_FIND_ROOT_PATH)
-if(NOT FLOWMQ_SALTS_IDLC_EXECUTABLE)
-  message(FATAL_ERROR
-    "FlowMQ media-provider contract requires the host SaltsUtils salts-idlc")
-endif()
+find_program(FLOWMQ_IDLC_EXECUTABLE NAMES salts-idlc
+             PATHS "${SALTS_UTILS_HOST_ROOT}/bin"
+             NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH NO_CACHE REQUIRED)
+set(SaltsUtils_IDLC_EXECUTABLE "${FLOWMQ_IDLC_EXECUTABLE}")
+set(SaltsUtils_IDLC_HOST_SALTS_BASE_ROOT "${SALTS_BASE_HOST_ROOT}")
+set(SaltsUtils_IDLC_HOST_CMETA_ROOT "${CMETA_HOST_ROOT}")
 
 set(FLOWMQ_TEST_ENVIRONMENT_MODIFICATIONS
     "PATH=path_list_prepend:$<TARGET_FILE_DIR:Salts::CNet>"
@@ -136,6 +99,7 @@ cmake_config_target(
   FOLDER "flowmq"
   EXPORT_NAME FlowMQ)
 if(WIN32)
+  set_target_properties(flowmq PROPERTIES PREFIX "")
   target_compile_definitions(
     flowmq
     PRIVATE "FLOWMQ_API=__declspec(dllexport)"
@@ -153,13 +117,13 @@ target_include_directories(
           ${CMAKE_CURRENT_SOURCE_DIR}/flowmq/src/transport/cnet)
 target_link_libraries(flowmq
                       PUBLIC Salts::Core Salts::DataBind
-                      PRIVATE Salts::CSTL Salts::CMeta Salts::CNet Salts::NativeIO)
+                      PRIVATE CMeta::CSTL CMeta::CMeta Salts::CNet Salts::NativeIO)
 if(BUILD_TESTS)
   get_target_property(_flowmq_runtime_links flowmq LINK_LIBRARIES)
   foreach(_flowmq_frontend_target IN ITEMS
           Salts::IDL
           Salts::Schema
-          Salts::CFlow)
+          CMeta::CFlow)
     if("${_flowmq_frontend_target}" IN_LIST _flowmq_runtime_links)
       message(FATAL_ERROR
               "FlowMQ runtime must not link control-plane target "
@@ -167,9 +131,7 @@ if(BUILD_TESTS)
     endif()
   endforeach()
 endif()
-if(TARGET flowmq_media_provider_codegen)
-  add_dependencies(flowmq flowmq_media_provider_codegen)
-endif()
+add_dependencies(flowmq flowmq_media_provider_codegen)
 
 install(
   TARGETS flowmq
