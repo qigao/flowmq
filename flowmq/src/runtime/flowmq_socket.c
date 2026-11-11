@@ -3142,7 +3142,6 @@ static int flowmq_socket_bind_common(flowmq_socket_t *socket,
   status = flowmq_socket_runtime_init(socket, parts.transport);
   if (status != SALTS_OK) return status;
   if (parts.transport == FLOWMQ_TRANSPORT_IPC) {
-    size_t events;
     const cnet_ipc_listener_config ipc_config = {
         .size = sizeof(ipc_config), .version = CNET_IPC_VERSION,
         .backend = flowmq_cnet_backend(), .uri = endpoint,
@@ -3152,7 +3151,13 @@ static int flowmq_socket_bind_common(flowmq_socket_t *socket,
     status = cnet_ipc_listener_init(&socket->ipc_listener, &ipc_config);
     if (status != SALTS_OK) return status;
     socket->listener_initialized = 1u;
-    status = cnet_ipc_listener_advance(&socket->ipc_listener, 1u, &events);
+    if (external) {
+      status = cnet_ipc_listener_attach_external(&socket->ipc_listener,
+                                                  socket->external_backend);
+    } else {
+      size_t events;
+      status = cnet_ipc_listener_advance(&socket->ipc_listener, 1u, &events);
+    }
     if (status != SALTS_OK) {
       const int close_status = flowmq_cnet_ipc_listener_close(
           &socket->ipc_listener, FLOWMQ_SOCKET_SHUTDOWN_TIMEOUT_MS);
@@ -4665,9 +4670,13 @@ static int flowmq_socket_accept_prepare(flowmq_socket_t *socket) {
       .observer = flowmq_socket_observer(peer), .hold_context = true};
   if (status == SALTS_OK)
     status = cnet_manager_reserve(&socket->manager, &attachment, &peer->managed);
-  if (status == SALTS_OK)
-    status = cnet_listener_submit_external_accept(&socket->listener,
-                                                  &socket->accept_request);
+  if (status == SALTS_OK) {
+    status = socket->transport == FLOWMQ_TRANSPORT_IPC
+        ? cnet_ipc_listener_submit_external_accept(&socket->ipc_listener,
+                                                    &socket->accept_request)
+        : cnet_listener_submit_external_accept(&socket->listener,
+                                               &socket->accept_request);
+  }
   if (status == SALTS_OK) return SALTS_OK;
   rollback_status = flowmq_socket_accept_rollback(socket);
   if (rollback_status != SALTS_OK) return rollback_status;
@@ -4677,46 +4686,66 @@ static int flowmq_socket_accept_prepare(flowmq_socket_t *socket) {
 }
 
 static int flowmq_socket_accept_consume(flowmq_socket_t *socket) {
-  cnet_accepted_stream accepted = CNET_ACCEPTED_STREAM_INIT;
   flowmq_socket_peer_t *peer = socket->accept_peer;
   int status;
-  int rollback_status;
   if (!socket->accept_ready) return SALTS_OK;
   if (peer == NULL) return SALTS_EPROTO;
   socket->accept_ready = 0u;
-  status = cnet_listener_accept_detached(&socket->listener, &accepted);
-  if (status != SALTS_OK) {
-    rollback_status = flowmq_socket_accept_rollback(socket);
-    if (rollback_status != SALTS_OK) return rollback_status;
-    return status == SALTS_ETIMEDOUT ? SALTS_OK : status;
+  if (socket->transport == FLOWMQ_TRANSPORT_IPC) {
+    cnet_ipc_accepted accepted = {0};
+    status = cnet_ipc_listener_accept_detached(&socket->ipc_listener, &accepted);
+    if (status == SALTS_ENOENT) return flowmq_socket_accept_rollback(socket);
+    if (status == SALTS_OK)
+      status = cnet_manager_adopt_ipc(&socket->manager, peer->managed, &accepted,
+                                      &peer->connection);
+    if (accepted.kind != CNET_IPC_RESOURCE_NONE) {
+      const int close_status = cnet_ipc_accepted_close(&accepted);
+      if (close_status != SALTS_OK) status = close_status;
+    }
+  } else {
+    cnet_accepted_stream accepted = CNET_ACCEPTED_STREAM_INIT;
+    status = cnet_listener_accept_detached(&socket->listener, &accepted);
+    if (status == SALTS_ETIMEDOUT) return flowmq_socket_accept_rollback(socket);
+    if (status == SALTS_OK) {
+      /* RESERVED adoption consumes the descriptor and retains the peer's
+       * observer context until its terminal event. */
+      status = cnet_manager_adopt(&socket->manager, peer->managed, &accepted, NULL,
+                                  &peer->connection);
+      if (status != SALTS_OK) {
+        const int close_status = cnet_accepted_stream_close(&accepted);
+        if (close_status != SALTS_OK && close_status != SALTS_EALREADY)
+          status = close_status;
+      }
+    }
   }
-  /* A valid RESERVED adoption consumes the descriptor even on rejection and
-   * retires the manager record. Its observer borrows this peer until terminal. */
-  status = cnet_manager_adopt(&socket->manager, peer->managed, &accepted, NULL,
-                              &peer->connection);
   if (status != SALTS_OK) {
-    const int close_status = cnet_accepted_stream_close(&accepted);
-    if (close_status != SALTS_OK && close_status != SALTS_EALREADY)
-      return close_status;
-    rollback_status = flowmq_socket_accept_rollback(socket);
-    if (rollback_status != SALTS_OK) return rollback_status;
-    return status;
+    const int rollback_status = flowmq_socket_accept_rollback(socket);
+    return rollback_status == SALTS_OK ? status : rollback_status;
   }
   socket->accept_peer = NULL;
   return SALTS_OK;
 }
 
 static int flowmq_socket_accept_stop(flowmq_socket_t *socket) {
+  int stop_status = SALTS_OK;
   int status;
   if (!socket->listener_initialized) return SALTS_OK;
-  status = cnet_listener_close(&socket->listener);
-  if (status != SALTS_OK && status != SALTS_EALREADY) return status;
-  status = cnet_listener_destroy(&socket->listener);
+  if (socket->transport == FLOWMQ_TRANSPORT_IPC) {
+    bool stopped;
+    stop_status = cnet_ipc_listener_stop(&socket->ipc_listener, &stopped);
+    if (!stopped) return stop_status;
+    status = cnet_ipc_listener_destroy(&socket->ipc_listener);
+  } else {
+    status = cnet_listener_close(&socket->listener);
+    if (status != SALTS_OK && status != SALTS_EALREADY) return status;
+    status = cnet_listener_destroy(&socket->listener);
+  }
   if (status != SALTS_OK) return status;
   socket->listener_initialized = 0u;
   socket->accept_ready = 0u;
   socket->accept_request = (native_io_request){0};
-  return flowmq_socket_accept_rollback(socket);
+  status = flowmq_socket_accept_rollback(socket);
+  return status == SALTS_OK ? stop_status : status;
 }
 
 static int flowmq_socket_progress_local(flowmq_socket_t *socket) {
@@ -5113,8 +5142,11 @@ int flowmq_socket_internal_route_external_completion(
   if (native_io_request_valid(socket->accept_request) &&
       completion->request.slot == socket->accept_request.slot &&
       completion->request.generation == socket->accept_request.generation) {
-    const int status = cnet_listener_route_external_completion(
-        &socket->listener, completion, consumed);
+    const int status = socket->transport == FLOWMQ_TRANSPORT_IPC
+        ? cnet_ipc_listener_route_external_completion(&socket->ipc_listener,
+                                                      completion, consumed)
+        : cnet_listener_route_external_completion(&socket->listener,
+                                                   completion, consumed);
     if (*consumed) {
       socket->accept_request = (native_io_request){0};
       socket->accept_ready = 1u;
