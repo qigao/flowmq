@@ -5,7 +5,12 @@
 
 #include <core/clock.h>
 #include <core/error_codes.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
 
 enum { LISTENER_OWNED = 2, LISTENER_CLIENTS = 5, LISTENER_DEADLINE_MS = 3000 };
 
@@ -14,6 +19,7 @@ typedef struct listener_fixture_s {
   flowmq_owner_t *owner;
   flowmq_socket_t *owned[LISTENER_OWNED];
   flowmq_socket_t *clients[LISTENER_CLIENTS];
+  char *ipc_directory;
 } listener_fixture;
 
 static void listener_configure(flowmq_socket_t *socket) {
@@ -117,6 +123,10 @@ spec("FlowMQ internal shared listener integration") {
     for (size_t i = 0u; i < LISTENER_OWNED; ++i)
       if (f.owned[i] != NULL)
         check_equal(flowmq_owner_close_socket(f.owner, f.owned[i]), SALTS_OK);
+    if (f.ipc_directory != NULL) {
+      check_equal(tt_remove_tree(f.ipc_directory), 0);
+      free(f.ipc_directory);
+    }
     if (f.owner != NULL) check_equal(flowmq_owner_term(f.owner), SALTS_OK);
     if (f.ctx != NULL) check_equal(flowmq_ctx_term(f.ctx), SALTS_OK);
   }
@@ -130,6 +140,10 @@ spec("FlowMQ internal shared listener integration") {
                 SALTS_EINVAL);
     check_equal(flowmq_socket_internal_bind_external(f.owned[0], "tls://127.0.0.1:0"),
                 SALTS_ENOTSUP);
+#if defined(_WIN32)
+    check_equal(flowmq_socket_internal_bind_external(f.owned[0], "ipc://shared-owner"),
+                SALTS_ENOTSUP);
+#endif
     check_equal(flowmq_socket_internal_owner_backend_config(SIZE_MAX, &config), SALTS_ERANGE);
     check_equal(flowmq_socket_internal_owner_backend_config(0u, &config), SALTS_EINVAL);
     listener_bind(f.owned[0]);
@@ -187,6 +201,51 @@ spec("FlowMQ internal shared listener integration") {
     listener_exchange(&f, f.owned[1], f.owned[0], 33u);
     listener_exchange(&f, f.owned[0], f.owned[1], 44u);
   }
+
+#if !defined(_WIN32)
+  it("shares a wait between TCP and IPC listeners through IPC close and rebind") {
+    char endpoint[256];
+    const char *path = endpoint + sizeof("ipc://") - 1u;
+    f.ipc_directory = tt_make_temp_dir("fmqipc");
+    check_not_null(f.ipc_directory);
+    const int written = snprintf(endpoint, sizeof(endpoint), "ipc://%s/socket",
+                                 f.ipc_directory);
+    check(written > 0 && (size_t)written < sizeof(endpoint));
+    listener_owned(&f, 1u, FLOWMQ_PAIR);
+    listener_client(&f, 1u, FLOWMQ_PAIR);
+    listener_bind(f.owned[1]);
+    listener_connect_to(f.clients[1], f.owned[1]);
+    listener_exchange(&f, f.clients[1], f.owned[1], 10u);
+
+    for (unsigned char round = 0u; round < 4u; ++round) {
+      f.owned[0] = flowmq_owner_socket(f.owner, FLOWMQ_PAIR);
+      check_not_null(f.owned[0]);
+      check_equal(flowmq_bind(f.owned[0], endpoint), SALTS_ENOTSUP);
+      check_equal(flowmq_socket_internal_bind_external(f.owned[0], endpoint), SALTS_OK);
+      flowmq_pollitem_t idle = {.socket = f.owned[0], .events = FLOWMQ_POLLIN};
+      size_t ready = 1u;
+      check_equal(flowmq_owner_poll(f.owner, &idle, 1u, 5u, &ready), SALTS_OK);
+      check_equal(ready, 0u);
+
+      if (round != 0u) {
+        f.clients[0] = flowmq_socket(f.ctx, FLOWMQ_PAIR);
+        check_not_null(f.clients[0]);
+        listener_connect_to(f.clients[0], f.owned[0]);
+        listener_exchange(&f, f.clients[0], f.owned[0], round);
+        listener_exchange(&f, f.owned[0], f.clients[0], (unsigned char)(round + 20u));
+      }
+      listener_exchange(&f, f.owned[1], f.clients[1], (unsigned char)(round + 40u));
+      check_equal(flowmq_owner_close_socket(f.owner, f.owned[0]), SALTS_OK);
+      f.owned[0] = NULL;
+      check_equal(unlink(path), 0);
+      if (f.clients[0] != NULL) {
+        check_equal(flowmq_close(f.clients[0]), SALTS_OK);
+        f.clients[0] = NULL;
+      }
+      listener_exchange(&f, f.clients[1], f.owned[1], (unsigned char)(round + 60u));
+    }
+  }
+#endif
 
   it("leaves a fifth peer in backlog and admits it after a live peer retires") {
     listener_owned(&f, 0u, FLOWMQ_PULL);

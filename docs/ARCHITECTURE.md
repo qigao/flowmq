@@ -180,7 +180,7 @@ FlowMQ socket 的 peer/pool、FSM、credit、重连与 owner shutdown 联动验�
 ### FlowMQ 内部 shared-listener 集成（2026-10-10）
 
 `flowmq_socket_internal_bind_external()` 位于不安装的私有 header，只供集成测试和
-benchmark 使用；要求 owner-created socket，只接纳 TCP。公开 `flowmq_bind()` 仍按原契约
+benchmark 使用；要求 owner-created socket，接纳 TCP 和 POSIX IPC。公开 `flowmq_bind()` 仍按原契约
 返回 ENOTSUP。实现复用普通 bind 的初始化、endpoint 和 listener options，不引入第二套
 session 或后台线程；不把 qualification 入口安装为不完整的公开 API。
 
@@ -189,6 +189,10 @@ accept prepare 在 CNet advance 后、共享 observe 前执行；终态路由后
 中 adopt，随后普通协议 callback、pool READY、credit、decoder、FIFO 和 retained 路径保持
 原有归属。无 peer/pool 容量时不申请 child；submit 的 EBUSY/ENOBUFS 释放预留后等待下一轮。
 回滚先 cancel manager record，再释放 context hold 和 pool/peer，不能用 release 代替 terminal。
+
+POSIX IPC listener 借用同一 NativeIO backend，由 CNet 提交 Unix-domain accept。FlowMQ 用
+`cnet_manager_adopt_ipc()` 接管已完成的 child。监听关闭完成后由应用清理 socket 路径，随后可
+在同一 Owner 上创建新 socket 并重绑。Windows 命名管道共享监听由 SaltsBase #11 跟踪。
 
 关闭把 `external_client_stopped` 与整个 socket 的 `external_stopped` 分开。
 client 已停止但 listener cancel 尚未消费时，socket 继续留在 owner registry，只路由剩余
