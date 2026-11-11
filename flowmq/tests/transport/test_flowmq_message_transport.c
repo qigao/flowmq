@@ -305,6 +305,8 @@ static void route_dealers(pattern_fixture *fixture, const char *uri) {
 static void check_subscription(pattern_fixture *fixture, const char *uri) {
   static const unsigned char subscribed[] = {1u, 'f', 'm', 'q', '.'};
   const int retry_ms = 5;
+  const int heartbeat_ms = 25;
+  const int timeout_ms = 500;
   flowmq_socket_t *xpub = pattern_socket(fixture, FLOWMQ_XPUB, true);
   flowmq_socket_t *sub = pattern_socket(fixture, FLOWMQ_SUB, false);
   char endpoint[320u];
@@ -312,6 +314,12 @@ static void check_subscription(pattern_fixture *fixture, const char *uri) {
   check_equal(flowmq_setsockopt(sub, FLOWMQ_SUBSCRIBE, "fmq.", 4u), SALTS_OK);
   check_equal(flowmq_setsockopt(sub, FLOWMQ_RECONNECT_IVL, &retry_ms, sizeof(retry_ms)),
               SALTS_OK);
+  if (fixture->kcp) {
+    check_equal(flowmq_setsockopt(sub, FLOWMQ_HEARTBEAT_IVL, &heartbeat_ms,
+                                 sizeof(heartbeat_ms)), SALTS_OK);
+    check_equal(flowmq_setsockopt(sub, FLOWMQ_HEARTBEAT_TIMEOUT, &timeout_ms,
+                                 sizeof(timeout_ms)), SALTS_OK);
+  }
   pattern_bind(fixture, xpub, uri);
   check_equal(flowmq_last_endpoint(xpub, endpoint, sizeof(endpoint), &endpoint_size), SALTS_OK);
   check_equal(flowmq_connect(sub, endpoint), SALTS_OK);
@@ -320,15 +328,22 @@ static void check_subscription(pattern_fixture *fixture, const char *uri) {
   check_equal(flowmq_send(xpub, "fmq.before", 10u, FLOWMQ_DONTWAIT), SALTS_OK);
   receive_part(fixture->owner, sub, xpub, "fmq.before", 10u, 0);
 
-  if (!fixture->kcp) {
-    pattern_close(fixture, xpub);
-    xpub = pattern_socket(fixture, FLOWMQ_XPUB, true);
-    pattern_bind(fixture, xpub, endpoint);
-    receive_part(fixture->owner, xpub, sub, subscribed, sizeof(subscribed), 0);
-    check_equal(flowmq_send(xpub, "other", 5u, FLOWMQ_DONTWAIT), SALTS_OK);
-    check_equal(flowmq_send(xpub, "fmq.after", 9u, FLOWMQ_DONTWAIT), SALTS_OK);
-    receive_part(fixture->owner, sub, xpub, "fmq.after", 9u, 0);
+  pattern_close(fixture, xpub);
+  if (fixture->kcp && fixture->owner != NULL) {
+    /* Drive the subscriber through a closed UDP port before rebinding. */
+    flowmq_pollitem_t item = {.socket = sub};
+    const uint64_t offline_until = monotonic_ms() + 150u;
+    do {
+      size_t ready;
+      check_equal(flowmq_owner_poll(fixture->owner, &item, 1u, 5u, &ready), SALTS_OK);
+    } while (monotonic_ms() < offline_until);
   }
+  xpub = pattern_socket(fixture, FLOWMQ_XPUB, true);
+  pattern_bind(fixture, xpub, endpoint);
+  receive_part(fixture->owner, xpub, sub, subscribed, sizeof(subscribed), 0);
+  check_equal(flowmq_send(xpub, "other", 5u, FLOWMQ_DONTWAIT), SALTS_OK);
+  check_equal(flowmq_send(xpub, "fmq.after", 9u, FLOWMQ_DONTWAIT), SALTS_OK);
+  receive_part(fixture->owner, sub, xpub, "fmq.after", 9u, 0);
 
   pattern_close(fixture, sub);
   pattern_close(fixture, xpub);
