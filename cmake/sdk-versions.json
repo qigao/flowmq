@@ -1,7 +1,7 @@
 {
-  "salts-base": "0.1.4",
-  "cmeta": "0.1.4",
-  "salts-cnet": "0.1.6",
-  "salts-utils": "0.1.1",
+  "salts-base": "0.1.5",
+  "cmeta": "0.1.5",
+  "salts-cnet": "0.1.7",
+  "salts-utils": "0.1.2",
   "vcpkg-cache": "0.1.3"
 }

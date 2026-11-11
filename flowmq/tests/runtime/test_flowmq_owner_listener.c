@@ -140,10 +140,6 @@ spec("FlowMQ internal shared listener integration") {
                 SALTS_EINVAL);
     check_equal(flowmq_socket_internal_bind_external(f.owned[0], "tls://127.0.0.1:0"),
                 SALTS_ENOTSUP);
-#if defined(_WIN32)
-    check_equal(flowmq_socket_internal_bind_external(f.owned[0], "ipc://shared-owner"),
-                SALTS_ENOTSUP);
-#endif
     check_equal(flowmq_socket_internal_owner_backend_config(SIZE_MAX, &config), SALTS_ERANGE);
     check_equal(flowmq_socket_internal_owner_backend_config(0u, &config), SALTS_EINVAL);
     listener_bind(f.owned[0]);
@@ -202,14 +198,19 @@ spec("FlowMQ internal shared listener integration") {
     listener_exchange(&f, f.owned[0], f.owned[1], 44u);
   }
 
-#if !defined(_WIN32)
   it("shares a wait between TCP and IPC listeners through IPC close and rebind") {
     char endpoint[256];
-    const char *path = endpoint + sizeof("ipc://") - 1u;
     f.ipc_directory = tt_make_temp_dir("fmqipc");
     check_not_null(f.ipc_directory);
+    const char *name = f.ipc_directory;
+#if defined(_WIN32)
+    for (const char *cursor = f.ipc_directory; *cursor != '\0'; ++cursor)
+      if (*cursor == '/' || *cursor == '\\') name = cursor + 1;
+    const int written = snprintf(endpoint, sizeof(endpoint), "ipc://%s", name);
+#else
     const int written = snprintf(endpoint, sizeof(endpoint), "ipc://%s/socket",
-                                 f.ipc_directory);
+                                 name);
+#endif
     check(written > 0 && (size_t)written < sizeof(endpoint));
     listener_owned(&f, 1u, FLOWMQ_PAIR);
     listener_client(&f, 1u, FLOWMQ_PAIR);
@@ -237,7 +238,9 @@ spec("FlowMQ internal shared listener integration") {
       listener_exchange(&f, f.owned[1], f.clients[1], (unsigned char)(round + 40u));
       check_equal(flowmq_owner_close_socket(f.owner, f.owned[0]), SALTS_OK);
       f.owned[0] = NULL;
-      check_equal(unlink(path), 0);
+#if !defined(_WIN32)
+      check_equal(unlink(endpoint + sizeof("ipc://") - 1u), 0);
+#endif
       if (f.clients[0] != NULL) {
         check_equal(flowmq_close(f.clients[0]), SALTS_OK);
         f.clients[0] = NULL;
@@ -245,7 +248,6 @@ spec("FlowMQ internal shared listener integration") {
       listener_exchange(&f, f.clients[1], f.owned[1], (unsigned char)(round + 60u));
     }
   }
-#endif
 
   it("leaves a fifth peer in backlog and admits it after a live peer retires") {
     listener_owned(&f, 0u, FLOWMQ_PULL);
