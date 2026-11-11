@@ -110,10 +110,10 @@ static int flowmq_owner_progress_impl(
       continue;
     ++active_count;
     status = flowmq_socket_internal_advance_external(socket, &events);
-    if (status != SALTS_OK) return status;
+    if (status != SALTS_OK && first_error == SALTS_OK) first_error = status;
     status = flowmq_socket_internal_external_timeout(
         socket, max_wait_ms, &socket_wait);
-    if (status != SALTS_OK) return status;
+    if (status != SALTS_OK && first_error == SALTS_OK) first_error = status;
     if (socket_wait < wait_ms) wait_ms = socket_wait;
   }
 
@@ -122,19 +122,22 @@ static int flowmq_owner_progress_impl(
     return SALTS_OK;
   }
 
+  /* Even when local advance fails, route ready completions for the lane. */
   status = native_io_backend_observe(
       &owner->backend, owner->completions, owner->completion_capacity,
-      wait_ms, &completion_count);
-  if (status != SALTS_OK && status != SALTS_ETIMEDOUT) return status;
+      first_error == SALTS_OK ? wait_ms : 0u, &completion_count);
+  if (status != SALTS_OK && status != SALTS_ETIMEDOUT)
+    return first_error == SALTS_OK ? status : first_error;
 
   if (status == SALTS_OK) {
-    first_error = dispatch != NULL
+    status = dispatch != NULL
         ? dispatch(user, owner->completions, completion_count,
                    owner->socket_capacity, flowmq_owner_route_completion_slot,
                    owner)
         : flowmq_owner_batch_route(
               owner->completions, completion_count, owner->socket_capacity,
               flowmq_owner_route_completion_slot, owner);
+    if (first_error == SALTS_OK) first_error = status;
   }
 
   /*

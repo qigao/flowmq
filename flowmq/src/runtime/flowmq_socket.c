@@ -70,6 +70,7 @@ enum {
   FLOWMQ_SOCKET_SHUTDOWN_TIMEOUT_MS = 1000u,
   FLOWMQ_SOCKET_DEFAULT_TIMEOUT_MS = 1000u,
   FLOWMQ_SOCKET_PACKET_HANDSHAKE_TIMEOUT_MS = 5000u,
+  FLOWMQ_SOCKET_PACKET_REQUEST_CAPACITY = 256u,
   FLOWMQ_SOCKET_WS_RECEIVE_BYTES = 17u * 1024u,
   FLOWMQ_SOCKET_WS_FRAGMENT_BYTES = 16u * 1024u,
   FLOWMQ_SOCKET_CNET_COMMAND_CAPACITY = 16u,
@@ -2926,8 +2927,7 @@ static int flowmq_socket_packet_init(flowmq_socket_t *socket,
                                     const flowmq_cnet_endpoint_t *parts,
                                     bool bind) {
   cnet_datagram_peer remote;
-  if (socket->external_backend != NULL || socket->peer_pool_config.max_peers != 0u)
-    return SALTS_ENOTSUP;
+  if (socket->peer_pool_config.max_peers != 0u) return SALTS_ENOTSUP;
   if (socket->runtime_initialized) {
     if (socket->transport != FLOWMQ_TRANSPORT_KCP || bind) return SALTS_ENOTSUP;
     return SALTS_OK;
@@ -2946,7 +2946,7 @@ static int flowmq_socket_packet_init(flowmq_socket_t *socket,
       : remote.family == CNET_DATAGRAM_ADDRESS_IPV6 ? "::" : "0.0.0.0";
   config.datagram.port = bind ? parts->port : 0u;
   config.datagram.send_capacity = 128u;
-  config.datagram.request_capacity = 256u;
+  config.datagram.request_capacity = FLOWMQ_SOCKET_PACKET_REQUEST_CAPACITY;
   config.datagram.completion_batch_capacity = 32u;
   config.datagram.max_datagram_bytes = CNET_KCP_DEFAULT_MTU;
   config.datagram.receive_buffer_bytes = CNET_KCP_DEFAULT_MTU;
@@ -2959,7 +2959,10 @@ static int flowmq_socket_packet_init(flowmq_socket_t *socket,
   terminal.send_capacity = FLOWMQ_SOCKET_PEER_CAPACITY;
   terminal.on_send = flowmq_socket_packet_send;
   terminal.user = socket;
-  const int status = cnet_packet_endpoint_init_ex(&socket->packet, &config, &terminal);
+  const int status = socket->external_backend != NULL
+      ? cnet_packet_endpoint_init_external(&socket->packet, &config, &terminal,
+                                           socket->external_backend)
+      : cnet_packet_endpoint_init_ex(&socket->packet, &config, &terminal);
   if (status != SALTS_OK) return status;
   socket->packet_family = strchr(config.datagram.host, ':') == NULL
       ? CNET_DATAGRAM_ADDRESS_IPV4 : CNET_DATAGRAM_ADDRESS_IPV6;
@@ -3495,8 +3498,12 @@ int flowmq_close(flowmq_socket_t *socket) {
     if (status != SALTS_OK) return status;
   }
   if (socket->packet.impl != NULL) {
-    status = cnet_packet_endpoint_stop(&socket->packet, FLOWMQ_SOCKET_SHUTDOWN_TIMEOUT_MS);
-    if (status != SALTS_OK) return status;
+    if (socket->external_backend != NULL) {
+      if (!socket->external_stopped) return SALTS_EBUSY;
+    } else {
+      status = cnet_packet_endpoint_stop(&socket->packet, FLOWMQ_SOCKET_SHUTDOWN_TIMEOUT_MS);
+      if (status != SALTS_OK) return status;
+    }
     status = cnet_packet_endpoint_destroy(&socket->packet);
     if (status != SALTS_OK) return status;
     socket->runtime_initialized = 0u;
@@ -5355,6 +5362,11 @@ static int flowmq_socket_progress_local(flowmq_socket_t *socket) {
   return SALTS_OK;
 }
 
+static int flowmq_socket_packet_input_status(int status) {
+  /* Malformed UDP input is scoped to its sender/session by CNet. */
+  return status == SALTS_EPROTO || status == SALTS_EMSGSIZE ? SALTS_OK : status;
+}
+
 static int flowmq_socket_drive(flowmq_socket_t *socket, uint32_t timeout_ms,
                                size_t *events) {
   size_t client_events = 0u;
@@ -5380,9 +5392,8 @@ static int flowmq_socket_drive(flowmq_socket_t *socket, uint32_t timeout_ms,
   probe_started = hrtime();
 #endif
   if (socket->transport == FLOWMQ_TRANSPORT_KCP) {
-    status = cnet_packet_poll(&socket->packet, timeout_ms, &client_events);
-    /* Malformed UDP input is scoped to its sender/session by CNet. */
-    if (status == SALTS_EPROTO || status == SALTS_EMSGSIZE) status = SALTS_OK;
+    status = flowmq_socket_packet_input_status(
+        cnet_packet_poll(&socket->packet, timeout_ms, &client_events));
   } else {
     status = cnet_client_poll(&socket->client, timeout_ms, &client_events);
   }
@@ -5448,20 +5459,21 @@ int flowmq_socket_internal_owner_backend_config(
     size_t socket_capacity, native_io_backend_config *config) {
   flowmq_io_config_t io;
   const size_t endpoints_per_socket = FLOWMQ_SOCKET_PEER_CAPACITY * 2u + 2u;
-  size_t requests_per_socket;
   if (config == NULL || socket_capacity == 0u) return SALTS_EINVAL;
   flowmq_io_config_init(&io);
-  io.command_capacity = FLOWMQ_SOCKET_CNET_COMMAND_CAPACITY;
-  if (io.request_capacity == SIZE_MAX) return SALTS_ERANGE;
-  requests_per_socket = io.request_capacity + 1u;
+  const size_t stream_requests = io.request_capacity + 1u;
+  const size_t requests_per_socket = stream_requests > FLOWMQ_SOCKET_PACKET_REQUEST_CAPACITY
+      ? stream_requests : FLOWMQ_SOCKET_PACKET_REQUEST_CAPACITY;
   if (socket_capacity > SIZE_MAX / endpoints_per_socket ||
       socket_capacity > SIZE_MAX / requests_per_socket)
     return SALTS_ERANGE;
+  /* A lane may contain any mixture of sockets. Packet request capacity bounds
+   * simultaneous UDP operations. The observe batch keeps its stream budget. */
   *config = (native_io_backend_config){
       .kind = flowmq_cnet_backend(),
       .endpoint_capacity = socket_capacity * endpoints_per_socket,
       .request_capacity = socket_capacity * requests_per_socket,
-      .completion_batch_capacity = socket_capacity * requests_per_socket};
+      .completion_batch_capacity = socket_capacity * stream_requests};
   return native_io_backend_kind_supported(config->kind)
              ? SALTS_OK
              : SALTS_ENOTSUP;
@@ -5475,6 +5487,13 @@ int flowmq_socket_internal_advance_external(
   if (socket == NULL || socket->external_backend == NULL ||
       !socket->runtime_initialized)
     return SALTS_EINVAL;
+  if (socket->packet.impl != NULL) {
+    status = cnet_packet_advance_external(&socket->packet, FLOWMQ_SOCKET_PEER_CAPACITY,
+                                          &client_events);
+    if (events != NULL) *events = client_events;
+    /* CNet retains its first stop error until every terminal is drained. */
+    return socket->external_stopping ? SALTS_OK : status;
+  }
   if (!socket->external_client_stopped) {
     status = cnet_client_advance_external(&socket->client, &client_events);
     if (status != SALTS_OK) return status;
@@ -5490,6 +5509,7 @@ int flowmq_socket_internal_progress_local(flowmq_socket_t *socket) {
       !socket->runtime_initialized)
     return SALTS_EINVAL;
   if (socket->external_stopping) return SALTS_OK;
+  if (socket->packet.impl != NULL) return flowmq_socket_progress_local(socket);
   accept_status = flowmq_socket_accept_consume(socket);
   local_status = flowmq_socket_progress_local(socket);
   return accept_status != SALTS_OK ? accept_status : local_status;
@@ -5608,6 +5628,10 @@ static uint32_t flowmq_socket_local_external_timeout(
       wait_ms = flowmq_socket_ws_external_timeout(peer, now_ms, wait_ms);
       if (wait_ms == 0u) return 0u;
     }
+    if (peer->packet_handshake_deadline_ms != 0u && !flowmq_socket_peer_ready(peer)) {
+      wait_ms = flowmq_socket_wait_until_ms(now_ms, peer->packet_handshake_deadline_ms, wait_ms);
+      if (wait_ms == 0u) return 0u;
+    }
     if (peer->commit_pending) return 0u;
     if (flowmq_peer_state_handshake_has(
             &peer->state, FLOWMQ_PEER_HANDSHAKE_HELLO_TX) &&
@@ -5671,7 +5695,10 @@ int flowmq_socket_internal_external_timeout(
   if (socket == NULL || socket->external_backend == NULL ||
       !socket->runtime_initialized || wait_ms == NULL)
     return SALTS_EINVAL;
-  if (!socket->external_client_stopped) {
+  if (socket->packet.impl != NULL) {
+    status = cnet_packet_external_timeout(&socket->packet, max_wait_ms, &cnet_wait);
+    if (status != SALTS_OK) return status;
+  } else if (!socket->external_client_stopped) {
     status = cnet_client_external_timeout(
         &socket->client, max_wait_ms, &cnet_wait);
     if (status != SALTS_OK) return status;
@@ -5693,6 +5720,13 @@ int flowmq_socket_internal_route_external_completion(
   if (socket == NULL || socket->external_backend == NULL ||
       !socket->runtime_initialized || completion == NULL || consumed == NULL)
     return SALTS_EINVAL;
+  if (socket->packet.impl != NULL) {
+    size_t packet_events;
+    const int status = cnet_packet_route_external_completion(
+        &socket->packet, completion, consumed, &packet_events);
+    if (events != NULL) *events = packet_events;
+    return socket->external_stopping ? SALTS_OK : flowmq_socket_packet_input_status(status);
+  }
   if (native_io_request_valid(socket->accept_request) &&
       completion->request.slot == socket->accept_request.slot &&
       completion->request.generation == socket->accept_request.generation) {
@@ -5725,6 +5759,15 @@ int flowmq_socket_internal_stop_external(flowmq_socket_t *socket) {
    * let the embedding owner advance/observe/route terminal callbacks.
    */
   socket->external_stopping = 1u;
+  if (socket->packet.impl != NULL) {
+    bool stopped;
+    socket->reconnect_pending = 0u;
+    status = cnet_packet_endpoint_stop_external(&socket->packet, &stopped);
+    if (!stopped) return SALTS_EBUSY;
+    socket->external_stopped = 1u;
+    socket->listener_initialized = 0u;
+    return status;
+  }
   status = flowmq_socket_accept_stop(socket);
   if (status != SALTS_OK && status != SALTS_EBUSY) return status;
   if (socket->peer_pool.impl != NULL) {

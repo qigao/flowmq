@@ -131,9 +131,8 @@ FLOWMQ_C_API int flowmq_bind(flowmq_socket_t *socket, const char *endpoint);
 
 /**
  * Admit one asynchronous connection to an endpoint supported by flowmq_bind().
- * TCP, IPC, WS and WSS can share an explicit owner lane. WS/WSS and KCP
- * use copied sends. KCP uses standalone progress and limits each message part
- * to 64 KiB.
+ * TCP, IPC, WS, WSS and KCP can share an explicit owner lane. WS/WSS and KCP
+ * use copied sends. KCP limits each message part to 64 KiB.
  * Terminal states retry according to FLOWMQ_RECONNECT_IVL while the socket
  * continues to receive progress from its configured owner.
  */
