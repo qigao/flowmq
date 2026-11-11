@@ -268,14 +268,20 @@ its resources before terminating its context.
 | WSS | `wss://broker.example:443/fmq` | WS over verified CNet TLS; uses the existing CA, certificate, and server-name options |
 | KCP | `kcp://127.0.0.1:9000?conv=42` | Numeric IPv4 or bracketed IPv6, matching nonzero 32-bit conversation ID, 64 KiB per FMQ part |
 
-WS/WSS validates the requested resource (including the query), limits Upgrade
-headers to 8 KiB, and applies a one-second Upgrade deadline. CNet handles
-WebSocket framing, masking, fragmentation, and control frames. WSS also
-supports the existing required client-certificate and ROUTER identity policies.
+FlowMQ parses the HTTP/1.1 Upgrade with llhttp and computes the
+`Sec-WebSocket-Accept` value with GmSSL SHA-1. It validates the requested
+resource, including its query, limits headers to 8 KiB, and applies a
+one-second Upgrade deadline. Each binary WebSocket message carries one
+complete FMQ frame. FMQ multipart flags link the individual frames.
+CNet handles WebSocket masking, fragmentation, and control frames.
+WSS supports required client certificates and certificate-to-HELLO
+identity policies for ROUTER sockets.
 
 KCP currently uses plain sessions. Conversation IDs select a session and
-provide no encryption or authentication. Use the FMQ heartbeat options when
-idle peer expiry is required. KCP send completion follows acknowledgement of
+provide no encryption or authentication. When both FMQ heartbeat interval
+and timeout are enabled, a KCP peer expires after their sum without an FMQ
+frame, including when an unacknowledged write occupies the send lane.
+KCP send completion follows acknowledgement of
 the logical message by KCP, while `flowmq_send()` reports local admission.
 
 WS/WSS and KCP clients can share an Owner through `flowmq_owner_poll()`.

@@ -2402,9 +2402,16 @@ static int flowmq_socket_peer_protocol_start(flowmq_socket_peer_t *peer) {
     int timeout_ms = socket->heartbeat_timeout_set
                          ? socket->heartbeat_timeout_ms
                          : socket->heartbeat_interval_ms;
+    /* KCP holds the write lane until the remote ACK. A dead peer can keep
+     * a previous write in flight and prevent the next PING from being sent. */
+    const uint64_t receive_timeout_ms =
+        socket->transport == FLOWMQ_TRANSPORT_KCP && timeout_ms > 0
+            ? (uint64_t)socket->heartbeat_interval_ms + (uint64_t)timeout_ms
+            : 0u;
     flowmq_protocol_heartbeat_deadlines_init(
         &peer->heartbeat, hrtime(),
-        (uint64_t)socket->heartbeat_interval_ms, (uint64_t)timeout_ms, 0u);
+        (uint64_t)socket->heartbeat_interval_ms, (uint64_t)timeout_ms,
+        receive_timeout_ms);
     peer->heartbeat_active = 1u;
   }
   return flowmq_socket_send_hello(peer);
