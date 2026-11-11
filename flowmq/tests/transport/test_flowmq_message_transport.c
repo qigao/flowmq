@@ -35,15 +35,13 @@ static int wait_for(flowmq_owner_t *owner, flowmq_socket_t *first,
   return SALTS_ETIMEDOUT;
 }
 
-static void receive_part(flowmq_owner_t *owner, flowmq_socket_t *receiver,
-                         flowmq_socket_t *sender, const void *expected,
-                         size_t size, int more) {
+static void check_received_part(flowmq_socket_t *receiver, const void *expected,
+                                size_t size, int more) {
   unsigned char *received = malloc(size == 0u ? 1u : size);
   size_t actual;
   size_t option_size = sizeof(int);
   int actual_more;
   check_not_null(received);
-  check_equal(wait_for(owner, receiver, sender, FLOWMQ_POLLIN), SALTS_OK);
   check_equal(flowmq_recv(receiver, received, size, &actual, FLOWMQ_DONTWAIT), SALTS_OK);
   check_equal(actual, size);
   check_equal(memcmp(received, expected, size), 0);
@@ -51,6 +49,13 @@ static void receive_part(flowmq_owner_t *owner, flowmq_socket_t *receiver,
               SALTS_OK);
   check_equal(actual_more, more);
   free(received);
+}
+
+static void receive_part(flowmq_owner_t *owner, flowmq_socket_t *receiver,
+                         flowmq_socket_t *sender, const void *expected,
+                         size_t size, int more) {
+  check_equal(wait_for(owner, receiver, sender, FLOWMQ_POLLIN), SALTS_OK);
+  check_received_part(receiver, expected, size, more);
 }
 
 typedef struct tls_files {
@@ -313,6 +318,129 @@ static void route_dealers(pattern_fixture *fixture, const char *uri) {
   pattern_close(fixture, fast);
   pattern_close(fixture, slow);
   pattern_close(fixture, router);
+}
+
+static int send_routed(flowmq_socket_t *router, const char *identity,
+                       const void *data, size_t size) {
+  const int status = flowmq_send(router, identity, strlen(identity),
+                                 FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE);
+  if (status != SALTS_OK) return status;
+  return flowmq_send(router, data, size, FLOWMQ_DONTWAIT);
+}
+
+static int wait_for_kcp_peer(flowmq_owner_t *owner, flowmq_socket_t *router,
+                             flowmq_socket_t *dealer, const char *identity,
+                             uint64_t completed, uint64_t credit) {
+  flowmq_pollitem_t local = {.socket = router};
+  flowmq_pollitem_t remote = {.socket = dealer, .events = FLOWMQ_POLLOUT};
+  const size_t identity_size = strlen(identity);
+  const uint64_t deadline = monotonic_ms() + 5000u;
+  do {
+    size_t ready;
+    int status = flowmq_poll(&remote, 1u, 0u, &ready);
+    if (status != SALTS_OK) return status;
+    status = flowmq_owner_poll(owner, &local, 1u, 1u, &ready);
+    if (status != SALTS_OK) return status;
+    if ((local.revents | remote.revents) & FLOWMQ_POLLERR) return SALTS_EIO;
+    flowmq_router_peer_status_t peer = FLOWMQ_ROUTER_PEER_STATUS_INIT;
+    status = flowmq_router_peer_status(router, identity, identity_size, &peer);
+    if (status != SALTS_OK && status != SALTS_ENOENT) return status;
+    if (status == SALTS_OK && peer.ready && (remote.revents & FLOWMQ_POLLOUT) &&
+        peer.completed_messages >= completed && peer.send_credit_bytes >= credit)
+      return SALTS_OK;
+  } while (monotonic_ms() < deadline);
+  return SALTS_ETIMEDOUT;
+}
+
+static void check_kcp_peer_backpressure(const char *uri) {
+  static const char slow_id[] = "slow";
+  static const char fast_id[] = "fast";
+  const int send_hwm = 2;
+  const size_t send_hwm_bytes = FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE + 1u;
+  const size_t receive_credit = 2u * FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE;
+  const size_t remaining_credit = FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE - 1u;
+  unsigned char payload[FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE];
+  pattern_fixture fixture = {0};
+  char endpoint[320u];
+  size_t endpoint_size;
+  flowmq_router_peer_status_t peer = FLOWMQ_ROUTER_PEER_STATUS_INIT;
+  memset(payload, 0x65, sizeof(payload));
+
+  pattern_fixture_init(&fixture, uri, true);
+  flowmq_socket_t *router = pattern_socket(&fixture, FLOWMQ_ROUTER, true);
+  flowmq_socket_t *fast = pattern_socket(&fixture, FLOWMQ_DEALER, false);
+  /* A standalone peer can stop driving KCP while the shared Owner keeps polling. */
+  flowmq_socket_t *slow = flowmq_socket(fixture.ctx, FLOWMQ_DEALER);
+  check_not_null(slow);
+  if (fixture.kcp_psk) set_test_kcp_psk(slow, 1u);
+  check_equal(flowmq_setsockopt(slow, FLOWMQ_IDENTITY, slow_id, sizeof(slow_id) - 1u), SALTS_OK);
+  check_equal(flowmq_setsockopt(fast, FLOWMQ_IDENTITY, fast_id, sizeof(fast_id) - 1u), SALTS_OK);
+  check_equal(flowmq_setsockopt(router, FLOWMQ_SNDHWM, &send_hwm, sizeof(send_hwm)), SALTS_OK);
+  check_equal(flowmq_setsockopt(router, FLOWMQ_SNDHWM_BYTES, &send_hwm_bytes,
+                                sizeof(send_hwm_bytes)), SALTS_OK);
+  check_equal(flowmq_setsockopt(slow, FLOWMQ_RCVHWM_BYTES, &receive_credit,
+                                sizeof(receive_credit)), SALTS_OK);
+  pattern_bind(&fixture, router, uri);
+  check_equal(flowmq_last_endpoint(router, endpoint, sizeof(endpoint), &endpoint_size), SALTS_OK);
+  check_equal(flowmq_connect(fast, endpoint), SALTS_OK);
+  check_equal(flowmq_connect(slow, endpoint), SALTS_OK);
+  check_equal(wait_for_kcp_peer(fixture.owner, router, slow, slow_id, 0u, receive_credit), SALTS_OK);
+  check_equal(wait_for(fixture.owner, fast, router, FLOWMQ_POLLOUT), SALTS_OK);
+
+  check_equal(send_routed(router, slow_id, payload, sizeof(payload)), SALTS_OK);
+  /* A second large part fits the remote credit and exceeds the local byte HWM. */
+  check_equal(flowmq_router_peer_status(router, slow_id, sizeof(slow_id) - 1u, &peer), SALTS_OK);
+  check_equal(peer.send_credit_bytes, sizeof(payload));
+  check_equal(peer.outstanding_messages, 1u);
+  check_equal(send_routed(router, slow_id, payload, sizeof(payload)), SALTS_ENOBUFS);
+  check_equal(send_routed(router, slow_id, "s", 1u), SALTS_OK);
+  /* An empty message fits the byte budgets and exceeds the message HWM. */
+  check_equal(send_routed(router, slow_id, "", 0u), SALTS_ENOBUFS);
+
+  check_equal(send_routed(router, fast_id, "live", 4u), SALTS_OK);
+  receive_part(fixture.owner, fast, router, "live", 4u, 0);
+  check_equal(flowmq_send(fast, "reply", 5u, FLOWMQ_DONTWAIT), SALTS_OK);
+  receive_part(fixture.owner, router, fast, fast_id, sizeof(fast_id) - 1u, 1);
+  receive_part(fixture.owner, router, fast, "reply", 5u, 0);
+  check_equal(flowmq_router_peer_status(router, slow_id, sizeof(slow_id) - 1u, &peer), SALTS_OK);
+  check_equal(peer.outstanding_messages, 2u);
+  check_equal(peer.outstanding_bytes, send_hwm_bytes);
+  check_equal(peer.completed_messages, 0u);
+  check_equal(peer.send_credit_bytes, remaining_credit);
+
+  /* KCP ACKs release the local HWM before the application reads any DATA. */
+  check_equal(wait_for_kcp_peer(fixture.owner, router, slow, slow_id, 2u, remaining_credit), SALTS_OK);
+  check_equal(flowmq_router_peer_status(router, slow_id, sizeof(slow_id) - 1u, &peer), SALTS_OK);
+  check_equal(peer.completed_messages, 2u);
+  check_equal(peer.completed_bytes, send_hwm_bytes);
+  check_equal(peer.outstanding_messages, 0u);
+  check_equal(peer.outstanding_bytes, 0u);
+  check_equal(peer.send_credit_bytes, remaining_credit);
+  check_equal(send_routed(router, slow_id, payload, sizeof(payload)), SALTS_ENOBUFS);
+
+  check_received_part(slow, payload, sizeof(payload), 0);
+  check_equal(wait_for_kcp_peer(fixture.owner, router, slow, slow_id, 2u, sizeof(payload)), SALTS_OK);
+  payload[0] = 0x66;
+  check_equal(send_routed(router, slow_id, payload, sizeof(payload)), SALTS_OK);
+  check_equal(wait_for_kcp_peer(fixture.owner, router, slow, slow_id, 3u, remaining_credit), SALTS_OK);
+  check_received_part(slow, "s", 1u, 0);
+  check_received_part(slow, payload, sizeof(payload), 0);
+  check_equal(flowmq_router_peer_status(router, slow_id, sizeof(slow_id) - 1u, &peer), SALTS_OK);
+  check_equal(peer.admitted_messages, 3u);
+  check_equal(peer.completed_messages, 3u);
+  check_equal(peer.completed_bytes, receive_credit + 1u);
+  check_equal(peer.rejected_messages, 3u);
+  check_equal(peer.outstanding_messages, 0u);
+  check_equal(peer.outstanding_bytes, 0u);
+  unsigned char unexpected;
+  size_t received_size;
+  check_equal(flowmq_recv(slow, &unexpected, sizeof(unexpected), &received_size, FLOWMQ_DONTWAIT),
+              SALTS_EBUSY);
+
+  check_equal(flowmq_close(slow), SALTS_OK);
+  pattern_close(&fixture, fast);
+  pattern_close(&fixture, router);
+  pattern_fixture_term(&fixture);
 }
 
 static void check_subscription(pattern_fixture *fixture, const char *uri) {
@@ -718,6 +846,11 @@ spec("FlowMQ message transports") {
 
   it("drives KCP acknowledgements and closes beside a TCP neighbor on one Owner") {
     round_trip("kcp://127.0.0.1:0?conv=4281", FLOWMQ_TRANSPORT_KCP, true);
+  }
+
+  it("isolates a KCP peer stalled at its message and byte HWM from a healthy neighbor") {
+    check_kcp_peer_backpressure("kcp://127.0.0.1:0?conv=4281");
+    check_kcp_peer_backpressure("kcp://127.0.0.1:0?auth=psk");
   }
 
   it("carries the full KCP part size with PSK overhead on a shared Owner") {
