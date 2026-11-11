@@ -2,6 +2,7 @@
 #include "flowmq_protocol.h"
 #include "flowmq_socket.h"
 #include "flowmq_socket_external_internal.h"
+#include "flowmq_tls_identity_map.h"
 #include "flowmq_tls_test_material.h"
 #include "flowmq_transport.h"
 #include "tinytest.h"
@@ -352,7 +353,8 @@ static void expire_unacknowledged_kcp_peer(bool shared) {
   flowmq_router_peer_status_t peer = FLOWMQ_ROUTER_PEER_STATUS_INIT;
   pattern_fixture_init(&fixture, uri, shared);
   flowmq_socket_t *router = pattern_socket(&fixture, FLOWMQ_ROUTER, true);
-  flowmq_socket_t *dealer = pattern_socket(&fixture, FLOWMQ_DEALER, false);
+  flowmq_socket_t *dealer = flowmq_socket(fixture.ctx, FLOWMQ_DEALER);
+  check_not_null(dealer);
   check_equal(flowmq_setsockopt(router, FLOWMQ_HEARTBEAT_IVL, &heartbeat_ms,
                                sizeof(heartbeat_ms)), SALTS_OK);
   check_equal(flowmq_setsockopt(router, FLOWMQ_HEARTBEAT_TIMEOUT, &timeout_ms,
@@ -362,14 +364,24 @@ static void expire_unacknowledged_kcp_peer(bool shared) {
   check_equal(flowmq_last_endpoint(router, endpoint, sizeof(endpoint), &endpoint_size),
               SALTS_OK);
   check_equal(flowmq_connect(dealer, endpoint), SALTS_OK);
-  check_equal(wait_for(fixture.owner, dealer, router, FLOWMQ_POLLOUT), SALTS_OK);
-  check_equal(wait_for(fixture.owner, router, dealer, FLOWMQ_POLLOUT), SALTS_OK);
+  flowmq_pollitem_t receiver = {.socket = dealer, .events = FLOWMQ_POLLOUT};
+  flowmq_pollitem_t sender = {.socket = router, .events = FLOWMQ_POLLOUT};
+  const uint64_t connect_deadline = monotonic_ms() + 5000u;
+  do {
+    size_t ready;
+    check_equal(flowmq_poll(&receiver, 1u, 1u, &ready), SALTS_OK);
+    check_equal(shared ? flowmq_owner_poll(fixture.owner, &sender, 1u, 1u, &ready)
+                       : flowmq_poll(&sender, 1u, 1u, &ready), SALTS_OK);
+    check_equal((receiver.revents | sender.revents) & FLOWMQ_POLLERR, 0);
+  } while ((receiver.revents & sender.revents & FLOWMQ_POLLOUT) == 0 &&
+           monotonic_ms() < connect_deadline);
+  check_equal(receiver.revents & sender.revents & FLOWMQ_POLLOUT, FLOWMQ_POLLOUT);
 
+  /* The receiver stays bound but is no longer driven, so it cannot ACK. */
   check_equal(flowmq_send(router, "gone", 4u, FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), SALTS_OK);
   check_equal(flowmq_send(router, "no ack", 6u, FLOWMQ_DONTWAIT), SALTS_OK);
   check_equal(flowmq_router_peer_status(router, "gone", 4u, &peer), SALTS_OK);
   check_equal(peer.outstanding_messages, 1u);
-  pattern_close(&fixture, dealer);
   flowmq_pollitem_t item = {.socket = router};
   const uint64_t deadline = monotonic_ms() + 5000u;
   int status;
@@ -380,6 +392,96 @@ static void expire_unacknowledged_kcp_peer(bool shared) {
     status = flowmq_router_peer_status(router, "gone", 4u, &peer);
   } while (status == SALTS_OK && monotonic_ms() < deadline);
   check_equal(status, SALTS_ENOENT);
+  check_equal(flowmq_close(dealer), SALTS_OK);
+  pattern_close(&fixture, router);
+  pattern_fixture_term(&fixture);
+}
+
+static void wss_authentication(bool shared) {
+  static const char uri[] = "wss://127.0.0.1:0/fmq";
+  static const char identity[] = "trusted";
+  static const struct {
+    const char *name;
+    const char *identity;
+    bool trust_server;
+    bool present_certificate;
+    bool rejected_hello;
+  } rejected[] = {
+      {"localhost", identity, false, true, false},
+      {"wrong.example", identity, true, true, false},
+      {"localhost", identity, true, false, false},
+      {"localhost", "forged", true, true, true}};
+  const int required = 1;
+  const int reconnect = -1;
+  const flowmq_tls_identity_binding_t binding = {
+      sizeof(binding), "sha256:" FLOWMQ_TLS_TEST_CERTIFICATE_SHA256, identity};
+  flowmq_tls_identity_map_config_t policy = FLOWMQ_TLS_IDENTITY_MAP_CONFIG_INIT;
+  pattern_fixture fixture = {0};
+  char endpoint[320u];
+  size_t endpoint_size;
+  pattern_fixture_init(&fixture, uri, shared);
+  flowmq_socket_t *router = pattern_socket(&fixture, FLOWMQ_ROUTER, true);
+  policy.bindings = &binding;
+  policy.binding_count = 1u;
+  check_equal(flowmq_setsockopt(router, FLOWMQ_TLS_CA_FILE, fixture.tls.ca,
+                               strlen(fixture.tls.ca)), SALTS_OK);
+  check_equal(flowmq_setsockopt(router, FLOWMQ_TLS_REQUIRE_CLIENT_CERTIFICATE, &required,
+                               sizeof(required)), SALTS_OK);
+  check_equal(flowmq_setsockopt(router, FLOWMQ_TLS_IDENTITY_POLICY, &policy, sizeof(policy)),
+              SALTS_OK);
+  pattern_bind(&fixture, router, uri);
+  check_equal(flowmq_last_endpoint(router, endpoint, sizeof(endpoint), &endpoint_size), SALTS_OK);
+
+  for (size_t i = 0u; i < sizeof(rejected) / sizeof(rejected[0]); ++i) {
+    flowmq_socket_t *client = shared ? flowmq_owner_socket(fixture.owner, FLOWMQ_DEALER)
+                                    : flowmq_socket(fixture.ctx, FLOWMQ_DEALER);
+    check_not_null(client);
+    if (rejected[i].trust_server)
+      check_equal(flowmq_setsockopt(client, FLOWMQ_TLS_CA_FILE, fixture.tls.ca,
+                                   strlen(fixture.tls.ca)), SALTS_OK);
+    if (rejected[i].present_certificate) {
+      check_equal(flowmq_setsockopt(client, FLOWMQ_TLS_CERT_FILE, fixture.tls.cert,
+                                   strlen(fixture.tls.cert)), SALTS_OK);
+      check_equal(flowmq_setsockopt(client, FLOWMQ_TLS_KEY_FILE, fixture.tls.key,
+                                   strlen(fixture.tls.key)), SALTS_OK);
+    }
+    check_equal(flowmq_setsockopt(client, FLOWMQ_TLS_SERVER_NAME, rejected[i].name,
+                                 strlen(rejected[i].name)), SALTS_OK);
+    check_equal(flowmq_setsockopt(client, FLOWMQ_IDENTITY, rejected[i].identity,
+                                 strlen(rejected[i].identity)), SALTS_OK);
+    check_equal(flowmq_setsockopt(client, FLOWMQ_RECONNECT_IVL, &reconnect,
+                                 sizeof(reconnect)), SALTS_OK);
+    check_equal(flowmq_connect(client, endpoint), SALTS_OK);
+    flowmq_pollitem_t items[] = {
+        {.socket = client, .events = FLOWMQ_POLLOUT}, {.socket = router}};
+    const uint64_t deadline = monotonic_ms() + (rejected[i].rejected_hello ? 5000u : 250u);
+    uint64_t rejections;
+    do {
+      size_t ready;
+      size_t size = sizeof(rejections);
+      check_equal(shared ? flowmq_owner_poll(fixture.owner, items, 2u, 10u, &ready)
+                         : flowmq_poll(items, 2u, 10u, &ready), SALTS_OK);
+      check_equal(ready, 0u);
+      check_equal(flowmq_getsockopt(router, FLOWMQ_TLS_IDENTITY_REJECTIONS, &rejections,
+                                   &size), SALTS_OK);
+    } while (rejections == 0u && monotonic_ms() < deadline);
+    check_equal(rejections, rejected[i].rejected_hello ? 1u : 0u);
+    pattern_close(&fixture, client);
+  }
+
+  flowmq_socket_t *authorized = pattern_socket(&fixture, FLOWMQ_DEALER, false);
+  check_equal(flowmq_setsockopt(authorized, FLOWMQ_TLS_CERT_FILE, fixture.tls.cert,
+                               strlen(fixture.tls.cert)), SALTS_OK);
+  check_equal(flowmq_setsockopt(authorized, FLOWMQ_TLS_KEY_FILE, fixture.tls.key,
+                               strlen(fixture.tls.key)), SALTS_OK);
+  check_equal(flowmq_setsockopt(authorized, FLOWMQ_IDENTITY, identity, sizeof(identity) - 1u),
+              SALTS_OK);
+  check_equal(flowmq_connect(authorized, endpoint), SALTS_OK);
+  check_equal(wait_for(fixture.owner, authorized, router, FLOWMQ_POLLOUT), SALTS_OK);
+  check_equal(flowmq_send(authorized, "authorized", 10u, FLOWMQ_DONTWAIT), SALTS_OK);
+  receive_part(fixture.owner, router, authorized, identity, sizeof(identity) - 1u, 1);
+  receive_part(fixture.owner, router, authorized, "authorized", 10u, 0);
+  pattern_close(&fixture, authorized);
   pattern_close(&fixture, router);
   pattern_fixture_term(&fixture);
 }
@@ -451,6 +553,11 @@ spec("FlowMQ message transports") {
 
   it("exchanges binary FMQ messages over verified WSS") {
     round_trip("wss://127.0.0.1:0/fmq", FLOWMQ_TRANSPORT_WSS, false);
+  }
+
+  it("enforces WSS trust, hostname and mutual TLS ROUTER identity before READY") {
+    wss_authentication(false);
+    wss_authentication(true);
   }
 
   it("drives fragmented WebSocket messages and a TCP neighbor on one Owner") {
