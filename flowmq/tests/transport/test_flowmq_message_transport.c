@@ -267,6 +267,10 @@ spec("FlowMQ message transports") {
     round_trip("kcp://127.0.0.1:0?conv=4281", FLOWMQ_TRANSPORT_KCP, false);
   }
 
+  it("drives KCP acknowledgements and closes beside a TCP neighbor on one Owner") {
+    round_trip("kcp://127.0.0.1:0?conv=4281", FLOWMQ_TRANSPORT_KCP, true);
+  }
+
   it("rejects a different WebSocket resource and leaves the listener available") {
     check_wrong_route("ws://127.0.0.1:0/fmq", "/fmq", "/other");
   }

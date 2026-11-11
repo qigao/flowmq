@@ -67,7 +67,7 @@ This README describes `main`. Build each revision with its accompanying
 | --- | --- | --- | --- |
 | [salts-base](https://github.com/qigao/salts-base) | 0.1.5 | Buffers, strings, clocks, threads, NativeIO, and TinyTest | `SALTS_BASE_ROOT` |
 | [cmeta](https://github.com/qigao/cmeta) | 0.1.5 | Metadata, Schema/Replay, and CSTL | `CMETA_ROOT` |
-| [salts-cnet](https://github.com/qigao/salts-cnet) | 0.1.7 | Stream, WebSocket, and KCP transport engines | `SALTSCORE_ROOT` |
+| [salts-cnet](https://github.com/qigao/salts-cnet) | 0.1.8 | Stream, WebSocket, and KCP transport engines | `SALTSCORE_ROOT` |
 | [salts-utils](https://github.com/qigao/salts-utils) | 0.1.2 | DataBind and the host `salts-idlc` generator | `SALTS_UTILS_ROOT` |
 | [vcpkg-cache](https://github.com/qigao/vcpkg-cache) | 0.1.3 | Prebuilt dependencies including llhttp and GmSSL, plus Windows compiler setup | — |
 
@@ -254,7 +254,7 @@ its resources before terminating its context.
 | Capability | Public entry point | Contract |
 | --- | --- | --- |
 | Socket I/O | [flowmq_socket.h](flowmq/include/flowmq_socket.h) | `bind`, `connect`, `send`, `recv`, and `poll` run on the owning thread |
-| Shared completion wait | [flowmq_owner.h](flowmq/include/flowmq_owner.h) | TCP, IPC, WS and WSS client sockets use `FLOWMQ_DONTWAIT`, `flowmq_owner_poll()`, and `flowmq_owner_close_socket()` |
+| Shared completion wait | [flowmq_owner.h](flowmq/include/flowmq_owner.h) | TCP, IPC, WS, WSS and KCP client sockets use `FLOWMQ_DONTWAIT`, `flowmq_owner_poll()`, and `flowmq_owner_close_socket()` |
 | Reuse-port listeners | `FLOWMQ_REUSE_PORT` | Configure independent listener sockets before binding the same numeric TCP endpoint |
 | Peer admission limits | [flowmq_peer_pool.h](flowmq/include/flowmq_peer_pool.h) | Enable bounded connecting/ready peer capacity before starting a socket |
 | Remote endpoint selection | [flowmq_destination.h](flowmq/include/flowmq_destination.h) | Choose an endpoint from a caller-owned snapshot before connecting |
@@ -278,9 +278,10 @@ provide no encryption or authentication. Use the FMQ heartbeat options when
 idle peer expiry is required. KCP send completion follows acknowledgement of
 the logical message by KCP, while `flowmq_send()` reports local admission.
 
-WS/WSS clients can share an Owner through `flowmq_owner_poll()`. Public
+WS/WSS and KCP clients can share an Owner through `flowmq_owner_poll()`.
+The Owner includes the KCP timer deadline in its shared NativeIO wait. Public
 `flowmq_bind()` uses standalone sockets, with progress through `flowmq_poll()`.
-KCP uses standalone progress. WS/WSS and KCP use copied `flowmq_send()`.
+WS/WSS and KCP use copied `flowmq_send()`.
 Peer pools and retained sends return `SALTS_ENOTSUP` for these transports.
 
 ### Message ownership

@@ -38,6 +38,7 @@ static inline bool flowmq_cnet_supports(flowmq_transport_t transport,
     case FLOWMQ_TRANSPORT_IPC:
     case FLOWMQ_TRANSPORT_WS:
     case FLOWMQ_TRANSPORT_WSS:
+    case FLOWMQ_TRANSPORT_KCP:
       return (capability & (FLOWMQ_CNET_EXTERNAL_OWNER |
                             FLOWMQ_CNET_EXTERNAL_LISTENER)) != 0;
     default:
