@@ -4692,16 +4692,10 @@ static int flowmq_socket_accept_consume(flowmq_socket_t *socket) {
   if (peer == NULL) return SALTS_EPROTO;
   socket->accept_ready = 0u;
   if (socket->transport == FLOWMQ_TRANSPORT_IPC) {
-    cnet_ipc_accepted accepted = {0};
-    status = cnet_ipc_listener_accept_detached(&socket->ipc_listener, &accepted);
+    /* Preserve the IOCP attachment from accept through the peer's data I/O. */
+    status = cnet_manager_adopt_ipc_listener(&socket->manager, peer->managed,
+                                              &socket->ipc_listener, &peer->connection);
     if (status == SALTS_ENOENT) return flowmq_socket_accept_rollback(socket);
-    if (status == SALTS_OK)
-      status = cnet_manager_adopt_ipc(&socket->manager, peer->managed, &accepted,
-                                      &peer->connection);
-    if (accepted.kind != CNET_IPC_RESOURCE_NONE) {
-      const int close_status = cnet_ipc_accepted_close(&accepted);
-      if (close_status != SALTS_OK) status = close_status;
-    }
   } else {
     cnet_accepted_stream accepted = CNET_ACCEPTED_STREAM_INIT;
     status = cnet_listener_accept_detached(&socket->listener, &accepted);

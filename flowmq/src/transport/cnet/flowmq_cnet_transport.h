@@ -33,10 +33,8 @@ static inline bool flowmq_cnet_supports(flowmq_transport_t transport,
     case FLOWMQ_TRANSPORT_TLS:
       return capability == FLOWMQ_CNET_RETAINED_SEND;
     case FLOWMQ_TRANSPORT_IPC:
-#if !defined(_WIN32)
-      if (capability == FLOWMQ_CNET_EXTERNAL_LISTENER) return true;
-#endif
-      return capability == FLOWMQ_CNET_EXTERNAL_OWNER;
+      return (capability & (FLOWMQ_CNET_EXTERNAL_OWNER |
+                            FLOWMQ_CNET_EXTERNAL_LISTENER)) != 0;
     default:
       return false;
   }
