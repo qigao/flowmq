@@ -254,7 +254,7 @@ its resources before terminating its context.
 | Capability | Public entry point | Contract |
 | --- | --- | --- |
 | Socket I/O | [flowmq_socket.h](flowmq/include/flowmq_socket.h) | `bind`, `connect`, `send`, `recv`, and `poll` run on the owning thread |
-| Shared completion wait | [flowmq_owner.h](flowmq/include/flowmq_owner.h) | TCP client sockets use `FLOWMQ_DONTWAIT`, `flowmq_owner_poll()`, and `flowmq_owner_close_socket()` |
+| Shared completion wait | [flowmq_owner.h](flowmq/include/flowmq_owner.h) | TCP, IPC, WS and WSS client sockets use `FLOWMQ_DONTWAIT`, `flowmq_owner_poll()`, and `flowmq_owner_close_socket()` |
 | Reuse-port listeners | `FLOWMQ_REUSE_PORT` | Configure independent listener sockets before binding the same numeric TCP endpoint |
 | Peer admission limits | [flowmq_peer_pool.h](flowmq/include/flowmq_peer_pool.h) | Enable bounded connecting/ready peer capacity before starting a socket |
 | Remote endpoint selection | [flowmq_destination.h](flowmq/include/flowmq_destination.h) | Choose an endpoint from a caller-owned snapshot before connecting |
@@ -278,9 +278,10 @@ provide no encryption or authentication. Use the FMQ heartbeat options when
 idle peer expiry is required. KCP send completion follows acknowledgement of
 the logical message by KCP, while `flowmq_send()` reports local admission.
 
-WS/WSS and KCP run with standalone `flowmq_poll()` and copied
-`flowmq_send()`. Shared Owner, peer pools, and retained sends return
-`SALTS_ENOTSUP`. TCP, TLS, and IPC keep their existing capabilities.
+WS/WSS clients can share an Owner through `flowmq_owner_poll()`. Public
+`flowmq_bind()` uses standalone sockets, with progress through `flowmq_poll()`.
+KCP uses standalone progress. WS/WSS and KCP use copied `flowmq_send()`.
+Peer pools and retained sends return `SALTS_ENOTSUP` for these transports.
 
 ### Message ownership
 
