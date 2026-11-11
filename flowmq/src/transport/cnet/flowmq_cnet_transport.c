@@ -19,10 +19,60 @@ native_io_backend_kind flowmq_cnet_backend(void) {
 #endif
 }
 
-int flowmq_cnet_endpoint_validate(flowmq_transport_t transport, const char *host, int port) {
-  if (flowmq_transport_validate(transport) != SALTS_OK || host == NULL || host[0] == '\0' ||
-      port < 1 || port > 65535)
+static const char tcp_scheme[] = "tcp://";
+static const char tls_scheme[] = "tls://";
+
+flowmq_transport_t flowmq_cnet_uri_transport(const char *uri) {
+  if (strncmp(uri, tcp_scheme, sizeof(tcp_scheme) - 1u) == 0) return FLOWMQ_TRANSPORT_TCP;
+  if (strncmp(uri, tls_scheme, sizeof(tls_scheme) - 1u) == 0) return FLOWMQ_TRANSPORT_TLS;
+  return 0;
+}
+
+int flowmq_cnet_endpoint_parse(const char *endpoint, bool allow_zero_port,
+                               flowmq_cnet_endpoint_t *parts) {
+  const char *host_begin;
+  const char *host_end;
+  const char *port_begin;
+  char *port_end = NULL;
+  unsigned long port;
+  size_t host_size;
+  if (endpoint == NULL || parts == NULL) return SALTS_EINVAL;
+  memset(parts, 0, sizeof(*parts));
+  parts->transport = flowmq_cnet_uri_transport(endpoint);
+  if (parts->transport == 0) return SALTS_EINVAL;
+  host_begin = endpoint + sizeof(tcp_scheme) - 1u;
+  if (*host_begin == '[') {
+    host_begin++;
+    host_end = strchr(host_begin, ']');
+    if (host_end == NULL || host_end[1] != ':') return SALTS_EINVAL;
+    port_begin = host_end + 2u;
+  } else {
+    host_end = strrchr(host_begin, ':');
+    if (host_end == NULL) return SALTS_EINVAL;
+    port_begin = host_end + 1u;
+  }
+  host_size = (size_t)(host_end - host_begin);
+  if (host_size == 0u || host_size >= sizeof(parts->host) || *port_begin == '\0')
     return SALTS_EINVAL;
+  memcpy(parts->host, host_begin, host_size);
+  parts->host[host_size] = '\0';
+  port = strtoul(port_begin, &port_end, 10);
+  if (port_end == port_begin || *port_end != '\0' || port > 65535u ||
+      (!allow_zero_port && port == 0u))
+    return SALTS_EINVAL;
+  parts->port = (uint16_t)port;
+  return SALTS_OK;
+}
+
+int flowmq_cnet_endpoint_format(const flowmq_cnet_endpoint_t *endpoint,
+                                char *uri, size_t capacity) {
+  const char *scheme = endpoint->transport == FLOWMQ_TRANSPORT_TLS
+                           ? tls_scheme : tcp_scheme;
+  const bool bracket = strchr(endpoint->host, ':') != NULL;
+  const int written = snprintf(uri, capacity,
+                               bracket ? "%s[%s]:%u" : "%s%s:%u",
+                               scheme, endpoint->host, (unsigned)endpoint->port);
+  if (written < 0 || (size_t)written >= capacity) return SALTS_EMSGSIZE;
   return SALTS_OK;
 }
 
@@ -74,27 +124,4 @@ int flowmq_cnet_client_config(const flowmq_io_config_t *io,
       .tls_handshake_timeout_ms =
           transport == FLOWMQ_TRANSPORT_TLS ? handshake_timeout_ms : 0u};
   return native_io_backend_kind_supported(out->backend) ? SALTS_OK : SALTS_ENOTSUP;
-}
-
-int flowmq_cnet_uri(flowmq_transport_t transport, const char *host, int port, char **out_uri) {
-  const char *scheme;
-  int bracket;
-  int size;
-  char *uri;
-  if (out_uri == NULL) return SALTS_EINVAL;
-  *out_uri = NULL;
-  if (flowmq_cnet_endpoint_validate(transport, host, port) != SALTS_OK) return SALTS_EINVAL;
-  scheme = transport == FLOWMQ_TRANSPORT_TLS ? "tls" : "tcp";
-  bracket = strchr(host, ':') != NULL && host[0] != '[';
-  size = snprintf(NULL, 0, bracket ? "%s://[%s]:%d" : "%s://%s:%d", scheme, host, port);
-  if (size < 0) return SALTS_EIO;
-  uri = (char *)malloc((size_t)size + 1u);
-  if (uri == NULL) return SALTS_ENOMEM;
-  if (snprintf(uri, (size_t)size + 1u, bracket ? "%s://[%s]:%d" : "%s://%s:%d", scheme,
-               host, port) != size) {
-    free(uri);
-    return SALTS_EIO;
-  }
-  *out_uri = uri;
-  return SALTS_OK;
 }

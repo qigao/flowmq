@@ -71,8 +71,6 @@ enum {
   FLOWMQ_SOCKET_CNET_PACKET_RECEIVE_BUFFER_BYTES =
       FLOWMQ_PROTOCOL_HEADER_SIZE + FLOWMQ_PROTOCOL_MAX_IDENTITY_SIZE +
       FLOWMQ_PROTOCOL_MAX_TOPIC_SIZE + FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE,
-  FLOWMQ_SOCKET_HOST_CAPACITY = FLOWMQ_SOCKET_OPTION_TLS_SERVER_NAME_CAPACITY,
-  FLOWMQ_SOCKET_ENDPOINT_CAPACITY = 320u,
   FLOWMQ_SOCKET_TLS_PATH_CAPACITY = FLOWMQ_SOCKET_OPTION_TLS_PATH_CAPACITY,
   FLOWMQ_SOCKET_TLS_PASSWORD_CAPACITY = FLOWMQ_SOCKET_OPTION_TLS_PASSWORD_CAPACITY,
   FLOWMQ_SOCKET_TLS_FINGERPRINT_PREFIX_SIZE = 7u,
@@ -109,7 +107,7 @@ typedef struct flowmq_socket_peer_s flowmq_socket_peer_t;
 typedef struct flowmq_socket_endpoint_s {
   flowmq_reconnect_t reconnect;
   uint64_t next_attempt_ms;
-  char uri[FLOWMQ_SOCKET_ENDPOINT_CAPACITY];
+  char uri[FLOWMQ_CNET_URI_CAPACITY];
   unsigned used : 1;
   unsigned active : 1;
   unsigned retry_pending : 1;
@@ -277,7 +275,7 @@ struct flowmq_socket_s {
   int async_error;
   int send_cancel_error;
   int recv_cancel_error;
-  int transport;
+  flowmq_transport_t transport;
   int last_rcvmore;
   native_io_backend *external_backend;
   const void *external_owner;
@@ -300,21 +298,15 @@ struct flowmq_socket_s {
   unsigned request_peer_valid : 1;
   unsigned heartbeat_timeout_set : 1;
   unsigned reconnect_pending : 1;
-  char last_endpoint[FLOWMQ_SOCKET_ENDPOINT_CAPACITY];
+  char last_endpoint[FLOWMQ_CNET_URI_CAPACITY];
   char identity[FLOWMQ_PROTOCOL_MAX_IDENTITY_SIZE + 1u];
   size_t identity_size;
   char tls_ca_file[FLOWMQ_SOCKET_TLS_PATH_CAPACITY];
   char tls_cert_file[FLOWMQ_SOCKET_TLS_PATH_CAPACITY];
   char tls_key_file[FLOWMQ_SOCKET_TLS_PATH_CAPACITY];
   char tls_key_password[FLOWMQ_SOCKET_TLS_PASSWORD_CAPACITY];
-  char tls_server_name[FLOWMQ_SOCKET_HOST_CAPACITY];
+  char tls_server_name[FLOWMQ_SOCKET_OPTION_TLS_SERVER_NAME_CAPACITY];
 };
-
-typedef struct flowmq_endpoint_parts_s {
-  flowmq_transport_t transport;
-  char host[FLOWMQ_SOCKET_HOST_CAPACITY];
-  uint16_t port;
-} flowmq_endpoint_parts_t;
 
 #if defined(FLOWMQ_BATCH_PROBE)
 int flowmq_socket_batch_probe_read(const flowmq_socket_t *socket,
@@ -443,48 +435,6 @@ static int flowmq_socket_pool_ready(flowmq_socket_peer_t *peer) {
   if (status != SALTS_OK) return status;
   return cnet_pool_try_acquire(&peer->owner->peer_pool, &peer->pool_key,
                                 &ops, &peer->pool_lease, &managed);
-}
-
-static int flowmq_endpoint_parse(const char *endpoint, int allow_zero_port,
-                                 flowmq_endpoint_parts_t *parts) {
-  const char *host_begin;
-  const char *host_end;
-  const char *port_begin;
-  char *port_end = NULL;
-  unsigned long port;
-  size_t host_size;
-  if (endpoint == NULL || parts == NULL) return SALTS_EINVAL;
-  memset(parts, 0, sizeof(*parts));
-  if (strncmp(endpoint, "tcp://", 6u) == 0) {
-    parts->transport = FLOWMQ_TRANSPORT_TCP;
-    host_begin = endpoint + 6u;
-  } else if (strncmp(endpoint, "tls://", 6u) == 0) {
-    parts->transport = FLOWMQ_TRANSPORT_TLS;
-    host_begin = endpoint + 6u;
-  } else {
-    return SALTS_EINVAL;
-  }
-  if (*host_begin == '[') {
-    host_begin++;
-    host_end = strchr(host_begin, ']');
-    if (host_end == NULL || host_end[1] != ':') return SALTS_EINVAL;
-    port_begin = host_end + 2u;
-  } else {
-    host_end = strrchr(host_begin, ':');
-    if (host_end == NULL) return SALTS_EINVAL;
-    port_begin = host_end + 1u;
-  }
-  host_size = (size_t)(host_end - host_begin);
-  if (host_size == 0u || host_size >= sizeof(parts->host) || *port_begin == '\0')
-    return SALTS_EINVAL;
-  memcpy(parts->host, host_begin, host_size);
-  parts->host[host_size] = '\0';
-  port = strtoul(port_begin, &port_end, 10);
-  if (port_end == port_begin || *port_end != '\0' || port > 65535u ||
-      (!allow_zero_port && port == 0u))
-    return SALTS_EINVAL;
-  parts->port = (uint16_t)port;
-  return SALTS_OK;
 }
 
 static flowmq_socket_peer_t *flowmq_socket_peer_acquire(flowmq_socket_t *socket) {
@@ -1463,8 +1413,7 @@ static int flowmq_socket_peer_admit_retained(
       frame->payload_size == 0u)
     return SALTS_EINVAL;
   socket = peer->owner;
-  if (socket->transport != FLOWMQ_TRANSPORT_TCP &&
-      socket->transport != FLOWMQ_TRANSPORT_TLS)
+  if (!flowmq_cnet_supports(socket->transport, FLOWMQ_CNET_RETAINED_SEND))
     return SALTS_ENOTSUP;
   if (!flowmq_socket_peer_can_admit(peer, frame->payload_size, 1))
     return SALTS_ENOBUFS;
@@ -1505,8 +1454,7 @@ static int flowmq_socket_peer_admit_retained_message(
       slice_count > CNET_RETAINED_VECTOR_MAX || payload_size == 0u)
     return SALTS_EINVAL;
   socket = peer->owner;
-  if (socket->transport != FLOWMQ_TRANSPORT_TCP &&
-      socket->transport != FLOWMQ_TRANSPORT_TLS)
+  if (!flowmq_cnet_supports(socket->transport, FLOWMQ_CNET_RETAINED_SEND))
     return SALTS_ENOTSUP;
   if (!flowmq_socket_peer_ready(peer)) return SALTS_EBUSY;
   if (payload_size > socket->send_hwm_bytes ||
@@ -1591,8 +1539,7 @@ static int flowmq_socket_peer_flush(flowmq_socket_peer_t *peer) {
       !flowmq_peer_state_write_idle(&peer->state) ||
       peer->outbound_count == 0u)
     return SALTS_OK;
-  if (socket->transport != FLOWMQ_TRANSPORT_TCP &&
-      socket->transport != FLOWMQ_TRANSPORT_TLS)
+  if (!flowmq_cnet_supports(socket->transport, FLOWMQ_CNET_RETAINED_SEND))
     return SALTS_ENOTSUP;
 
   outbound = &peer->outbound[peer->outbound_read];
@@ -2424,7 +2371,7 @@ static int flowmq_socket_rearm_receive(flowmq_socket_peer_t *peer) {
    * demand-free boundary after the handshake is complete and the copied
    * decoder has drained, so the first owned receive is application DATA.
    */
-  if (socket->transport == FLOWMQ_TRANSPORT_TCP &&
+  if (flowmq_cnet_supports(socket->transport, FLOWMQ_CNET_OWNED_RECEIVE) &&
       !peer->owned_receive_active &&
       flowmq_peer_state_handshake_has(
           &peer->state, FLOWMQ_PEER_HANDSHAKE_HELLO_RX) &&
@@ -2469,7 +2416,7 @@ static void flowmq_socket_on_receive_slice(
    * contains exactly one single-packet DATA frame.
    */
   if (status == SALTS_OK &&
-      socket->transport == FLOWMQ_TRANSPORT_TCP &&
+      flowmq_cnet_supports(socket->transport, FLOWMQ_CNET_OWNED_RECEIVE) &&
       !peer->commit_pending && decoder_size == 0u &&
       flowmq_owned_stream_size(&peer->owned_stream) == 0u &&
       flowmq_peer_state_handshake_has(
@@ -2514,7 +2461,7 @@ static void flowmq_socket_on_receive_slice(
     decoder_size = flowmq_stream_decoder_size(&peer->decoder);
     if (decoder_size != 0u || peer->commit_pending ||
         !peer->owned_receive_active ||
-        socket->transport != FLOWMQ_TRANSPORT_TCP) {
+        !flowmq_cnet_supports(socket->transport, FLOWMQ_CNET_OWNED_RECEIVE)) {
 #if defined(FLOWMQ_BATCH_PROBE)
       ++socket->batch_probe.receive_decoder_slices;
 #endif
@@ -2687,7 +2634,7 @@ static int flowmq_socket_runtime_init(flowmq_socket_t *socket,
   cnet_client_config config;
   int status;
   if (socket->runtime_initialized)
-    return socket->transport == (int)transport ? SALTS_OK : SALTS_ENOTSUP;
+    return socket->transport == transport ? SALTS_OK : SALTS_ENOTSUP;
   flowmq_io_config_init(&io);
   io.command_capacity = FLOWMQ_SOCKET_CNET_COMMAND_CAPACITY;
   if (transport == FLOWMQ_TRANSPORT_TCP)
@@ -2699,7 +2646,7 @@ static int flowmq_socket_runtime_init(flowmq_socket_t *socket,
       &io, &timeouts, transport, FLOWMQ_SOCKET_PEER_CAPACITY,
       socket->max_encoded_size, &config);
   if (status == SALTS_OK && socket->external_backend != NULL) {
-    if (transport != FLOWMQ_TRANSPORT_TCP)
+    if (!flowmq_cnet_supports(transport, FLOWMQ_CNET_EXTERNAL_OWNER))
       status = SALTS_ENOTSUP;
     else
       status = cnet_client_init_external(
@@ -2746,7 +2693,7 @@ static int flowmq_socket_runtime_init(flowmq_socket_t *socket,
     }
     return status;
   }
-  socket->transport = (int)transport;
+  socket->transport = transport;
   socket->runtime_initialized = 1u;
   return SALTS_OK;
 }
@@ -3143,19 +3090,17 @@ int flowmq_close(flowmq_socket_t *socket) {
 
 static int flowmq_socket_bind_common(flowmq_socket_t *socket,
                                       const char *endpoint, int external) {
-  flowmq_endpoint_parts_t parts;
+  flowmq_cnet_endpoint_t parts;
   cnet_listener_config config;
   cnet_listener_options listener_options = CNET_LISTENER_OPTIONS_INIT;
-  uint16_t bound_port = 0u;
-  int bracket;
-  int written;
   int status;
   if (socket == NULL || socket->ctx == NULL) return SALTS_EINVAL;
   if (socket->external_backend != NULL && !external) return SALTS_ENOTSUP;
   if (socket->external_stopping) return SALTS_ESHUTDOWN;
-  status = flowmq_endpoint_parse(endpoint, 1, &parts);
+  status = flowmq_cnet_endpoint_parse(endpoint, true, &parts);
   if (status != SALTS_OK) return status;
-  if (external && parts.transport != FLOWMQ_TRANSPORT_TCP) return SALTS_ENOTSUP;
+  if (external && !flowmq_cnet_supports(parts.transport, FLOWMQ_CNET_EXTERNAL_OWNER))
+    return SALTS_ENOTSUP;
   if (socket->listener_initialized) return SALTS_EALREADY;
   if (socket->tls_identity_policy != NULL &&
       (socket->pattern.desc->routing_class != FLOWMQ_PATTERN_ROUTE_IDENTITY ||
@@ -3191,16 +3136,10 @@ static int flowmq_socket_bind_common(flowmq_socket_t *socket,
       return status;
     }
   }
-  status = cnet_listener_port(&socket->listener, &bound_port);
+  status = cnet_listener_port(&socket->listener, &parts.port);
   if (status != SALTS_OK) return status;
-  bracket = strchr(parts.host, ':') != NULL;
-  written = snprintf(socket->last_endpoint, sizeof(socket->last_endpoint),
-                     bracket ? "%s://[%s]:%u" : "%s://%s:%u",
-                     parts.transport == FLOWMQ_TRANSPORT_TLS ? "tls" : "tcp",
-                     parts.host, (unsigned)bound_port);
-  if (written < 0 || (size_t)written >= sizeof(socket->last_endpoint))
-    return SALTS_EMSGSIZE;
-  return SALTS_OK;
+  return flowmq_cnet_endpoint_format(&parts, socket->last_endpoint,
+                                    sizeof(socket->last_endpoint));
 }
 
 int flowmq_bind(flowmq_socket_t *socket, const char *endpoint) {
@@ -3216,14 +3155,14 @@ int flowmq_socket_internal_bind_external(flowmq_socket_t *socket,
 }
 
 int flowmq_connect(flowmq_socket_t *socket, const char *endpoint) {
-  flowmq_endpoint_parts_t parts;
+  flowmq_cnet_endpoint_t parts;
   flowmq_socket_endpoint_t *owned_endpoint;
   size_t endpoint_index = FLOWMQ_SOCKET_ENDPOINT_NONE;
   size_t endpoint_size;
   uint64_t reconnect_max_ms;
   int status;
   if (socket == NULL || socket->ctx == NULL) return SALTS_EINVAL;
-  status = flowmq_endpoint_parse(endpoint, 0, &parts);
+  status = flowmq_cnet_endpoint_parse(endpoint, false, &parts);
   if (status != SALTS_OK) return status;
   if (socket->pattern.desc->routing_class == FLOWMQ_PATTERN_ROUTE_SINGLE) {
     for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
@@ -3235,7 +3174,7 @@ int flowmq_connect(flowmq_socket_t *socket, const char *endpoint) {
     }
   }
   endpoint_size = strlen(endpoint) + 1u;
-  if (endpoint_size > FLOWMQ_SOCKET_ENDPOINT_CAPACITY) return SALTS_EMSGSIZE;
+  if (endpoint_size > FLOWMQ_CNET_URI_CAPACITY) return SALTS_EMSGSIZE;
   status = flowmq_socket_runtime_init(socket, parts.transport);
   if (status != SALTS_OK) return status;
   if (parts.transport == FLOWMQ_TRANSPORT_TLS) {
@@ -3870,8 +3809,7 @@ static int flowmq_socket_try_send_slice(flowmq_socket_t *socket,
   if (size > FLOWMQ_SOCKET_MAX_FRAME_SIZE || size > socket->send_hwm_bytes)
     return SALTS_EMSGSIZE;
   if (socket->runtime_initialized &&
-      socket->transport != FLOWMQ_TRANSPORT_TCP &&
-      socket->transport != FLOWMQ_TRANSPORT_TLS)
+      !flowmq_cnet_supports(socket->transport, FLOWMQ_CNET_RETAINED_SEND))
     return SALTS_ENOTSUP;
 
   starting_message = !socket->pattern.sending_multipart;

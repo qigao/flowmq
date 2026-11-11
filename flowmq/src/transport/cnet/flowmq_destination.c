@@ -1,4 +1,5 @@
 #include "flowmq_destination.h"
+#include "flowmq_cnet_transport.h"
 
 #include <cnet/destination_policy.h>
 #include <core/clock.h>
@@ -8,18 +9,14 @@
 #include <stdint.h>
 #include <string.h>
 
-enum { FLOWMQ_DESTINATION_URI_CAPACITY = 320u };
-
-static int flowmq_destination_uri_scheme(const char *uri) {
+static flowmq_transport_t flowmq_destination_uri_scheme(const char *uri) {
   size_t count = 0u;
   if (uri == NULL) return 0;
-  while (count < FLOWMQ_DESTINATION_URI_CAPACITY && uri[count] != '\0')
+  while (count < FLOWMQ_CNET_URI_CAPACITY && uri[count] != '\0')
     ++count;
-  if (count <= 6u || count >= FLOWMQ_DESTINATION_URI_CAPACITY)
+  if (count <= 6u || count >= FLOWMQ_CNET_URI_CAPACITY)
     return 0;
-  if (strncmp(uri, "tcp://", 6u) == 0) return 1;
-  if (strncmp(uri, "tls://", 6u) == 0) return 2;
-  return 0;
+  return flowmq_cnet_uri_transport(uri);
 }
 
 static int flowmq_destination_policy_kind(
@@ -56,7 +53,7 @@ int flowmq_destination_choose(
   cnet_destination_result selected = {0};
   cnet_destination_policy_kind kind;
   uint64_t authority_id = 0u;
-  int scheme = 0;
+  flowmq_transport_t scheme = 0;
   int status;
 
   if (result == NULL || result->size < sizeof(*result)) return SALTS_EINVAL;
@@ -76,7 +73,7 @@ int flowmq_destination_choose(
 
   for (size_t i = 0u; i < endpoint_count; ++i) {
     const flowmq_destination_endpoint_t *endpoint = &endpoints[i];
-    const int current_scheme = flowmq_destination_uri_scheme(endpoint->uri);
+    const flowmq_transport_t current_scheme = flowmq_destination_uri_scheme(endpoint->uri);
     if (endpoint->authority_id == 0u || current_scheme == 0 ||
         (i != 0u && (authority_id != endpoint->authority_id ||
                      scheme != current_scheme)) ||
