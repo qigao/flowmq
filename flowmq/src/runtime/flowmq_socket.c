@@ -1036,20 +1036,26 @@ static size_t flowmq_socket_payload_limit(const flowmq_socket_t *socket) {
       ? FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE : FLOWMQ_SOCKET_MAX_FRAME_SIZE;
 }
 
+static bool flowmq_socket_can_send_settings(const flowmq_socket_peer_t *peer) {
+  /* SETTINGS enables the remote peer to send DATA. A certificate-bound
+   * ROUTER must authorize the peer's HELLO identity before granting credit. */
+  return flowmq_peer_state_is_connected(&peer->state) &&
+         flowmq_peer_state_handshake_has(
+             &peer->state, FLOWMQ_PEER_HANDSHAKE_HELLO_TX) &&
+         (peer->owner->tls_identity_policy == NULL ||
+          flowmq_peer_state_handshake_has(
+              &peer->state, FLOWMQ_PEER_HANDSHAKE_HELLO_RX)) &&
+         !flowmq_peer_state_handshake_has(
+             &peer->state, FLOWMQ_PEER_HANDSHAKE_SETTINGS_TX) &&
+         flowmq_peer_state_write_idle(&peer->state);
+}
+
 static int flowmq_socket_send_settings(flowmq_socket_peer_t *peer) {
   flowmq_socket_t *socket = peer->owner;
   flowmq_protocol_settings_t settings;
   flowmq_protocol_frame_t frame = {0};
   unsigned char payload[FLOWMQ_PROTOCOL_SETTINGS_PAYLOAD_SIZE];
   int status;
-  if (!flowmq_peer_state_is_connected(&peer->state) ||
-      !flowmq_peer_state_handshake_has(
-          &peer->state, FLOWMQ_PEER_HANDSHAKE_HELLO_TX) ||
-      flowmq_peer_state_handshake_has(
-          &peer->state, FLOWMQ_PEER_HANDSHAKE_SETTINGS_TX) ||
-      !flowmq_peer_state_write_idle(&peer->state)) {
-    return SALTS_EBUSY;
-  }
   status = flowmq_flow_control_make_settings(
       &peer->flow_control, flowmq_socket_payload_limit(socket), &settings);
   if (status == SALTS_OK)
@@ -5325,11 +5331,7 @@ static int flowmq_socket_progress_local(flowmq_socket_t *socket) {
         continue;
       }
     }
-    if (flowmq_peer_state_handshake_has(
-            &peer->state, FLOWMQ_PEER_HANDSHAKE_HELLO_TX) &&
-        !flowmq_peer_state_handshake_has(
-            &peer->state, FLOWMQ_PEER_HANDSHAKE_SETTINGS_TX) &&
-        flowmq_peer_state_write_idle(&peer->state)) {
+    if (flowmq_socket_can_send_settings(peer)) {
       status = flowmq_socket_send_settings(peer);
       if (status != SALTS_OK && status != SALTS_EBUSY &&
           status != SALTS_ENOBUFS) {
@@ -5640,11 +5642,7 @@ static uint32_t flowmq_socket_local_external_timeout(
       if (wait_ms == 0u) return 0u;
     }
     if (peer->commit_pending) return 0u;
-    if (flowmq_peer_state_handshake_has(
-            &peer->state, FLOWMQ_PEER_HANDSHAKE_HELLO_TX) &&
-        !flowmq_peer_state_handshake_has(
-            &peer->state, FLOWMQ_PEER_HANDSHAKE_SETTINGS_TX) &&
-        flowmq_peer_state_write_idle(&peer->state))
+    if (flowmq_socket_can_send_settings(peer))
       return 0u;
     if (peer->pong_pending && flowmq_socket_peer_ready(peer) &&
         flowmq_peer_state_write_idle(&peer->state))

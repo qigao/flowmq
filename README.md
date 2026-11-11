@@ -67,7 +67,7 @@ This README describes `main`. Build each revision with its accompanying
 | --- | --- | --- | --- |
 | [salts-base](https://github.com/qigao/salts-base) | 0.1.5 | Buffers, strings, clocks, threads, NativeIO, and TinyTest | `SALTS_BASE_ROOT` |
 | [cmeta](https://github.com/qigao/cmeta) | 0.1.5 | Metadata, Schema/Replay, and CSTL | `CMETA_ROOT` |
-| [salts-cnet](https://github.com/qigao/salts-cnet) | 0.1.8 | Stream, WebSocket, and KCP transport engines | `SALTSCORE_ROOT` |
+| [salts-cnet](https://github.com/qigao/salts-cnet) | 0.1.9 | Stream, WebSocket, and KCP transport engines | `SALTSCORE_ROOT` |
 | [salts-utils](https://github.com/qigao/salts-utils) | 0.1.2 | DataBind and the host `salts-idlc` generator | `SALTS_UTILS_ROOT` |
 | [vcpkg-cache](https://github.com/qigao/vcpkg-cache) | 0.1.3 | Prebuilt dependencies including llhttp and GmSSL, plus Windows compiler setup | — |
 
@@ -275,14 +275,17 @@ one-second Upgrade deadline. Each binary WebSocket message carries one
 complete FMQ frame. FMQ multipart flags link the individual frames.
 CNet handles WebSocket masking, fragmentation, and control frames.
 WSS supports required client certificates and certificate-to-HELLO
-identity policies for ROUTER sockets.
+identity policies for ROUTER sockets. A ROUTER with an identity policy
+sends SETTINGS only after it authorizes the peer's HELLO identity.
 
 KCP currently uses plain sessions. Conversation IDs select a session and
 provide no encryption or authentication. When both FMQ heartbeat interval
 and timeout are enabled, a KCP peer expires after their sum without an FMQ
 frame, including when an unacknowledged write occupies the send lane.
-KCP send completion follows acknowledgement of
-the logical message by KCP, while `flowmq_send()` reports local admission.
+With reconnect enabled, a client opens a fresh KCP session after expiry,
+repeats FMQ negotiation, and restores its subscriptions. KCP send completion
+follows acknowledgement of the logical message by KCP, while `flowmq_send()`
+reports local admission.
 
 WS/WSS and KCP clients can share an Owner through `flowmq_owner_poll()`.
 The Owner includes the KCP timer deadline in its shared NativeIO wait. Public
