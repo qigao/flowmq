@@ -274,8 +274,10 @@ WebSocket framing, masking, fragmentation, and control frames. WSS also
 supports the existing required client-certificate and ROUTER identity policies.
 
 KCP currently uses plain sessions. Conversation IDs select a session and
-provide no encryption or authentication. Use the FMQ heartbeat options when
-idle peer expiry is required. KCP send completion follows acknowledgement of
+provide no encryption or authentication. When both FMQ heartbeat interval
+and timeout are enabled, a KCP peer expires after their sum without an FMQ
+frame, including when an unacknowledged write occupies the send lane.
+KCP send completion follows acknowledgement of
 the logical message by KCP, while `flowmq_send()` reports local admission.
 
 WS/WSS and KCP clients can share an Owner through `flowmq_owner_poll()`.
