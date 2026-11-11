@@ -4,6 +4,7 @@
 #include "flowmq_transport.h"
 
 #include <cnet/cnet.h>
+#include <cnet/ipc.h>
 
 enum {
   FLOWMQ_CNET_HOST_CAPACITY = 256u,
@@ -40,6 +41,7 @@ int flowmq_cnet_endpoint_parse(const char *uri, bool allow_zero_port,
                                flowmq_cnet_endpoint_t *endpoint);
 int flowmq_cnet_endpoint_format(const flowmq_cnet_endpoint_t *endpoint,
                                 char *uri, size_t capacity);
+int flowmq_cnet_ipc_listener_close(cnet_ipc_listener *listener, uint32_t timeout_ms);
 int flowmq_cnet_client_config(const flowmq_io_config_t *io,
                               const flowmq_timeout_config_t *timeouts,
                               flowmq_transport_t transport, size_t connection_capacity,

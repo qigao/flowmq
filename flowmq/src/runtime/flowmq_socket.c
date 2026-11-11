@@ -224,6 +224,7 @@ struct flowmq_socket_s {
   uint64_t socket_id;
   uint64_t next_pipe_id;
   cnet_listener listener;
+  cnet_ipc_listener ipc_listener;
   cnet_tls_client tls_client;
   cnet_tls_server tls_server;
   mem_pool_t message_pool;
@@ -1539,10 +1540,27 @@ static int flowmq_socket_peer_flush(flowmq_socket_peer_t *peer) {
       !flowmq_peer_state_write_idle(&peer->state) ||
       peer->outbound_count == 0u)
     return SALTS_OK;
+  outbound = &peer->outbound[peer->outbound_read];
+  if (socket->transport == FLOWMQ_TRANSPORT_IPC) {
+    /* The queued frame already owns a contiguous encoded buffer. Keep the
+     * same write terminal accounting for socket and named-pipe backends. */
+    status = flowmq_peer_state_write_begin(&peer->state, FLOWMQ_PEER_WRITE_DATA);
+    if (status != SALTS_OK) return status;
+    status = cnet_send_buffer(&socket->client, peer->connection, outbound->buffer);
+    if (status != SALTS_OK) {
+      flowmq_peer_state_write_cancel(&peer->state);
+      return status;
+    }
+    peer->inflight_payload_size = outbound->payload_size;
+    peer->inflight_messages = outbound->message_end ? 1u : 0u;
+    flowmq_socket_outbound_release(outbound);
+    peer->outbound_read = (peer->outbound_read + 1u) % FLOWMQ_SOCKET_OUTBOUND_CAPACITY;
+    --peer->outbound_count;
+    return SALTS_OK;
+  }
   if (!flowmq_cnet_supports(socket->transport, FLOWMQ_CNET_RETAINED_SEND))
     return SALTS_ENOTSUP;
 
-  outbound = &peer->outbound[peer->outbound_read];
   if (outbound->retained != NULL) {
     const size_t limit = socket->retained_batch_messages != 0u
         ? socket->retained_batch_messages : 1u;
@@ -2635,6 +2653,9 @@ static int flowmq_socket_runtime_init(flowmq_socket_t *socket,
   int status;
   if (socket->runtime_initialized)
     return socket->transport == transport ? SALTS_OK : SALTS_ENOTSUP;
+  if (transport == FLOWMQ_TRANSPORT_IPC &&
+      (socket->peer_pool_config.max_peers != 0u || socket->reuse_port))
+    return SALTS_ENOTSUP;
   flowmq_io_config_init(&io);
   io.command_capacity = FLOWMQ_SOCKET_CNET_COMMAND_CAPACITY;
   if (transport == FLOWMQ_TRANSPORT_TCP)
@@ -3023,11 +3044,18 @@ int flowmq_close(flowmq_socket_t *socket) {
     if (status != SALTS_OK) return status;
   }
   if (socket->listener_initialized) {
-    status = cnet_listener_close(&socket->listener);
-    if (status != SALTS_OK && status != SALTS_EALREADY) return status;
-    status = cnet_listener_destroy(&socket->listener);
-    if (status != SALTS_OK) return status;
-    socket->listener_initialized = 0u;
+    if (socket->transport == FLOWMQ_TRANSPORT_IPC) {
+      status = flowmq_cnet_ipc_listener_close(&socket->ipc_listener,
+                                            FLOWMQ_SOCKET_SHUTDOWN_TIMEOUT_MS);
+      if (socket->ipc_listener.impl == NULL) socket->listener_initialized = 0u;
+      if (status != SALTS_OK) return status;
+    } else {
+      status = cnet_listener_close(&socket->listener);
+      if (status != SALTS_OK && status != SALTS_EALREADY) return status;
+      status = cnet_listener_destroy(&socket->listener);
+      if (status != SALTS_OK) return status;
+      socket->listener_initialized = 0u;
+    }
   }
   if (socket->runtime_initialized) {
     if (socket->external_backend != NULL) {
@@ -3113,6 +3141,27 @@ static int flowmq_socket_bind_common(flowmq_socket_t *socket,
   }
   status = flowmq_socket_runtime_init(socket, parts.transport);
   if (status != SALTS_OK) return status;
+  if (parts.transport == FLOWMQ_TRANSPORT_IPC) {
+    size_t events;
+    const cnet_ipc_listener_config ipc_config = {
+        .size = sizeof(ipc_config), .version = CNET_IPC_VERSION,
+        .backend = flowmq_cnet_backend(), .uri = endpoint,
+        .accept_capacity = 1u, .child_capacity = FLOWMQ_SOCKET_PEER_CAPACITY,
+        .input_buffer_bytes = FLOWMQ_SOCKET_CNET_PACKET_RECEIVE_BUFFER_BYTES,
+        .output_buffer_bytes = FLOWMQ_SOCKET_CNET_PACKET_RECEIVE_BUFFER_BYTES};
+    status = cnet_ipc_listener_init(&socket->ipc_listener, &ipc_config);
+    if (status != SALTS_OK) return status;
+    socket->listener_initialized = 1u;
+    status = cnet_ipc_listener_advance(&socket->ipc_listener, 1u, &events);
+    if (status != SALTS_OK) {
+      const int close_status = flowmq_cnet_ipc_listener_close(
+          &socket->ipc_listener, FLOWMQ_SOCKET_SHUTDOWN_TIMEOUT_MS);
+      if (socket->ipc_listener.impl == NULL) socket->listener_initialized = 0u;
+      return close_status == SALTS_OK ? status : close_status;
+    }
+    return flowmq_cnet_endpoint_format(&parts, socket->last_endpoint,
+                                      sizeof(socket->last_endpoint));
+  }
   config = (cnet_listener_config){.backend = flowmq_cnet_backend(),
                                   .host = parts.host,
                                   .port = parts.port,
@@ -3164,6 +3213,8 @@ int flowmq_connect(flowmq_socket_t *socket, const char *endpoint) {
   if (socket == NULL || socket->ctx == NULL) return SALTS_EINVAL;
   status = flowmq_cnet_endpoint_parse(endpoint, false, &parts);
   if (status != SALTS_OK) return status;
+  if (parts.transport == FLOWMQ_TRANSPORT_IPC && socket->tls_identity_policy != NULL)
+    return SALTS_EINVAL;
   if (socket->pattern.desc->routing_class == FLOWMQ_PATTERN_ROUTE_SINGLE) {
     for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
       if (flowmq_peer_state_is_used(&socket->peers[i].state))
@@ -4457,6 +4508,46 @@ static int flowmq_socket_resume_receive(flowmq_socket_peer_t *peer) {
   return flowmq_socket_rearm_receive(peer);
 }
 
+static int flowmq_socket_ipc_listener_progress(flowmq_socket_t *socket) {
+  cnet_ipc_wait_source source;
+  cnet_ipc_accepted accepted = {0};
+  flowmq_socket_peer_t *peer;
+  size_t work;
+  size_t slot = 0u;
+  bool ready;
+  int status = cnet_ipc_listener_advance(&socket->ipc_listener, 1u, &work);
+  if (status != SALTS_OK) return status;
+  status = cnet_ipc_listener_wait_sources(&socket->ipc_listener, &source, 1u,
+                                         &work, &ready);
+  if (status != SALTS_OK || !ready) return status;
+
+  /* Keep detached-ready children in CNet until FlowMQ has a free peer. */
+  while (slot < FLOWMQ_SOCKET_PEER_CAPACITY &&
+         flowmq_peer_state_is_used(&socket->peers[slot].state)) ++slot;
+  if (slot == FLOWMQ_SOCKET_PEER_CAPACITY) return SALTS_OK;
+  status = cnet_ipc_listener_accept_detached(&socket->ipc_listener, &accepted);
+  if (status == SALTS_ENOENT) return SALTS_OK;
+  if (status != SALTS_OK) return status;
+
+  peer = flowmq_socket_peer_acquire(socket);
+  if (peer == NULL) {
+    status = SALTS_ENOMEM;
+  } else {
+    const cnet_manager_attachment attachment = {
+        .observer = flowmq_socket_observer(peer), .hold_context = true};
+    status = cnet_manager_reserve(&socket->manager, &attachment, &peer->managed);
+    if (status == SALTS_OK)
+      status = cnet_manager_adopt_ipc(&socket->manager, peer->managed, &accepted,
+                                      &peer->connection);
+    if (status != SALTS_OK) flowmq_socket_peer_release(peer);
+  }
+  if (accepted.kind != CNET_IPC_RESOURCE_NONE) {
+    const int close_status = cnet_ipc_accepted_close(&accepted);
+    if (close_status != SALTS_OK) return close_status;
+  }
+  return status;
+}
+
 static int flowmq_socket_listener_progress(flowmq_socket_t *socket) {
   int status;
   if (!socket->listener_initialized) return SALTS_OK;
@@ -4468,6 +4559,8 @@ static int flowmq_socket_listener_progress(flowmq_socket_t *socket) {
   status = cnet_manager_advance(&socket->manager, FLOWMQ_SOCKET_PEER_CAPACITY, &work);
 #endif
   if (status != SALTS_OK) return status;
+  if (socket->transport == FLOWMQ_TRANSPORT_IPC)
+    return flowmq_socket_ipc_listener_progress(socket);
   if (socket->peer_pool.impl != NULL) {
     cnet_pool_snapshot pool;
     status = cnet_pool_get_snapshot(&socket->peer_pool, &pool);

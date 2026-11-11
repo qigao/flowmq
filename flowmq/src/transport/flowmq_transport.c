@@ -19,8 +19,14 @@ static int flowmq_power_of_two(size_t value) {
 }
 
 int flowmq_transport_validate(flowmq_transport_t transport) {
-  return transport == FLOWMQ_TRANSPORT_TCP || transport == FLOWMQ_TRANSPORT_TLS ? SALTS_OK
-                                                                                : SALTS_EINVAL;
+  switch (transport) {
+    case FLOWMQ_TRANSPORT_TCP:
+    case FLOWMQ_TRANSPORT_TLS:
+    case FLOWMQ_TRANSPORT_IPC:
+      return SALTS_OK;
+    default:
+      return SALTS_EINVAL;
+  }
 }
 
 void flowmq_timeouts_resolve(flowmq_timeout_config_t *timeouts, uint64_t fallback_timeout_ms) {

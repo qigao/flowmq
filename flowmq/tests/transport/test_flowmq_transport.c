@@ -9,7 +9,8 @@ spec("flowmq_transport") {
     check_equal(flowmq_transport_validate(FLOWMQ_TRANSPORT_TCP), SALTS_OK);
     check_equal(flowmq_transport_validate(FLOWMQ_TRANSPORT_TLS), SALTS_OK);
     check_equal(flowmq_transport_validate((flowmq_transport_t)0), SALTS_EINVAL);
-    check_equal(flowmq_transport_validate((flowmq_transport_t)3), SALTS_EINVAL);
+    check_equal(flowmq_transport_validate(FLOWMQ_TRANSPORT_IPC), SALTS_OK);
+    check_equal(flowmq_transport_validate((flowmq_transport_t)4), SALTS_EINVAL);
   }
 
   it("resolves operation timeouts from one explicit default") {
