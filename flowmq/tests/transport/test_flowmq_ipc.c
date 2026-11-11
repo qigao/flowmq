@@ -201,8 +201,8 @@ spec("FlowMQ local IPC transport") {
     }
 
     it("routes DEALER identities and isolates an IPC peer with exhausted credit") {
-      static const unsigned char slow[] = {0x91, 0x00, 0x73};
-      static const unsigned char fast[] = {0x92, 0x00, 0x73};
+      static const char slow[] = {'s', 'l', 'o', 'w'};
+      static const char fast[] = {'f', 'a', 's', 't'};
       static const char request[] = "req";
       static const char response[] = "credit-window";
       const size_t receive_window = sizeof(response);
