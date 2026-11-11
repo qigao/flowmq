@@ -23,6 +23,9 @@ int flowmq_transport_validate(flowmq_transport_t transport) {
     case FLOWMQ_TRANSPORT_TCP:
     case FLOWMQ_TRANSPORT_TLS:
     case FLOWMQ_TRANSPORT_IPC:
+    case FLOWMQ_TRANSPORT_WS:
+    case FLOWMQ_TRANSPORT_WSS:
+    case FLOWMQ_TRANSPORT_KCP:
       return SALTS_OK;
     default:
       return SALTS_EINVAL;

@@ -5,6 +5,15 @@
 #include <native_io_transport.h>
 #include <threads/threads.h>
 
+#if defined(_WIN32)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <netinet/in.h>
+#include <sys/socket.h>
+#endif
+
+#include <inttypes.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,77 +31,144 @@ native_io_backend_kind flowmq_cnet_backend(void) {
 #endif
 }
 
-static const char tcp_scheme[] = "tcp://";
-static const char tls_scheme[] = "tls://";
-static const char ipc_scheme[] = "ipc://";
+static const char *const schemes[] = {
+    "", "tcp://", "tls://", "ipc://", "ws://", "wss://", "kcp://"};
 
 flowmq_transport_t flowmq_cnet_uri_transport(const char *uri) {
-  if (strncmp(uri, tcp_scheme, sizeof(tcp_scheme) - 1u) == 0) return FLOWMQ_TRANSPORT_TCP;
-  if (strncmp(uri, tls_scheme, sizeof(tls_scheme) - 1u) == 0) return FLOWMQ_TRANSPORT_TLS;
-  if (strncmp(uri, ipc_scheme, sizeof(ipc_scheme) - 1u) == 0) return FLOWMQ_TRANSPORT_IPC;
+  for (unsigned i = FLOWMQ_TRANSPORT_TCP; i <= FLOWMQ_TRANSPORT_KCP; ++i) {
+    if (strncmp(uri, schemes[i], strlen(schemes[i])) == 0)
+      return (flowmq_transport_t)i;
+  }
   return 0;
+}
+
+static int flowmq_cnet_parse_number(const char *first, const char *last,
+                                   uint32_t limit, uint32_t *out) {
+  uint32_t number = 0u;
+  if (first == last) return SALTS_EINVAL;
+  for (; first != last; ++first) {
+    if (*first < '0' || *first > '9') return SALTS_EINVAL;
+    const uint32_t digit = (uint32_t)(*first - '0');
+    if (number > (limit - digit) / 10u) return SALTS_EINVAL;
+    number = number * 10u + digit;
+  }
+  *out = number;
+  return SALTS_OK;
 }
 
 int flowmq_cnet_endpoint_parse(const char *endpoint, bool allow_zero_port,
                                flowmq_cnet_endpoint_t *parts) {
-  const char *host_begin;
-  const char *host_end;
-  const char *port_begin;
-  char *port_end = NULL;
-  unsigned long port;
-  size_t host_size;
   if (endpoint == NULL || parts == NULL) return SALTS_EINVAL;
   memset(parts, 0, sizeof(*parts));
   parts->transport = flowmq_cnet_uri_transport(endpoint);
   if (parts->transport == 0) return SALTS_EINVAL;
+  const char *host = endpoint + strlen(schemes[parts->transport]);
   if (parts->transport == FLOWMQ_TRANSPORT_IPC) {
-    const char *name = endpoint + sizeof(ipc_scheme) - 1u;
-    size_t size = 0u;
-    int status;
-    while (size < sizeof(parts->host) && name[size] != '\0') ++size;
-    if (size == sizeof(parts->host)) return SALTS_EMSGSIZE;
-    status = native_io_transport_ipc_validate_name(name, size);
+    const size_t size = strlen(host);
+    if (size >= sizeof(parts->host)) return SALTS_EMSGSIZE;
+    const int status = native_io_transport_ipc_validate_name(host, size);
     if (status != SALTS_OK) return status;
-    memcpy(parts->host, name, size + 1u);
+    memcpy(parts->host, host, size + 1u);
     return SALTS_OK;
   }
-  host_begin = endpoint + sizeof(tcp_scheme) - 1u;
-  if (*host_begin == '[') {
-    host_begin++;
-    host_end = strchr(host_begin, ']');
-    if (host_end == NULL || host_end[1] != ':') return SALTS_EINVAL;
-    port_begin = host_end + 2u;
+
+  const bool websocket = flowmq_cnet_is_websocket(parts->transport);
+  const bool kcp = parts->transport == FLOWMQ_TRANSPORT_KCP;
+  const char *end = host + strcspn(host, "/?#");
+  const char *host_end;
+  const char *port;
+  const bool bracket = *host == '[';
+  if (bracket) {
+    ++host;
+    host_end = memchr(host, ']', (size_t)(end - host));
+    if (host_end == NULL || end - host_end < 2 || host_end[1] != ':')
+      return SALTS_EINVAL;
+    port = host_end + 2;
   } else {
-    host_end = strrchr(host_begin, ':');
+    host_end = memchr(host, ':', (size_t)(end - host));
     if (host_end == NULL) return SALTS_EINVAL;
-    port_begin = host_end + 1u;
+    port = host_end + 1;
   }
-  host_size = (size_t)(host_end - host_begin);
-  if (host_size == 0u || host_size >= sizeof(parts->host) || *port_begin == '\0')
+  const size_t host_size = (size_t)(host_end - host);
+  if (host_size == 0u || host_size >= sizeof(parts->host))
     return SALTS_EINVAL;
-  memcpy(parts->host, host_begin, host_size);
-  parts->host[host_size] = '\0';
-  port = strtoul(port_begin, &port_end, 10);
-  if (port_end == port_begin || *port_end != '\0' || port > 65535u ||
-      (!allow_zero_port && port == 0u))
+  for (const char *p = host; p != host_end; ++p) {
+    const unsigned char c = (unsigned char)*p;
+    if (c <= 32u || c >= 127u || c == '@' || c == '[' || c == ']')
+      return SALTS_EINVAL;
+  }
+  memcpy(parts->host, host, host_size);
+  if (bracket && native_io_transport_validate_ipv6_literal(parts->host) != SALTS_OK)
     return SALTS_EINVAL;
-  parts->port = (uint16_t)port;
+  uint32_t port_number;
+  int status = flowmq_cnet_parse_number(port, end, UINT16_MAX, &port_number);
+  if (status != SALTS_OK || (!allow_zero_port && port_number == 0u))
+    return SALTS_EINVAL;
+  parts->port = (uint16_t)port_number;
+  if (websocket) {
+    const char *path = *end == '\0' ? "/" : end;
+    const size_t size = strlen(path);
+    if (*path != '/' || size >= sizeof(parts->path)) return SALTS_EINVAL;
+    for (size_t i = 0u; i < size; ++i) {
+      const unsigned char c = (unsigned char)path[i];
+      if (c <= 32u || c >= 127u || c == '#') return SALTS_EINVAL;
+    }
+    memcpy(parts->path, path, size + 1u);
+  } else if (kcp) {
+    const char prefix[] = "?conv=";
+    if (strncmp(end, prefix, sizeof(prefix) - 1u) != 0) return SALTS_EINVAL;
+    const char *conv = end + sizeof(prefix) - 1u;
+    status = flowmq_cnet_parse_number(conv, conv + strlen(conv), UINT32_MAX,
+                                     &parts->conversation);
+    if (status != SALTS_OK || parts->conversation == 0u) return SALTS_EINVAL;
+  } else if (*end != '\0') {
+    return SALTS_EINVAL;
+  }
   return SALTS_OK;
 }
 
 int flowmq_cnet_endpoint_format(const flowmq_cnet_endpoint_t *endpoint,
                                 char *uri, size_t capacity) {
+  const char *scheme = schemes[endpoint->transport];
+  int written;
   if (endpoint->transport == FLOWMQ_TRANSPORT_IPC) {
-    const int written = snprintf(uri, capacity, "%s%s", ipc_scheme, endpoint->host);
-    return written < 0 || (size_t)written >= capacity ? SALTS_EMSGSIZE : SALTS_OK;
+    written = snprintf(uri, capacity, "%s%s", scheme, endpoint->host);
+  } else {
+    const bool bracket = strchr(endpoint->host, ':') != NULL;
+    written = snprintf(uri, capacity, bracket ? "%s[%s]:%u%s" : "%s%s:%u%s",
+                       scheme, endpoint->host, (unsigned)endpoint->port,
+                       flowmq_cnet_is_websocket(endpoint->transport) ? endpoint->path : "");
   }
-  const char *scheme = endpoint->transport == FLOWMQ_TRANSPORT_TLS
-                           ? tls_scheme : tcp_scheme;
-  const bool bracket = strchr(endpoint->host, ':') != NULL;
-  const int written = snprintf(uri, capacity,
-                               bracket ? "%s[%s]:%u" : "%s%s:%u",
-                               scheme, endpoint->host, (unsigned)endpoint->port);
   if (written < 0 || (size_t)written >= capacity) return SALTS_EMSGSIZE;
+  if (endpoint->transport == FLOWMQ_TRANSPORT_KCP) {
+    const size_t offset = (size_t)written;
+    written = snprintf(uri + offset, capacity - offset, "?conv=%" PRIu32,
+                       endpoint->conversation);
+    if (written < 0 || (size_t)written >= capacity - offset) return SALTS_EMSGSIZE;
+  }
+  return SALTS_OK;
+}
+
+int flowmq_cnet_datagram_peer(const flowmq_cnet_endpoint_t *endpoint,
+                              cnet_datagram_peer *out) {
+  struct sockaddr_storage address;
+  size_t size;
+  int status = native_io_transport_parse_numeric_address(
+      endpoint->host, endpoint->port, &address, sizeof(address), &size);
+  if (status != SALTS_OK) return status == SALTS_ENOENT ? SALTS_EINVAL : status;
+  *out = (cnet_datagram_peer){.port = endpoint->port};
+  if (address.ss_family == AF_INET) {
+    struct sockaddr_in ipv4;
+    memcpy(&ipv4, &address, sizeof(ipv4));
+    out->family = CNET_DATAGRAM_ADDRESS_IPV4;
+    memcpy(out->address, &ipv4.sin_addr, sizeof(ipv4.sin_addr));
+  } else {
+    struct sockaddr_in6 ipv6;
+    memcpy(&ipv6, &address, sizeof(ipv6));
+    out->family = CNET_DATAGRAM_ADDRESS_IPV6;
+    out->scope_id = ipv6.sin6_scope_id;
+    memcpy(out->address, &ipv6.sin6_addr, sizeof(ipv6.sin6_addr));
+  }
   return SALTS_OK;
 }
 
@@ -147,7 +223,7 @@ int flowmq_cnet_client_config(const flowmq_io_config_t *io,
   if (status == SALTS_OK)
     status = flowmq_cnet_timeout(timeouts->handshake_timeout_ms, &handshake_timeout_ms);
   if (status != SALTS_OK) return status;
-  if (transport == FLOWMQ_TRANSPORT_TLS && handshake_timeout_ms == 0u) return SALTS_EINVAL;
+  if (flowmq_cnet_uses_tls(transport) && handshake_timeout_ms == 0u) return SALTS_EINVAL;
   *out = (cnet_client_config){
       .backend = flowmq_cnet_backend(),
       .connection_capacity = connection_capacity,
@@ -160,8 +236,8 @@ int flowmq_cnet_client_config(const flowmq_io_config_t *io,
       .connect_timeout_ms = connect_timeout_ms,
       .read_timeout_ms = read_timeout_ms,
       .write_timeout_ms = write_timeout_ms,
-      .tls_io_buffer_bytes = transport == FLOWMQ_TRANSPORT_TLS ? io->tls_io_buffer_bytes : 0u,
+      .tls_io_buffer_bytes = flowmq_cnet_uses_tls(transport) ? io->tls_io_buffer_bytes : 0u,
       .tls_handshake_timeout_ms =
-          transport == FLOWMQ_TRANSPORT_TLS ? handshake_timeout_ms : 0u};
+          flowmq_cnet_uses_tls(transport) ? handshake_timeout_ms : 0u};
   return native_io_backend_kind_supported(out->backend) ? SALTS_OK : SALTS_ENOTSUP;
 }

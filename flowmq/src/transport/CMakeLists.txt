@@ -2,6 +2,8 @@ set(FLOWMQ_TRANSPORT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/flowmq_transport.c
     ${CMAKE_CURRENT_SOURCE_DIR}/cnet/flowmq_cnet_transport.c
     ${CMAKE_CURRENT_SOURCE_DIR}/cnet/flowmq_cnet_transport.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/cnet/flowmq_cnet_websocket.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/cnet/flowmq_cnet_websocket.h
     ${CMAKE_CURRENT_SOURCE_DIR}/cnet/flowmq_destination.c
     ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_socket.c
     ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_owner.c
@@ -44,7 +46,8 @@ target_include_directories(
           ${PROJECT_SOURCE_DIR}/flowmq/src/protocol/stream)
 target_link_libraries(flowmq_transport
                       PUBLIC FlowMQ::Core Salts::Core
-                      PRIVATE Salts::CNet CMeta::CMeta Salts::NativeIO)
+                      PRIVATE Salts::CNet CMeta::CMeta Salts::NativeIO
+                              llhttp::llhttp_static GmSSL::GmSSL)
 
 set(FLOWMQ_TRANSPORT_SOURCES ${FLOWMQ_TRANSPORT_SOURCES} PARENT_SCOPE)
 set(FLOWMQ_TRANSPORT_HEADERS ${FLOWMQ_TRANSPORT_HEADERS} PARENT_SCOPE)
