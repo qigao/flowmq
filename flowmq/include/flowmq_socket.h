@@ -117,11 +117,16 @@ FLOWMQ_C_API flowmq_socket_t *flowmq_socket(flowmq_ctx_t *ctx, int type);
 /** Close and release one socket on its owner thread. */
 FLOWMQ_C_API int flowmq_close(flowmq_socket_t *socket);
 
-/** Bind one TCP/TLS endpoint. Port zero selects an ephemeral listener port. */
+/** Bind one TCP, TLS or IPC endpoint. TCP/TLS port zero selects an ephemeral
+ * listener port. IPC uses ipc://name on Windows and ipc:///absolute/path on
+ * POSIX. The application owns POSIX pathname cleanup after listener close.
+ * IPC supports caller-owned progress and copied sends. Shared-owner mode,
+ * peer pools and port reuse return SALTS_ENOTSUP for IPC.
+ */
 FLOWMQ_C_API int flowmq_bind(flowmq_socket_t *socket, const char *endpoint);
 
 /**
- * Admit one asynchronous TCP/TLS connection. A terminal connection state is
+ * Admit one asynchronous TCP, TLS or IPC connection. A terminal state is
  * retried according to FLOWMQ_RECONNECT_IVL while the owner continues to call
  * flowmq_send(), flowmq_recv(), or flowmq_poll().
  */

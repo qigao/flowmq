@@ -7,7 +7,7 @@
 - `flowmq/src/protocol`：全局协议目录、FMQ/6、FMS/3、FES/1 codec 与 bounded stream decoder。
 - `flowmq/src/core`：pattern FSM、subscription、credit/HWM 与 reconnect policy。
 - `flowmq/src/runtime`：context/socket/peer 状态与 caller-driven progress。
-- `flowmq/src/transport`：CNet TCP/TLS 薄适配。
+- `flowmq/src/transport`：CNet TCP/TLS/IPC 薄适配。
 - `flowmq/src/security`：TLS principal/identity policy。
 - `flowmq/extensions/media_provider`：FMP/1 schema、header-only wire binding 与 view validator。
 - 唯一安装 target：`FlowMQ::FlowMQ`。

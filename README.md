@@ -3,7 +3,7 @@
 [![CI](https://github.com/qigao/flowmq/actions/workflows/native-sdk-release.yml/badge.svg)](https://github.com/qigao/flowmq/actions/workflows/native-sdk-release.yml)
 [![Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-**Pattern-oriented messaging for C11 over TCP and TLS.**
+**Pattern-oriented messaging for C11 over TCP, TLS, and local IPC.**
 
 FlowMQ provides a ZeroMQ-style context/socket API with its own FMQ/6 wire
 protocol. Applications own socket progress through `send`, `recv`, and `poll`,
@@ -30,6 +30,8 @@ This README describes `main`. Build each revision with its accompanying
   subscriptions.
 - **TCP and TLS** through `tcp://` and `tls://` endpoints, including certificate
   and hostname verification through CNet.
+- **Local IPC** through `ipc://name` on Windows and `ipc:///absolute/path` on
+  POSIX, using named pipes or Unix-domain sockets respectively.
 - **Bounded flow control** with message and byte high-water marks,
   receiver-driven credit, reconnect backoff, and heartbeat deadlines.
 - **Explicit memory ownership** with copying and retained-slice send APIs, plus
@@ -61,7 +63,7 @@ This README describes `main`. Build each revision with its accompanying
 | --- | --- | --- | --- |
 | [salts-base](https://github.com/qigao/salts-base) | 0.1.4 | Buffers, strings, clocks, threads, NativeIO, and TinyTest | `SALTS_BASE_ROOT` |
 | [cmeta](https://github.com/qigao/cmeta) | 0.1.4 | Metadata, Schema/Replay, and CSTL | `CMETA_ROOT` |
-| [salts-cnet](https://github.com/qigao/salts-cnet) | 0.1.4 | TCP/TLS connections, listeners, and admission policies | `SALTSCORE_ROOT` |
+| [salts-cnet](https://github.com/qigao/salts-cnet) | 0.1.5 | TCP/TLS/IPC connections, listeners, and admission policies | `SALTSCORE_ROOT` |
 | [salts-utils](https://github.com/qigao/salts-utils) | 0.1.1 | DataBind and the host `salts-idlc` generator | `SALTS_UTILS_ROOT` |
 | [vcpkg-cache](https://github.com/qigao/vcpkg-cache) | 0.1.3 | Prebuilt third-party dependency archives and Windows compiler setup | — |
 
@@ -219,7 +221,7 @@ loader.
 | `FlowMQ::FlowMQ` | Installed SDK and build tree | Complete public shared library |
 | `FlowMQ::Protocol` | Build tree | Protocol catalog and wire codecs |
 | `FlowMQ::Core` | Build tree | Pattern/session state and application core |
-| `FlowMQ::Transport` | Build tree | Socket facade and CNet TCP/TLS runtime |
+| `FlowMQ::Transport` | Build tree | Socket facade and CNet TCP/TLS/IPC runtime |
 
 ## Examples
 
@@ -255,6 +257,12 @@ its resources before terminating its context.
 | TLS routing authorization | [flowmq_tls_identity_map.h](flowmq/include/flowmq_tls_identity_map.h) | Bind verified certificate fingerprints to allowed ROUTER HELLO identities using required client certificates |
 
 ### Message ownership
+
+IPC uses caller-owned socket progress and copied sends via `flowmq_send()`.
+IPC returns `SALTS_ENOTSUP` for retained sends, shared owners, peer pools, and
+port reuse. Remote destination selection accepts TCP/TLS endpoints. On POSIX,
+bind in an application-controlled directory and remove the socket pathname
+after closing the listener. OS permissions govern access to the endpoint.
 
 `flowmq_send()` copies borrowed caller bytes. `flowmq_send_slice()` retains
 canonical slice ownership through transport completion. Keep retained backing

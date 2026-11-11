@@ -98,6 +98,13 @@ cmake_add_test(
 set_tests_properties(test_flowmq_listener_external PROPERTIES TIMEOUT 30)
 
 cmake_add_test(
+  test_flowmq_ipc
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/transport/test_flowmq_ipc.c
+  LIBS FlowMQ::Transport Salts::TinyTest
+  FOLDER "flowmq/tests/transport")
+set_tests_properties(test_flowmq_ipc PROPERTIES TIMEOUT 30)
+
+cmake_add_test(
   test_flowmq_socket
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/test_flowmq_socket.c
   LIBS FlowMQ::Transport Salts::TinyTest

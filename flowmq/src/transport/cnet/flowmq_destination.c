@@ -16,7 +16,8 @@ static flowmq_transport_t flowmq_destination_uri_scheme(const char *uri) {
     ++count;
   if (count <= 6u || count >= FLOWMQ_CNET_URI_CAPACITY)
     return 0;
-  return flowmq_cnet_uri_transport(uri);
+  const flowmq_transport_t transport = flowmq_cnet_uri_transport(uri);
+  return transport == FLOWMQ_TRANSPORT_IPC ? 0 : transport;
 }
 
 static int flowmq_destination_policy_kind(

@@ -1,6 +1,9 @@
 #include "flowmq_cnet_transport.h"
 
 #include <core/error_codes.h>
+#include <core/clock.h>
+#include <native_io_transport.h>
+#include <threads/threads.h>
 
 #include <limits.h>
 #include <stdio.h>
@@ -21,10 +24,12 @@ native_io_backend_kind flowmq_cnet_backend(void) {
 
 static const char tcp_scheme[] = "tcp://";
 static const char tls_scheme[] = "tls://";
+static const char ipc_scheme[] = "ipc://";
 
 flowmq_transport_t flowmq_cnet_uri_transport(const char *uri) {
   if (strncmp(uri, tcp_scheme, sizeof(tcp_scheme) - 1u) == 0) return FLOWMQ_TRANSPORT_TCP;
   if (strncmp(uri, tls_scheme, sizeof(tls_scheme) - 1u) == 0) return FLOWMQ_TRANSPORT_TLS;
+  if (strncmp(uri, ipc_scheme, sizeof(ipc_scheme) - 1u) == 0) return FLOWMQ_TRANSPORT_IPC;
   return 0;
 }
 
@@ -40,6 +45,17 @@ int flowmq_cnet_endpoint_parse(const char *endpoint, bool allow_zero_port,
   memset(parts, 0, sizeof(*parts));
   parts->transport = flowmq_cnet_uri_transport(endpoint);
   if (parts->transport == 0) return SALTS_EINVAL;
+  if (parts->transport == FLOWMQ_TRANSPORT_IPC) {
+    const char *name = endpoint + sizeof(ipc_scheme) - 1u;
+    size_t size = 0u;
+    int status;
+    while (size < sizeof(parts->host) && name[size] != '\0') ++size;
+    if (size == sizeof(parts->host)) return SALTS_EMSGSIZE;
+    status = native_io_transport_ipc_validate_name(name, size);
+    if (status != SALTS_OK) return status;
+    memcpy(parts->host, name, size + 1u);
+    return SALTS_OK;
+  }
   host_begin = endpoint + sizeof(tcp_scheme) - 1u;
   if (*host_begin == '[') {
     host_begin++;
@@ -66,6 +82,10 @@ int flowmq_cnet_endpoint_parse(const char *endpoint, bool allow_zero_port,
 
 int flowmq_cnet_endpoint_format(const flowmq_cnet_endpoint_t *endpoint,
                                 char *uri, size_t capacity) {
+  if (endpoint->transport == FLOWMQ_TRANSPORT_IPC) {
+    const int written = snprintf(uri, capacity, "%s%s", ipc_scheme, endpoint->host);
+    return written < 0 || (size_t)written >= capacity ? SALTS_EMSGSIZE : SALTS_OK;
+  }
   const char *scheme = endpoint->transport == FLOWMQ_TRANSPORT_TLS
                            ? tls_scheme : tcp_scheme;
   const bool bracket = strchr(endpoint->host, ':') != NULL;
@@ -74,6 +94,26 @@ int flowmq_cnet_endpoint_format(const flowmq_cnet_endpoint_t *endpoint,
                                scheme, endpoint->host, (unsigned)endpoint->port);
   if (written < 0 || (size_t)written >= capacity) return SALTS_EMSGSIZE;
   return SALTS_OK;
+}
+
+int flowmq_cnet_ipc_listener_close(cnet_ipc_listener *listener, uint32_t timeout_ms) {
+  const uint64_t started = monotonic_ms();
+  int first_error = SALTS_OK;
+  for (;;) {
+    bool stopped = false;
+    size_t events;
+    int status = cnet_ipc_listener_stop(listener, &stopped);
+    if (first_error == SALTS_OK && status != SALTS_OK && status != SALTS_EBUSY)
+      first_error = status;
+    if (stopped) {
+      const int destroy_status = cnet_ipc_listener_destroy(listener);
+      return first_error == SALTS_OK ? destroy_status : first_error;
+    }
+    if (monotonic_ms() - started >= timeout_ms) return SALTS_ETIMEDOUT;
+    status = cnet_ipc_listener_advance(listener, 1u, &events);
+    if (first_error == SALTS_OK && status != SALTS_OK) first_error = status;
+    if (events == 0u) sleep_ms(1u);
+  }
 }
 
 static int flowmq_cnet_timeout(uint64_t value, uint32_t *out) {
