@@ -67,7 +67,7 @@ This README describes `main`. Build each revision with its accompanying
 | --- | --- | --- | --- |
 | [salts-base](https://github.com/qigao/salts-base) | 0.1.5 | Buffers, strings, clocks, threads, NativeIO, and TinyTest | `SALTS_BASE_ROOT` |
 | [cmeta](https://github.com/qigao/cmeta) | 0.1.5 | Metadata, Schema/Replay, and CSTL | `CMETA_ROOT` |
-| [salts-cnet](https://github.com/qigao/salts-cnet) | 0.1.9 | Stream, WebSocket, and KCP transport engines | `SALTSCORE_ROOT` |
+| [salts-cnet](https://github.com/qigao/salts-cnet) | 0.1.10 | Stream, WebSocket, and KCP transport engines | `SALTSCORE_ROOT` |
 | [salts-utils](https://github.com/qigao/salts-utils) | 0.1.2 | DataBind and the host `salts-idlc` generator | `SALTS_UTILS_ROOT` |
 | [vcpkg-cache](https://github.com/qigao/vcpkg-cache) | 0.1.3 | Prebuilt dependencies including llhttp and GmSSL, plus Windows compiler setup | — |
 
