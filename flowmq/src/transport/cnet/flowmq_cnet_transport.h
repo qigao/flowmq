@@ -20,7 +20,8 @@ typedef struct flowmq_cnet_endpoint_s {
 typedef enum flowmq_cnet_capability_e {
   FLOWMQ_CNET_RETAINED_SEND = 1u << 0,
   FLOWMQ_CNET_OWNED_RECEIVE = 1u << 1,
-  FLOWMQ_CNET_EXTERNAL_OWNER = 1u << 2
+  FLOWMQ_CNET_EXTERNAL_OWNER = 1u << 2,
+  FLOWMQ_CNET_EXTERNAL_LISTENER = 1u << 3
 } flowmq_cnet_capability_t;
 
 static inline bool flowmq_cnet_supports(flowmq_transport_t transport,
@@ -28,9 +29,11 @@ static inline bool flowmq_cnet_supports(flowmq_transport_t transport,
   switch (transport) {
     case FLOWMQ_TRANSPORT_TCP:
       return (capability & (FLOWMQ_CNET_RETAINED_SEND | FLOWMQ_CNET_OWNED_RECEIVE |
-                            FLOWMQ_CNET_EXTERNAL_OWNER)) != 0;
+                            FLOWMQ_CNET_EXTERNAL_OWNER | FLOWMQ_CNET_EXTERNAL_LISTENER)) != 0;
     case FLOWMQ_TRANSPORT_TLS:
       return capability == FLOWMQ_CNET_RETAINED_SEND;
+    case FLOWMQ_TRANSPORT_IPC:
+      return capability == FLOWMQ_CNET_EXTERNAL_OWNER;
     default:
       return false;
   }

@@ -258,11 +258,12 @@ its resources before terminating its context.
 
 ### Message ownership
 
-IPC uses caller-owned socket progress and copied sends via `flowmq_send()`.
-IPC returns `SALTS_ENOTSUP` for retained sends, shared owners, peer pools, and
-port reuse. Remote destination selection accepts TCP/TLS endpoints. On POSIX,
-bind in an application-controlled directory and remove the socket pathname
-after closing the listener. OS permissions govern access to the endpoint.
+IPC supports copied sends via `flowmq_send()`. IPC clients can share a wait
+with TCP clients through `flowmq_owner_poll()`. IPC listeners use standalone
+socket progress. IPC returns `SALTS_ENOTSUP` for retained sends, peer pools,
+and port reuse. Remote destination selection accepts TCP/TLS endpoints. On
+POSIX, bind in an application-controlled directory and remove the socket
+pathname after closing the listener. OS permissions govern endpoint access.
 
 `flowmq_send()` copies borrowed caller bytes. `flowmq_send_slice()` retains
 canonical slice ownership through transport completion. Keep retained backing

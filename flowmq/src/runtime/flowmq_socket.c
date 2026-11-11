@@ -3127,7 +3127,7 @@ static int flowmq_socket_bind_common(flowmq_socket_t *socket,
   if (socket->external_stopping) return SALTS_ESHUTDOWN;
   status = flowmq_cnet_endpoint_parse(endpoint, true, &parts);
   if (status != SALTS_OK) return status;
-  if (external && !flowmq_cnet_supports(parts.transport, FLOWMQ_CNET_EXTERNAL_OWNER))
+  if (external && !flowmq_cnet_supports(parts.transport, FLOWMQ_CNET_EXTERNAL_LISTENER))
     return SALTS_ENOTSUP;
   if (socket->listener_initialized) return SALTS_EALREADY;
   if (socket->tls_identity_policy != NULL &&

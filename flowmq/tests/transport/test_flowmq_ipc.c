@@ -2,6 +2,7 @@
 #define _POSIX_C_SOURCE 200809L
 #endif
 
+#include "flowmq_owner.h"
 #include "flowmq_peer_pool.h"
 #include "flowmq_socket.h"
 #include "tinytest.h"
@@ -51,13 +52,12 @@ static void ipc_close_listener(flowmq_socket_t **listener, const char *endpoint,
   *bound = false;
 }
 
-static void ipc_receive(flowmq_socket_t *receiver, flowmq_socket_t *sender,
-                        const void *expected, size_t expected_size, int more) {
+static void ipc_check_payload(flowmq_socket_t *receiver, const void *expected,
+                              size_t expected_size, int more) {
   unsigned char data[64];
   size_t length;
   int received_more;
   size_t option_size = sizeof(received_more);
-  check_equal(ipc_poll(receiver, sender, FLOWMQ_POLLIN), SALTS_OK);
   check_equal(flowmq_recv(receiver, data, sizeof(data), &length,
                            FLOWMQ_DONTWAIT), SALTS_OK);
   check_equal(length, expected_size);
@@ -65,6 +65,34 @@ static void ipc_receive(flowmq_socket_t *receiver, flowmq_socket_t *sender,
   check_equal(flowmq_getsockopt(receiver, FLOWMQ_RCVMORE, &received_more,
                                &option_size), SALTS_OK);
   check_equal(received_more, more);
+}
+
+static void ipc_receive(flowmq_socket_t *receiver, flowmq_socket_t *sender,
+                        const void *expected, size_t expected_size, int more) {
+  check_equal(ipc_poll(receiver, sender, FLOWMQ_POLLIN), SALTS_OK);
+  ipc_check_payload(receiver, expected, expected_size, more);
+}
+
+static int ipc_wait_owner(flowmq_owner_t *owner, flowmq_pollitem_t *owned,
+                          flowmq_pollitem_t *peers, size_t count) {
+  const uint64_t started = monotonic_ms();
+  do {
+    bool complete = true;
+    size_t ready;
+    int status = flowmq_owner_poll(owner, owned, count, 1u, &ready);
+    if (status != SALTS_OK) return status;
+    status = flowmq_poll(peers, count, 0u, &ready);
+    if (status != SALTS_OK) return status;
+    for (size_t lane = 0u; lane < count; ++lane) {
+      if ((owned[lane].revents | peers[lane].revents) & FLOWMQ_POLLERR)
+        return SALTS_EIO;
+      complete = complete &&
+          (owned[lane].revents & owned[lane].events) == owned[lane].events &&
+          (peers[lane].revents & peers[lane].events) == peers[lane].events;
+    }
+    if (complete) return SALTS_OK;
+  } while (monotonic_ms() - started < 5000u);
+  return SALTS_ETIMEDOUT;
 }
 
 static int ipc_wait_retired(flowmq_socket_t *router, const char *identity,
@@ -87,7 +115,8 @@ static int ipc_wait_retired(flowmq_socket_t *router, const char *identity,
 spec("FlowMQ local IPC transport") {
   group("native IPC") {
     static flowmq_ctx_t *ctx;
-    static flowmq_socket_t *server, *client, *neighbor;
+    static flowmq_owner_t *owner;
+    static flowmq_socket_t *server, *client, *neighbor, *tcp_listener;
     static mem_slice_t held;
     static char *directory;
     static char endpoint[256];
@@ -100,6 +129,8 @@ spec("FlowMQ local IPC transport") {
       client = NULL;
       server = NULL;
       neighbor = NULL;
+      owner = NULL;
+      tcp_listener = NULL;
       directory = NULL;
       held = (mem_slice_t){0};
       ctx = flowmq_ctx_new();
@@ -119,8 +150,15 @@ spec("FlowMQ local IPC transport") {
 
     after_each() {
       mem_slice_release(&held);
-      if (neighbor != NULL) check_equal(flowmq_close(neighbor), SALTS_OK);
-      if (client != NULL) check_equal(flowmq_close(client), SALTS_OK);
+      if (owner != NULL) {
+        if (neighbor != NULL) check_equal(flowmq_owner_close_socket(owner, neighbor), SALTS_OK);
+        if (client != NULL) check_equal(flowmq_owner_close_socket(owner, client), SALTS_OK);
+        check_equal(flowmq_owner_term(owner), SALTS_OK);
+      } else {
+        if (neighbor != NULL) check_equal(flowmq_close(neighbor), SALTS_OK);
+        if (client != NULL) check_equal(flowmq_close(client), SALTS_OK);
+      }
+      if (tcp_listener != NULL) check_equal(flowmq_close(tcp_listener), SALTS_OK);
       ipc_close_listener(&server, endpoint, &bound);
       if (directory != NULL) {
         check_equal(tt_remove_tree(directory), 0);
@@ -434,6 +472,66 @@ spec("FlowMQ local IPC transport") {
         client = NULL;
         ipc_close_listener(&server, endpoint, &bound);
       }
+    }
+
+    it("routes IPC and TCP dials on one Owner and drains IPC close beside live TCP") {
+      static const char requests[][16] = {"ipc-request", "tcp-request"};
+      static const char replies[][16] = {"ipc-reply", "tcp-reply"};
+      static const char after_close[] = "tcp-during-close";
+      static const unsigned char pending[128u * 1024u] = {0xa5};
+      flowmq_owner_config_t config = FLOWMQ_OWNER_CONFIG_INIT;
+      char tcp_endpoint[128];
+      size_t endpoint_size, ready;
+
+      config.socket_capacity = 2u;
+      owner = flowmq_owner_new(ctx, &config);
+      check_not_null(owner);
+      client = flowmq_owner_socket(owner, FLOWMQ_PAIR);
+      neighbor = flowmq_owner_socket(owner, FLOWMQ_PAIR);
+      server = flowmq_socket(ctx, FLOWMQ_PAIR);
+      tcp_listener = flowmq_socket(ctx, FLOWMQ_PAIR);
+      check_not_null(client);
+      check_not_null(neighbor);
+      check_not_null(server);
+      check_not_null(tcp_listener);
+      check_equal(flowmq_bind(client, endpoint), SALTS_ENOTSUP);
+      ipc_bind(server, endpoint, &bound);
+      check_equal(flowmq_bind(tcp_listener, "tcp://127.0.0.1:0"), SALTS_OK);
+      check_equal(flowmq_last_endpoint(tcp_listener, tcp_endpoint,
+                                       sizeof(tcp_endpoint), &endpoint_size), SALTS_OK);
+      check_equal(flowmq_connect(client, endpoint), SALTS_OK);
+      check_equal(flowmq_connect(neighbor, tcp_endpoint), SALTS_OK);
+
+      flowmq_pollitem_t owned[] = {
+          {.socket = client, .events = FLOWMQ_POLLOUT},
+          {.socket = neighbor, .events = FLOWMQ_POLLOUT}};
+      flowmq_pollitem_t peers[] = {{.socket = server}, {.socket = tcp_listener}};
+      check_equal(flowmq_poll(owned, 1u, 0u, &ready), SALTS_ENOTSUP);
+      check_equal(ipc_wait_owner(owner, owned, peers, 2u), SALTS_OK);
+      for (size_t lane = 0u; lane < 2u; ++lane) {
+        check_equal(flowmq_send(owned[lane].socket, requests[lane],
+                                 sizeof(requests[lane]), FLOWMQ_DONTWAIT), SALTS_OK);
+        owned[lane].events = 0;
+        peers[lane].events = FLOWMQ_POLLIN;
+      }
+      check_equal(ipc_wait_owner(owner, owned, peers, 2u), SALTS_OK);
+      for (size_t lane = 0u; lane < 2u; ++lane) {
+        ipc_check_payload(peers[lane].socket, requests[lane], sizeof(requests[lane]), 0);
+        check_equal(flowmq_send(peers[lane].socket, replies[lane],
+                                 sizeof(replies[lane]), FLOWMQ_DONTWAIT), SALTS_OK);
+        owned[lane].events = FLOWMQ_POLLIN;
+        peers[lane].events = 0;
+      }
+      check_equal(ipc_wait_owner(owner, owned, peers, 2u), SALTS_OK);
+      for (size_t lane = 0u; lane < 2u; ++lane)
+        ipc_check_payload(owned[lane].socket, replies[lane], sizeof(replies[lane]), 0);
+
+      check_equal(flowmq_send(client, pending, sizeof(pending), FLOWMQ_DONTWAIT), SALTS_OK);
+      check_equal(flowmq_send(tcp_listener, after_close, sizeof(after_close), FLOWMQ_DONTWAIT), SALTS_OK);
+      check_equal(flowmq_owner_close_socket(owner, client), SALTS_OK);
+      client = NULL;
+      check_equal(ipc_wait_owner(owner, owned + 1u, peers + 1u, 1u), SALTS_OK);
+      ipc_check_payload(neighbor, after_close, sizeof(after_close), 0);
     }
 
 #if !defined(_WIN32)
