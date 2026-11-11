@@ -8,13 +8,16 @@
 
 enum {
   FLOWMQ_CNET_HOST_CAPACITY = 256u,
-  FLOWMQ_CNET_URI_CAPACITY = 320u
+  FLOWMQ_CNET_URI_CAPACITY = 320u,
+  FLOWMQ_CNET_WS_PATH_CAPACITY = 256u
 };
 
 typedef struct flowmq_cnet_endpoint_s {
   flowmq_transport_t transport;
   char host[FLOWMQ_CNET_HOST_CAPACITY];
   uint16_t port;
+  uint32_t conversation;
+  char path[FLOWMQ_CNET_WS_PATH_CAPACITY];
 } flowmq_cnet_endpoint_t;
 
 typedef enum flowmq_cnet_capability_e {
@@ -40,6 +43,16 @@ static inline bool flowmq_cnet_supports(flowmq_transport_t transport,
   }
 }
 
+static inline bool flowmq_cnet_is_websocket(flowmq_transport_t transport) {
+  return transport == FLOWMQ_TRANSPORT_WS || transport == FLOWMQ_TRANSPORT_WSS;
+}
+
+static inline bool flowmq_cnet_uses_tls(flowmq_transport_t transport) {
+  return transport == FLOWMQ_TRANSPORT_TLS || transport == FLOWMQ_TRANSPORT_WSS;
+}
+
+int flowmq_cnet_datagram_peer(const flowmq_cnet_endpoint_t *endpoint,
+                              cnet_datagram_peer *out);
 flowmq_transport_t flowmq_cnet_uri_transport(const char *uri);
 int flowmq_cnet_endpoint_parse(const char *uri, bool allow_zero_port,
                                flowmq_cnet_endpoint_t *endpoint);

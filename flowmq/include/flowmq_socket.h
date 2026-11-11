@@ -117,18 +117,24 @@ FLOWMQ_C_API flowmq_socket_t *flowmq_socket(flowmq_ctx_t *ctx, int type);
 /** Close and release one socket on its owner thread. */
 FLOWMQ_C_API int flowmq_close(flowmq_socket_t *socket);
 
-/** Bind one TCP, TLS or IPC endpoint. TCP/TLS port zero selects an ephemeral
- * listener port. IPC uses ipc://name on Windows and ipc:///absolute/path on
- * POSIX. The application owns POSIX pathname cleanup after listener close.
- * IPC listeners use standalone progress and copied sends. Shared-owner bind,
- * peer pools and port reuse return SALTS_ENOTSUP for IPC listeners.
+/** Bind one TCP, TLS, IPC, WS, WSS or KCP endpoint.
+ * For IP endpoints, port zero selects an ephemeral listener port.
+ * IPC uses ipc://name on Windows and ipc:///absolute/path on POSIX.
+ * The application owns POSIX pathname cleanup after listener close.
+ * WS/WSS uses ws[s]://host:port/path and the fmq.v6 subprotocol.
+ * KCP uses kcp://numeric-address:port?conv=nonzero-uint32 in plain mode.
+ * IPC, WS/WSS and KCP listeners use standalone progress and copied sends.
+ * Shared-owner bind and peer pools return SALTS_ENOTSUP for these transports.
+ * Port reuse also returns SALTS_ENOTSUP for IPC listeners.
  */
 FLOWMQ_C_API int flowmq_bind(flowmq_socket_t *socket, const char *endpoint);
 
 /**
- * Admit one asynchronous TCP, TLS or IPC connection. TCP and IPC can share
- * an explicit owner lane. Terminal states retry according to FLOWMQ_RECONNECT_IVL
- * while the socket continues to receive progress from its configured owner.
+ * Admit one asynchronous connection to an endpoint supported by flowmq_bind().
+ * TCP and IPC can share an explicit owner lane. WS/WSS and KCP use standalone
+ * progress and copied sends. KCP limits each message part to 64 KiB.
+ * Terminal states retry according to FLOWMQ_RECONNECT_IVL while the socket
+ * continues to receive progress from its configured owner.
  */
 FLOWMQ_C_API int flowmq_connect(flowmq_socket_t *socket, const char *endpoint);
 

@@ -117,7 +117,8 @@ target_include_directories(
           ${CMAKE_CURRENT_SOURCE_DIR}/flowmq/src/transport/cnet)
 target_link_libraries(flowmq
                       PUBLIC Salts::Core Salts::DataBind
-                      PRIVATE CMeta::CSTL CMeta::CMeta Salts::CNet Salts::NativeIO)
+                      PRIVATE CMeta::CSTL CMeta::CMeta Salts::CNet Salts::NativeIO
+                              llhttp::llhttp_static GmSSL::GmSSL)
 if(BUILD_TESTS)
   get_target_property(_flowmq_runtime_links flowmq LINK_LIBRARIES)
   foreach(_flowmq_frontend_target IN ITEMS

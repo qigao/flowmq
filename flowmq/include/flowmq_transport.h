@@ -15,7 +15,10 @@ extern "C" {
 typedef enum flowmq_transport_e {
   FLOWMQ_TRANSPORT_TCP = 1,
   FLOWMQ_TRANSPORT_TLS = 2,
-  FLOWMQ_TRANSPORT_IPC = 3
+  FLOWMQ_TRANSPORT_IPC = 3,
+  FLOWMQ_TRANSPORT_WS = 4,
+  FLOWMQ_TRANSPORT_WSS = 5,
+  FLOWMQ_TRANSPORT_KCP = 6
 } flowmq_transport_t;
 
 typedef enum flowmq_timeout_flag_e {

@@ -3,7 +3,7 @@
 [![CI](https://github.com/qigao/flowmq/actions/workflows/native-sdk-release.yml/badge.svg)](https://github.com/qigao/flowmq/actions/workflows/native-sdk-release.yml)
 [![Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-**Pattern-oriented messaging for C11 over TCP, TLS, and local IPC.**
+**Pattern-oriented messaging for C11 over TCP, TLS, IPC, WebSocket, and KCP.**
 
 FlowMQ provides a ZeroMQ-style context/socket API with its own FMQ/6 wire
 protocol. Applications own socket progress through `send`, `recv`, and `poll`,
@@ -32,6 +32,10 @@ This README describes `main`. Build each revision with its accompanying
   and hostname verification through CNet.
 - **Local IPC** through `ipc://name` on Windows and `ipc:///absolute/path` on
   POSIX, using named pipes or Unix-domain sockets respectively.
+- **WebSocket** through `ws://host:port/path` or `wss://host:port/path`, with
+  one binary FMQ/6 frame per WebSocket message.
+- **KCP** through `kcp://address:port?conv=42`, using reliable ordered messages
+  over UDP with an explicit conversation ID.
 - **Bounded flow control** with message and byte high-water marks,
   receiver-driven credit, reconnect backoff, and heartbeat deadlines.
 - **Explicit memory ownership** with copying and retained-slice send APIs, plus
@@ -63,9 +67,9 @@ This README describes `main`. Build each revision with its accompanying
 | --- | --- | --- | --- |
 | [salts-base](https://github.com/qigao/salts-base) | 0.1.5 | Buffers, strings, clocks, threads, NativeIO, and TinyTest | `SALTS_BASE_ROOT` |
 | [cmeta](https://github.com/qigao/cmeta) | 0.1.5 | Metadata, Schema/Replay, and CSTL | `CMETA_ROOT` |
-| [salts-cnet](https://github.com/qigao/salts-cnet) | 0.1.7 | TCP/TLS/IPC connections, listeners, and admission policies | `SALTSCORE_ROOT` |
+| [salts-cnet](https://github.com/qigao/salts-cnet) | 0.1.7 | Stream, WebSocket, and KCP transport engines | `SALTSCORE_ROOT` |
 | [salts-utils](https://github.com/qigao/salts-utils) | 0.1.2 | DataBind and the host `salts-idlc` generator | `SALTS_UTILS_ROOT` |
-| [vcpkg-cache](https://github.com/qigao/vcpkg-cache) | 0.1.3 | Prebuilt third-party dependency archives and Windows compiler setup | — |
+| [vcpkg-cache](https://github.com/qigao/vcpkg-cache) | 0.1.3 | Prebuilt dependencies including llhttp and GmSSL, plus Windows compiler setup | — |
 
 The restore script downloads the pinned release archives with curl and checks
 their SHA-256 digests. The salts-cnet SDK publishes the `SaltsCore` CMake package
@@ -221,7 +225,7 @@ loader.
 | `FlowMQ::FlowMQ` | Installed SDK and build tree | Complete public shared library |
 | `FlowMQ::Protocol` | Build tree | Protocol catalog and wire codecs |
 | `FlowMQ::Core` | Build tree | Pattern/session state and application core |
-| `FlowMQ::Transport` | Build tree | Socket facade and CNet TCP/TLS/IPC runtime |
+| `FlowMQ::Transport` | Build tree | Socket facade and CNet transport adapters |
 
 ## Examples
 
@@ -255,6 +259,28 @@ its resources before terminating its context.
 | Peer admission limits | [flowmq_peer_pool.h](flowmq/include/flowmq_peer_pool.h) | Enable bounded connecting/ready peer capacity before starting a socket |
 | Remote endpoint selection | [flowmq_destination.h](flowmq/include/flowmq_destination.h) | Choose an endpoint from a caller-owned snapshot before connecting |
 | TLS routing authorization | [flowmq_tls_identity_map.h](flowmq/include/flowmq_tls_identity_map.h) | Bind verified certificate fingerprints to allowed ROUTER HELLO identities using required client certificates |
+
+### WebSocket and KCP
+
+| Transport | Endpoint example | Limits and security |
+| --- | --- | --- |
+| WS | `ws://127.0.0.1:8080/fmq` | HTTP/1.1 Upgrade with `fmq.v6`; 1 MiB per FMQ part |
+| WSS | `wss://broker.example:443/fmq` | WS over verified CNet TLS; uses the existing CA, certificate, and server-name options |
+| KCP | `kcp://127.0.0.1:9000?conv=42` | Numeric IPv4 or bracketed IPv6, matching nonzero 32-bit conversation ID, 64 KiB per FMQ part |
+
+WS/WSS validates the requested resource (including the query), limits Upgrade
+headers to 8 KiB, and applies a one-second Upgrade deadline. CNet handles
+WebSocket framing, masking, fragmentation, and control frames. WSS also
+supports the existing required client-certificate and ROUTER identity policies.
+
+KCP currently uses plain sessions. Conversation IDs select a session and
+provide no encryption or authentication. Use the FMQ heartbeat options when
+idle peer expiry is required. KCP send completion follows acknowledgement of
+the logical message by KCP, while `flowmq_send()` reports local admission.
+
+WS/WSS and KCP run with standalone `flowmq_poll()` and copied
+`flowmq_send()`. Shared Owner, peer pools, and retained sends return
+`SALTS_ENOTSUP`. TCP, TLS, and IPC keep their existing capabilities.
 
 ### Message ownership
 
