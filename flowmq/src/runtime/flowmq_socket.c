@@ -2950,7 +2950,7 @@ static int flowmq_socket_packet_init(flowmq_socket_t *socket,
   config.datagram.completion_batch_capacity = 32u;
   config.datagram.max_datagram_bytes = CNET_KCP_DEFAULT_MTU;
   config.datagram.receive_buffer_bytes = CNET_KCP_DEFAULT_MTU;
-  config.datagram.reuse_port = socket->reuse_port;
+  config.datagram.reuse_port = bind ? socket->reuse_port : 0;
   config.observer = (cnet_packet_observer){
       .on_admit = bind ? flowmq_socket_packet_admit : NULL,
       .on_state = flowmq_socket_packet_state,

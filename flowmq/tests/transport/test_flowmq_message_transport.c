@@ -68,6 +68,11 @@ static void round_trip(const char *uri, bool wss, bool kcp) {
     check_equal(flowmq_setsockopt(client, FLOWMQ_TLS_CA_FILE, ca, strlen(ca)), SALTS_OK);
     check_equal(flowmq_setsockopt(client, FLOWMQ_TLS_SERVER_NAME, "localhost", 9u), SALTS_OK);
   }
+  if (kcp) {
+    const int reuse_port = 1;
+    check_equal(flowmq_setsockopt(client, FLOWMQ_REUSE_PORT, &reuse_port,
+                                 sizeof(reuse_port)), SALTS_OK);
+  }
   check_equal(flowmq_bind(server, uri), SALTS_OK);
   check_equal(flowmq_last_endpoint(server, endpoint, sizeof(endpoint), &endpoint_size),
               SALTS_OK);
