@@ -114,6 +114,13 @@ cmake_add_test(
 set_tests_properties(test_flowmq_message_transport PROPERTIES TIMEOUT 30)
 
 cmake_add_test(
+  test_flowmq_kcp_impairment
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/transport/test_flowmq_kcp_impairment.c
+  LIBS FlowMQ::Transport Salts::CNet Salts::NativeIO Salts::TinyTest
+  FOLDER "flowmq/tests/transport")
+set_tests_properties(test_flowmq_kcp_impairment PROPERTIES TIMEOUT 30)
+
+cmake_add_test(
   test_flowmq_socket
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/test_flowmq_socket.c
   LIBS FlowMQ::Transport Salts::TinyTest
@@ -247,6 +254,7 @@ set(FLOWMQ_CORE_TESTS
 set(FLOWMQ_TRANSPORT_TESTS
     test_flowmq_transport
     test_flowmq_message_transport
+    test_flowmq_kcp_impairment
     test_flowmq_listener_external
     test_flowmq_socket
     test_flowmq_destination
