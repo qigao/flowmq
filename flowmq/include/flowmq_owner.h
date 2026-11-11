@@ -40,9 +40,9 @@ flowmq_owner_new(flowmq_ctx_t *ctx, const flowmq_owner_config_t *config);
 /**
  * Creates one socket permanently attached to this owner lane.
  *
- * The returned socket uses the ordinary flowmq_send/recv APIs but its network
- * progress is driven by flowmq_owner_poll(), not flowmq_poll(). Listener bind
- * is intentionally not part of the first owner-lane contract.
+ * Use flowmq_connect() with a TCP or IPC endpoint and the ordinary send/recv
+ * APIs. Drive transport progress with flowmq_owner_poll(). flowmq_bind()
+ * returns SALTS_ENOTSUP for sockets created by this API.
  * Use FLOWMQ_DONTWAIT for send/recv (including slice APIs), and owner_poll to
  * wait for progress before retrying busy/full operations. Without DONTWAIT an
  * immediately satisfiable operation may succeed, but an initialized owner
