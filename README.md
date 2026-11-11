@@ -34,8 +34,8 @@ This README describes `main`. Build each revision with its accompanying
   POSIX, using named pipes or Unix-domain sockets respectively.
 - **WebSocket** through `ws://host:port/path` or `wss://host:port/path`, with
   one binary FMQ/6 frame per WebSocket message.
-- **KCP** through `kcp://address:port?conv=42`, using reliable ordered messages
-  over UDP with an explicit conversation ID.
+- **KCP** with reliable ordered messages over UDP, using an explicit
+  conversation ID or CNet pre-shared-key authentication.
 - **Bounded flow control** with message and byte high-water marks,
   receiver-driven credit, reconnect backoff, and heartbeat deadlines.
 - **Explicit memory ownership** with copying and retained-slice send APIs, plus
@@ -266,7 +266,8 @@ its resources before terminating its context.
 | --- | --- | --- |
 | WS | `ws://127.0.0.1:8080/fmq` | HTTP/1.1 Upgrade with `fmq.v6`; 1 MiB per FMQ part |
 | WSS | `wss://broker.example:443/fmq` | WS over verified CNet TLS; uses the existing CA, certificate, and server-name options |
-| KCP | `kcp://127.0.0.1:9000?conv=42` | Numeric IPv4 or bracketed IPv6, matching nonzero 32-bit conversation ID, 64 KiB per FMQ part |
+| Plain KCP | `kcp://127.0.0.1:9000?conv=42` | Matching nonzero 32-bit conversation ID, 64 KiB per FMQ part |
+| Authenticated KCP | `kcp://127.0.0.1:9000?auth=psk` | Matching 32-byte PSK, CNet-derived conversation ID, 64 KiB per FMQ part |
 
 FlowMQ parses the HTTP/1.1 Upgrade with llhttp and computes the
 `Sec-WebSocket-Accept` value with GmSSL SHA-1. It validates the requested
@@ -278,8 +279,18 @@ WSS supports required client certificates and certificate-to-HELLO
 identity policies for ROUTER sockets. A ROUTER with an identity policy
 sends SETTINGS only after it authorizes the peer's HELLO identity.
 
-KCP currently uses plain sessions. Conversation IDs select a session and
-provide no encryption or authentication. When both FMQ heartbeat interval
+Both KCP modes accept numeric IPv4 and bracketed IPv6 endpoints. Plain KCP
+uses an unencrypted UDP transport. For authenticated KCP, provision the same
+random 32-byte key on both sockets using `FLOWMQ_KCP_PSK` before bind or
+connect. This write-only option copies the key and restricts the socket to
+`?auth=psk` endpoints. The endpoint URI carries only the mode.
+
+CNet authenticates key possession and encrypts KCP records. FlowMQ starts
+HELLO/SETTINGS after CNet establishes the session. The five-second handshake
+deadline covers both steps. A holder of the shared key can claim any FMQ
+HELLO identity. Certificate-to-HELLO policies apply to TLS and WSS.
+
+When both FMQ heartbeat interval
 and timeout are enabled, a KCP peer expires after their sum without an FMQ
 frame, including when an unacknowledged write occupies the send lane.
 With reconnect enabled, a client opens a fresh KCP session after expiry,

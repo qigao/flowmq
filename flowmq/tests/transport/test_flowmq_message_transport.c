@@ -96,6 +96,12 @@ static void tls_files_free(tls_files *files) {
   free(files->key);
 }
 
+static void set_test_kcp_psk(flowmq_socket_t *socket, unsigned char value) {
+  /* Test-only keys for loopback peers. */
+  const unsigned char key[FLOWMQ_KCP_PSK_BYTES] = {value};
+  check_equal(flowmq_setsockopt(socket, FLOWMQ_KCP_PSK, key, sizeof(key)), SALTS_OK);
+}
+
 static void round_trip(const char *uri, flowmq_transport_t transport, bool shared) {
   const bool kcp = transport == FLOWMQ_TRANSPORT_KCP;
   flowmq_ctx_t *ctx = flowmq_ctx_new();
@@ -121,6 +127,10 @@ static void round_trip(const char *uri, flowmq_transport_t transport, bool share
     const int reuse_port = 1;
     check_equal(flowmq_setsockopt(client, FLOWMQ_REUSE_PORT, &reuse_port,
                                  sizeof(reuse_port)), SALTS_OK);
+    if (strstr(uri, "?auth=psk") != NULL) {
+      set_test_kcp_psk(server, 1u);
+      set_test_kcp_psk(client, 1u);
+    }
   }
   if (shared) {
     check_equal(flowmq_socket_internal_bind_external(server, uri), SALTS_OK);
@@ -191,6 +201,7 @@ typedef struct pattern_fixture {
   flowmq_owner_t *owner;
   tls_files tls;
   bool kcp;
+  bool kcp_psk;
 } pattern_fixture;
 
 static void pattern_fixture_init(pattern_fixture *fixture, const char *uri, bool shared) {
@@ -201,6 +212,7 @@ static void pattern_fixture_init(pattern_fixture *fixture, const char *uri, bool
     check_not_null(fixture->owner);
   }
   fixture->kcp = strncmp(uri, "kcp://", sizeof("kcp://") - 1u) == 0;
+  fixture->kcp_psk = fixture->kcp && strstr(uri, "?auth=psk") != NULL;
   if (strncmp(uri, "wss://", sizeof("wss://") - 1u) == 0)
     tls_files_init(&fixture->tls);
 }
@@ -214,6 +226,7 @@ static flowmq_socket_t *pattern_socket(pattern_fixture *fixture, int type, bool 
     if (bind) tls_server_configure(socket, &fixture->tls);
     else tls_client_configure(socket, &fixture->tls);
   }
+  if (fixture->kcp_psk) set_test_kcp_psk(socket, 1u);
   return socket;
 }
 
@@ -547,6 +560,59 @@ static void check_wrong_route(const char *bind_uri, const char *correct,
   check_equal(flowmq_ctx_term(ctx), SALTS_OK);
 }
 
+static void reject_kcp_authentication(bool shared) {
+  const char uri[] = "kcp://127.0.0.1:0?auth=psk";
+  const char psk_query[] = "?auth=psk";
+  const int reconnect = -1;
+  pattern_fixture fixture = {0};
+  char endpoint[320u], plain_endpoint[320u];
+  size_t endpoint_size, ready;
+  pattern_fixture_init(&fixture, uri, shared);
+  flowmq_socket_t *server = pattern_socket(&fixture, FLOWMQ_ROUTER, true);
+  flowmq_socket_t *bad = pattern_socket(&fixture, FLOWMQ_DEALER, false);
+  set_test_kcp_psk(bad, 2u);
+  check_equal(flowmq_setsockopt(bad, FLOWMQ_RECONNECT_IVL, &reconnect,
+                               sizeof(reconnect)), SALTS_OK);
+  pattern_bind(&fixture, server, uri);
+  check_equal(flowmq_last_endpoint(server, endpoint, sizeof(endpoint), &endpoint_size),
+              SALTS_OK);
+  check_true(endpoint_size > sizeof(psk_query));
+  const size_t query_offset = endpoint_size - sizeof(psk_query);
+  check_equal(strcmp(endpoint + query_offset, psk_query), 0);
+  memcpy(plain_endpoint, endpoint, query_offset);
+  memcpy(plain_endpoint + query_offset, "?conv=42", sizeof("?conv=42"));
+
+  flowmq_socket_t *plain = shared ? flowmq_owner_socket(fixture.owner, FLOWMQ_DEALER)
+                                   : flowmq_socket(fixture.ctx, FLOWMQ_DEALER);
+  check_not_null(plain);
+  check_equal(flowmq_connect(bad, endpoint), SALTS_OK);
+  check_equal(flowmq_connect(bad, endpoint), SALTS_EALREADY);
+  check_equal(flowmq_connect(plain, plain_endpoint), SALTS_OK);
+  flowmq_pollitem_t items[] = {
+      {.socket = server, .events = FLOWMQ_POLLIN | FLOWMQ_POLLOUT},
+      {.socket = bad, .events = FLOWMQ_POLLOUT},
+      {.socket = plain, .events = FLOWMQ_POLLOUT}};
+  /* In the shared case also cross the bounded authentication deadline and
+   * prove the old CNet handle no longer owns this destination. */
+  check_equal(shared ? flowmq_owner_poll(fixture.owner, items, 3u, 5300u, &ready)
+                     : flowmq_poll(items, 3u, 300u, &ready), SALTS_OK);
+  check_equal(ready, 0u);
+  if (shared) check_equal(flowmq_connect(bad, endpoint), SALTS_OK);
+  pattern_close(&fixture, bad);
+  pattern_close(&fixture, plain);
+
+  flowmq_socket_t *good = pattern_socket(&fixture, FLOWMQ_DEALER, false);
+  check_equal(flowmq_setsockopt(good, FLOWMQ_IDENTITY, "psk", 3u), SALTS_OK);
+  check_equal(flowmq_connect(good, endpoint), SALTS_OK);
+  check_equal(wait_for(fixture.owner, good, server, FLOWMQ_POLLOUT), SALTS_OK);
+  check_equal(flowmq_send(good, "authenticated", 13u, FLOWMQ_DONTWAIT), SALTS_OK);
+  receive_part(fixture.owner, server, good, "psk", 3u, 1);
+  receive_part(fixture.owner, server, good, "authenticated", 13u, 0);
+  pattern_close(&fixture, good);
+  pattern_close(&fixture, server);
+  pattern_fixture_term(&fixture);
+}
+
 spec("FlowMQ message transports") {
   it("preserves request, routing and subscription semantics over WS") {
     messaging_patterns("ws://127.0.0.1:0/fmq", false);
@@ -561,6 +627,16 @@ spec("FlowMQ message transports") {
   it("preserves request, routing and subscription semantics over KCP") {
     messaging_patterns("kcp://127.0.0.1:0?conv=4281", false);
     messaging_patterns("kcp://127.0.0.1:0?conv=4281", true);
+  }
+
+  it("preserves request, routing and subscription recovery over authenticated KCP") {
+    messaging_patterns("kcp://127.0.0.1:0?auth=psk", false);
+    messaging_patterns("kcp://127.0.0.1:0?auth=psk", true);
+  }
+
+  it("rejects plain and wrong-key KCP peers and retires an incomplete handshake") {
+    reject_kcp_authentication(false);
+    reject_kcp_authentication(true);
   }
 
   it("expires a KCP peer with DATA waiting for an acknowledgement") {
@@ -644,6 +720,10 @@ spec("FlowMQ message transports") {
     round_trip("kcp://127.0.0.1:0?conv=4281", FLOWMQ_TRANSPORT_KCP, true);
   }
 
+  it("carries the full KCP part size with PSK overhead on a shared Owner") {
+    round_trip("kcp://127.0.0.1:0?auth=psk", FLOWMQ_TRANSPORT_KCP, true);
+  }
+
   it("rejects a different WebSocket resource and leaves the listener available") {
     check_wrong_route("ws://127.0.0.1:0/fmq", "/fmq", "/other");
   }
@@ -661,6 +741,28 @@ spec("FlowMQ message transports") {
     check_equal(flowmq_connect(socket, "kcp://127.0.0.1:1?conv=4294967296"), SALTS_EINVAL);
     check_equal(flowmq_connect(socket, "ws://127.0.0.1:1/fmq\r\n"), SALTS_EINVAL);
     check_equal(flowmq_bind(socket, "ws://127.0.0.1:0/fmq#fragment"), SALTS_EINVAL);
+    check_equal(flowmq_close(socket), SALTS_OK);
+    check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+  }
+
+  it("requires a write-only nonzero key and an explicit authenticated endpoint") {
+    flowmq_ctx_t *ctx = flowmq_ctx_new();
+    flowmq_socket_t *socket = flowmq_socket(ctx, FLOWMQ_PAIR);
+    const unsigned char zero[FLOWMQ_KCP_PSK_BYTES] = {0};
+    size_t size = sizeof(zero);
+    unsigned char value[FLOWMQ_KCP_PSK_BYTES];
+    check_not_null(socket);
+    check_equal(flowmq_bind(socket, "kcp://127.0.0.1:0?auth=psk"), SALTS_EINVAL);
+    check_equal(flowmq_connect(socket, "kcp://127.0.0.1:1?auth=psk"), SALTS_EINVAL);
+    check_equal(flowmq_setsockopt(socket, FLOWMQ_KCP_PSK, zero, size - 1u), SALTS_EINVAL);
+    check_equal(flowmq_setsockopt(socket, FLOWMQ_KCP_PSK, zero, size), SALTS_EINVAL);
+    set_test_kcp_psk(socket, 1u);
+    check_equal(flowmq_getsockopt(socket, FLOWMQ_KCP_PSK, value, &size), SALTS_ENOTSUP);
+    check_equal(flowmq_connect(socket, "kcp://127.0.0.1:1?conv=42"), SALTS_EINVAL);
+    check_equal(flowmq_bind(socket, "tcp://127.0.0.1:0"), SALTS_EINVAL);
+    check_equal(flowmq_bind(socket, "kcp://127.0.0.1:0?auth=psk&conv=42"), SALTS_EINVAL);
+    check_equal(flowmq_bind(socket, "kcp://127.0.0.1:0?auth=psk"), SALTS_OK);
+    check_equal(flowmq_setsockopt(socket, FLOWMQ_KCP_PSK, zero, size), SALTS_EBUSY);
     check_equal(flowmq_close(socket), SALTS_OK);
     check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
