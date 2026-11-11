@@ -12,21 +12,59 @@ static int ipc_poll(flowmq_socket_t *first, flowmq_socket_t *second,
                     int events) {
   flowmq_pollitem_t items[] = {
       {.socket = first, .events = events}, {.socket = second}};
+  const size_t count = second == NULL ? 1u : 2u;
   const uint64_t started = monotonic_ms();
   do {
     size_t ready;
-    const int status = flowmq_poll(items, 2u, 1u, &ready);
+    const int status = flowmq_poll(items, count, 1u, &ready);
     if (status != SALTS_OK) return status;
-    if ((items[0].revents | items[1].revents) & FLOWMQ_POLLERR) return SALTS_EIO;
     if (items[0].revents & events) return SALTS_OK;
+    if ((items[0].revents | items[1].revents) & FLOWMQ_POLLERR) return SALTS_EIO;
   } while (monotonic_ms() - started < 5000u);
   return SALTS_ETIMEDOUT;
+}
+
+static void ipc_bind(flowmq_socket_t *listener, const char *endpoint, bool *bound) {
+  const int status = flowmq_bind(listener, endpoint);
+  *bound = status == SALTS_OK;
+  check_equal(status, SALTS_OK);
+}
+
+static void ipc_close_listener(flowmq_socket_t **listener, const char *endpoint,
+                               bool *bound) {
+  if (*listener != NULL) {
+    check_equal(flowmq_close(*listener), SALTS_OK);
+    *listener = NULL;
+  }
+#if defined(_WIN32)
+  (void)endpoint;
+#else
+  if (*bound) check_equal(remove(endpoint + sizeof("ipc://") - 1u), 0);
+#endif
+  *bound = false;
+}
+
+static void ipc_receive(flowmq_socket_t *receiver, flowmq_socket_t *sender,
+                        const void *expected, size_t expected_size, int more) {
+  unsigned char data[64];
+  size_t length;
+  int received_more;
+  size_t option_size = sizeof(received_more);
+  check_equal(ipc_poll(receiver, sender, FLOWMQ_POLLIN), SALTS_OK);
+  check_equal(flowmq_recv(receiver, data, sizeof(data), &length,
+                           FLOWMQ_DONTWAIT), SALTS_OK);
+  check_equal(length, expected_size);
+  check_equal(memcmp(data, expected, expected_size), 0);
+  check_equal(flowmq_getsockopt(receiver, FLOWMQ_RCVMORE, &received_more,
+                               &option_size), SALTS_OK);
+  check_equal(received_more, more);
 }
 
 spec("FlowMQ local IPC transport") {
   group("native IPC") {
     static flowmq_ctx_t *ctx;
-    static flowmq_socket_t *server, *client;
+    static flowmq_socket_t *server, *client, *neighbor;
+    static mem_slice_t held;
     static char *directory;
     static char endpoint[256];
     static bool bound;
@@ -35,12 +73,13 @@ spec("FlowMQ local IPC transport") {
       const char *name;
       int written;
       bound = false;
+      client = NULL;
+      server = NULL;
+      neighbor = NULL;
+      directory = NULL;
+      held = (mem_slice_t){0};
       ctx = flowmq_ctx_new();
       check_not_null(ctx);
-      client = flowmq_socket(ctx, FLOWMQ_PAIR);
-      server = flowmq_socket(ctx, FLOWMQ_PAIR);
-      check_not_null(client);
-      check_not_null(server);
       directory = tt_make_temp_dir("fmqipc");
       check_not_null(directory);
       name = directory;
@@ -55,11 +94,10 @@ spec("FlowMQ local IPC transport") {
     }
 
     after_each() {
+      mem_slice_release(&held);
+      if (neighbor != NULL) check_equal(flowmq_close(neighbor), SALTS_OK);
       if (client != NULL) check_equal(flowmq_close(client), SALTS_OK);
-      if (server != NULL) check_equal(flowmq_close(server), SALTS_OK);
-#if !defined(_WIN32)
-      if (bound) check_equal(remove(endpoint + sizeof("ipc://") - 1u), 0);
-#endif
+      ipc_close_listener(&server, endpoint, &bound);
       if (directory != NULL) {
         check_equal(tt_remove_tree(directory), 0);
         free(directory);
@@ -74,9 +112,11 @@ spec("FlowMQ local IPC transport") {
       unsigned char payload[32768], received[sizeof(payload)];
       size_t length;
       int more;
-      const int status = flowmq_bind(server, endpoint);
-      bound = status == SALTS_OK;
-      check_equal(status, SALTS_OK);
+      client = flowmq_socket(ctx, FLOWMQ_PAIR);
+      server = flowmq_socket(ctx, FLOWMQ_PAIR);
+      check_not_null(client);
+      check_not_null(server);
+      ipc_bind(server, endpoint, &bound);
       check_equal(flowmq_last_endpoint(server, last_endpoint, sizeof(last_endpoint),
                                        &length), SALTS_OK);
       check_equal(strcmp(last_endpoint, endpoint), 0);
@@ -123,6 +163,148 @@ spec("FlowMQ local IPC transport") {
                                FLOWMQ_DONTWAIT), SALTS_OK);
       check_equal(length, sizeof(last));
       check_equal(memcmp(received, last, sizeof(last)), 0);
+    }
+
+    it("preserves REQ/REP multipart state and held receive bytes over IPC") {
+      static const char header[] = "request-header";
+      static const char body[] = "request-body";
+      static const char reply[] = "reply";
+      const size_t max_request_bytes = sizeof(header) + sizeof(body);
+      char oversized[sizeof(header) + sizeof(body) + 1u] = {0};
+      int more;
+      size_t option_size = sizeof(more);
+      client = flowmq_socket(ctx, FLOWMQ_REQ);
+      server = flowmq_socket(ctx, FLOWMQ_REP);
+      check_not_null(client);
+      check_not_null(server);
+      check_equal(flowmq_setsockopt(client, FLOWMQ_SNDHWM_BYTES, &max_request_bytes,
+                                   sizeof(max_request_bytes)), SALTS_OK);
+      ipc_bind(server, endpoint, &bound);
+      check_equal(flowmq_connect(client, endpoint), SALTS_OK);
+      check_equal(ipc_poll(client, server, FLOWMQ_POLLOUT), SALTS_OK);
+      check_equal(flowmq_send(client, oversized, sizeof(oversized), FLOWMQ_DONTWAIT),
+                  SALTS_EMSGSIZE);
+      check_equal(flowmq_send(client, header, sizeof(header),
+                               FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), SALTS_OK);
+      check_equal(flowmq_send(client, body, sizeof(body), FLOWMQ_DONTWAIT), SALTS_OK);
+      check_equal(flowmq_send(client, body, sizeof(body), FLOWMQ_DONTWAIT), SALTS_EPROTO);
+      check_equal(ipc_poll(server, client, FLOWMQ_POLLIN), SALTS_OK);
+      check_equal(flowmq_recv_slice(server, &held, FLOWMQ_DONTWAIT), SALTS_OK);
+      check_equal(held.length, sizeof(header));
+      check_equal(flowmq_getsockopt(server, FLOWMQ_RCVMORE, &more, &option_size), SALTS_OK);
+      check_equal(more, 1);
+      check_equal(flowmq_send(server, reply, sizeof(reply), FLOWMQ_DONTWAIT), SALTS_EPROTO);
+      ipc_receive(server, client, body, sizeof(body), 0);
+      check_equal(flowmq_send(server, reply, sizeof(reply), FLOWMQ_DONTWAIT), SALTS_OK);
+      ipc_receive(client, server, reply, sizeof(reply), 0);
+      check_equal(memcmp(held.data, header, sizeof(header)), 0);
+    }
+
+    it("routes DEALER identities and isolates an IPC peer with exhausted credit") {
+      static const char slow[] = {'s', 'l', 'o', 'w'};
+      static const char fast[] = {'f', 'a', 's', 't'};
+      static const char request[] = "req";
+      static const char response[] = "credit-window";
+      const size_t receive_window = sizeof(response);
+      flowmq_router_peer_status_t slow_status = FLOWMQ_ROUTER_PEER_STATUS_INIT;
+      server = flowmq_socket(ctx, FLOWMQ_ROUTER);
+      client = flowmq_socket(ctx, FLOWMQ_DEALER);
+      neighbor = flowmq_socket(ctx, FLOWMQ_DEALER);
+      check_not_null(server);
+      check_not_null(client);
+      check_not_null(neighbor);
+      check_equal(flowmq_setsockopt(client, FLOWMQ_IDENTITY, slow, sizeof(slow)), SALTS_OK);
+      check_equal(flowmq_setsockopt(neighbor, FLOWMQ_IDENTITY, fast, sizeof(fast)), SALTS_OK);
+      check_equal(flowmq_setsockopt(client, FLOWMQ_RCVHWM_BYTES, &receive_window,
+                                   sizeof(receive_window)), SALTS_OK);
+      ipc_bind(server, endpoint, &bound);
+
+      check_equal(flowmq_connect(client, endpoint), SALTS_OK);
+      check_equal(ipc_poll(client, server, FLOWMQ_POLLOUT), SALTS_OK);
+      check_equal(flowmq_send(client, request, sizeof(request), FLOWMQ_DONTWAIT), SALTS_OK);
+      ipc_receive(server, client, slow, sizeof(slow), 1);
+      ipc_receive(server, client, request, sizeof(request), 0);
+
+      check_equal(flowmq_connect(neighbor, endpoint), SALTS_OK);
+      check_equal(ipc_poll(neighbor, server, FLOWMQ_POLLOUT), SALTS_OK);
+      check_equal(flowmq_send(neighbor, request, sizeof(request), FLOWMQ_DONTWAIT), SALTS_OK);
+      ipc_receive(server, neighbor, fast, sizeof(fast), 1);
+      ipc_receive(server, neighbor, request, sizeof(request), 0);
+
+      check_equal(flowmq_send(server, slow, sizeof(slow), FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE),
+                  SALTS_OK);
+      check_equal(flowmq_send(server, response, sizeof(response), FLOWMQ_DONTWAIT), SALTS_OK);
+      check_equal(ipc_poll(client, server, FLOWMQ_POLLIN), SALTS_OK);
+      check_equal(flowmq_router_peer_status(server, slow, sizeof(slow), &slow_status), SALTS_OK);
+      check_equal(slow_status.send_credit_bytes, 0u);
+      check_equal(flowmq_send(server, slow, sizeof(slow), FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE),
+                  SALTS_OK);
+      check_equal(flowmq_send(server, response, sizeof(response), FLOWMQ_DONTWAIT), SALTS_ENOBUFS);
+      check_equal(flowmq_send(server, fast, sizeof(fast), FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE),
+                  SALTS_OK);
+      check_equal(flowmq_send(server, response, sizeof(response), FLOWMQ_DONTWAIT), SALTS_OK);
+      ipc_receive(neighbor, server, response, sizeof(response), 0);
+      ipc_receive(client, server, response, sizeof(response), 0);
+    }
+
+    it("restores a SUB subscription after rebinding the IPC listener") {
+      static const char prefix[] = "ipc.";
+      static const unsigned char subscription[] = {1u, 'i', 'p', 'c', '.'};
+      static const char unrelated[] = "other.data";
+      static const char before[] = "ipc.before";
+      static const char after[] = "ipc.after";
+      const int retry_ms = 5;
+      client = flowmq_socket(ctx, FLOWMQ_SUB);
+      server = flowmq_socket(ctx, FLOWMQ_XPUB);
+      check_not_null(client);
+      check_not_null(server);
+      check_equal(flowmq_setsockopt(client, FLOWMQ_SUBSCRIBE, prefix, sizeof(prefix) - 1u), SALTS_OK);
+      check_equal(flowmq_setsockopt(client, FLOWMQ_RECONNECT_IVL, &retry_ms,
+                                   sizeof(retry_ms)), SALTS_OK);
+      ipc_bind(server, endpoint, &bound);
+      check_equal(flowmq_connect(client, endpoint), SALTS_OK);
+      ipc_receive(server, client, subscription, sizeof(subscription), 0);
+      check_equal(flowmq_send(server, unrelated, sizeof(unrelated), FLOWMQ_DONTWAIT), SALTS_OK);
+      check_equal(flowmq_send(server, before, sizeof(before), FLOWMQ_DONTWAIT), SALTS_OK);
+      ipc_receive(client, server, before, sizeof(before), 0);
+
+      ipc_close_listener(&server, endpoint, &bound);
+      server = flowmq_socket(ctx, FLOWMQ_XPUB);
+      check_not_null(server);
+      ipc_bind(server, endpoint, &bound);
+      ipc_receive(server, client, subscription, sizeof(subscription), 0);
+      check_equal(flowmq_send(server, unrelated, sizeof(unrelated), FLOWMQ_DONTWAIT), SALTS_OK);
+      check_equal(flowmq_send(server, after, sizeof(after), FLOWMQ_DONTWAIT), SALTS_OK);
+      ipc_receive(client, server, after, sizeof(after), 0);
+    }
+
+    it("cancels an unfinished IPC multipart send before reconnecting") {
+      static const char old[] = "old-part";
+      static const char fresh[] = "fresh-message";
+      const int retry_ms = 5;
+      unsigned char data[32];
+      size_t length;
+      client = flowmq_socket(ctx, FLOWMQ_PAIR);
+      server = flowmq_socket(ctx, FLOWMQ_PAIR);
+      check_not_null(client);
+      check_not_null(server);
+      check_equal(flowmq_setsockopt(client, FLOWMQ_RECONNECT_IVL, &retry_ms,
+                                   sizeof(retry_ms)), SALTS_OK);
+      ipc_bind(server, endpoint, &bound);
+      check_equal(flowmq_connect(client, endpoint), SALTS_OK);
+      check_equal(ipc_poll(client, server, FLOWMQ_POLLOUT), SALTS_OK);
+      check_equal(flowmq_send(client, old, sizeof(old), FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), SALTS_OK);
+      ipc_close_listener(&server, endpoint, &bound);
+      check_equal(ipc_poll(client, NULL, FLOWMQ_POLLERR), SALTS_OK);
+      check_equal(flowmq_send(client, old, sizeof(old), FLOWMQ_DONTWAIT), SALTS_ENOTCONN);
+
+      server = flowmq_socket(ctx, FLOWMQ_PAIR);
+      check_not_null(server);
+      ipc_bind(server, endpoint, &bound);
+      check_equal(ipc_poll(client, server, FLOWMQ_POLLOUT), SALTS_OK);
+      check_equal(flowmq_send(client, fresh, sizeof(fresh), FLOWMQ_DONTWAIT), SALTS_OK);
+      ipc_receive(server, client, fresh, sizeof(fresh), 0);
+      check_equal(flowmq_recv(server, data, sizeof(data), &length, FLOWMQ_DONTWAIT), SALTS_EBUSY);
     }
   }
 
