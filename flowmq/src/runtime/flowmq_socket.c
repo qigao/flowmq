@@ -5190,7 +5190,9 @@ static int flowmq_socket_accept_consume(flowmq_socket_t *socket) {
     if (status == SALTS_OK) {
       /* RESERVED adoption consumes the descriptor and retains the peer's
        * observer context until its terminal event. */
-      status = cnet_manager_adopt(&socket->manager, peer->managed, &accepted, NULL,
+      const cnet_tls_server *tls = flowmq_cnet_uses_tls(socket->transport)
+          ? &socket->tls_server : NULL;
+      status = cnet_manager_adopt(&socket->manager, peer->managed, &accepted, tls,
                                   &peer->connection);
       if (status != SALTS_OK) {
         const int close_status = cnet_accepted_stream_close(&accepted);
@@ -5543,6 +5545,35 @@ static int flowmq_socket_subscription_sync_pending(
   return 0;
 }
 
+static uint32_t flowmq_socket_ws_external_timeout(
+    const flowmq_socket_peer_t *peer, uint64_t now_ms, uint32_t max_wait_ms) {
+  const flowmq_socket_ws_t *ws = peer->ws;
+  if (ws->session == NULL) {
+    const bool wait_for_io = ws->upgraded ? ws->write_pending : ws->read_pending;
+    return wait_for_io
+        ? flowmq_socket_wait_until_ms(now_ms, ws->deadline_ms, max_wait_ms)
+        : 0u;
+  }
+
+  cnet_websocket_state state;
+  if (cnet_websocket_state_get(ws->session, &state) != SALTS_OK ||
+      state == CNET_WEBSOCKET_CLOSED || state == CNET_WEBSOCKET_FAILED)
+    return 0u;
+  if (state == CNET_WEBSOCKET_OPEN && !ws->read_pending && ws->input_size == 0u)
+    return 0u;
+  if (cnet_websocket_has_pending_output(ws->session)) {
+    /* A retained frame can be waiting for admission or an admitted write's
+     * completion. Sleep only when the CNet connection owns that write. */
+    cnet_send_usage usage;
+    if (cnet_client_send_usage(&peer->owner->client, peer->connection,
+                               &usage) != SALTS_OK || usage.operations == 0u)
+      return 0u;
+  } else if (ws->input_size != 0u || !flowmq_peer_state_write_idle(&peer->state)) {
+    return 0u;
+  }
+  return max_wait_ms;
+}
+
 static uint32_t flowmq_socket_local_external_timeout(
     const flowmq_socket_t *socket, uint32_t max_wait_ms) {
   uint32_t wait_ms = max_wait_ms;
@@ -5571,7 +5602,12 @@ static uint32_t flowmq_socket_local_external_timeout(
     if (!flowmq_peer_state_is_used(&peer->state)) continue;
     if (flowmq_peer_state_needs_close_retry(&peer->state))
       return 0u;
+    if (peer->ws != NULL && peer->ws->terminal) return 0u;
     if (!flowmq_peer_state_is_connected(&peer->state)) continue;
+    if (peer->ws != NULL) {
+      wait_ms = flowmq_socket_ws_external_timeout(peer, now_ms, wait_ms);
+      if (wait_ms == 0u) return 0u;
+    }
     if (peer->commit_pending) return 0u;
     if (flowmq_peer_state_handshake_has(
             &peer->state, FLOWMQ_PEER_HANDSHAKE_HELLO_TX) &&

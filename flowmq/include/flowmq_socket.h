@@ -123,16 +123,17 @@ FLOWMQ_C_API int flowmq_close(flowmq_socket_t *socket);
  * The application owns POSIX pathname cleanup after listener close.
  * WS/WSS uses ws[s]://host:port/path and the fmq.v6 subprotocol.
  * KCP uses kcp://numeric-address:port?conv=nonzero-uint32 in plain mode.
- * IPC, WS/WSS and KCP listeners use standalone progress and copied sends.
- * Shared-owner bind and peer pools return SALTS_ENOTSUP for these transports.
- * Port reuse also returns SALTS_ENOTSUP for IPC listeners.
+ * Public bind requires a standalone socket. IPC, WS/WSS and KCP use copied
+ * sends and return SALTS_ENOTSUP for peer pools. Port reuse also returns
+ * SALTS_ENOTSUP for IPC listeners.
  */
 FLOWMQ_C_API int flowmq_bind(flowmq_socket_t *socket, const char *endpoint);
 
 /**
  * Admit one asynchronous connection to an endpoint supported by flowmq_bind().
- * TCP and IPC can share an explicit owner lane. WS/WSS and KCP use standalone
- * progress and copied sends. KCP limits each message part to 64 KiB.
+ * TCP, IPC, WS and WSS can share an explicit owner lane. WS/WSS and KCP
+ * use copied sends. KCP uses standalone progress and limits each message part
+ * to 64 KiB.
  * Terminal states retry according to FLOWMQ_RECONNECT_IVL while the socket
  * continues to receive progress from its configured owner.
  */
