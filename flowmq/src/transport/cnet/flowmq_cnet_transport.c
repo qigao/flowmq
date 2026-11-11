@@ -116,6 +116,7 @@ int flowmq_cnet_endpoint_parse(const char *endpoint, bool allow_zero_port,
     memcpy(parts->path, path, size + 1u);
   } else if (kcp) {
     const char prefix[] = "?conv=";
+    if (strcmp(end, "?auth=psk") == 0) return SALTS_OK;
     if (strncmp(end, prefix, sizeof(prefix) - 1u) != 0) return SALTS_EINVAL;
     const char *conv = end + sizeof(prefix) - 1u;
     status = flowmq_cnet_parse_number(conv, conv + strlen(conv), UINT32_MAX,
@@ -142,8 +143,10 @@ int flowmq_cnet_endpoint_format(const flowmq_cnet_endpoint_t *endpoint,
   if (written < 0 || (size_t)written >= capacity) return SALTS_EMSGSIZE;
   if (endpoint->transport == FLOWMQ_TRANSPORT_KCP) {
     const size_t offset = (size_t)written;
-    written = snprintf(uri + offset, capacity - offset, "?conv=%" PRIu32,
-                       endpoint->conversation);
+    written = endpoint->conversation == 0u
+        ? snprintf(uri + offset, capacity - offset, "?auth=psk")
+        : snprintf(uri + offset, capacity - offset, "?conv=%" PRIu32,
+                   endpoint->conversation);
     if (written < 0 || (size_t)written >= capacity - offset) return SALTS_EMSGSIZE;
   }
   return SALTS_OK;

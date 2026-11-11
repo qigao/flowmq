@@ -16,7 +16,7 @@ typedef struct flowmq_cnet_endpoint_s {
   flowmq_transport_t transport;
   char host[FLOWMQ_CNET_HOST_CAPACITY];
   uint16_t port;
-  uint32_t conversation;
+  uint32_t conversation; /* For KCP, zero denotes PSK authentication. */
   char path[FLOWMQ_CNET_WS_PATH_CAPACITY];
 } flowmq_cnet_endpoint_t;
 

@@ -30,7 +30,8 @@ static const int FLOWMQ_PUBLIC_OPTIONS[] = {
     FLOWMQ_RCVHWM_BYTES,
     FLOWMQ_FLOW_UPDATE_QUANTUM,
     FLOWMQ_FLOW_UPDATE_IVL,
-    FLOWMQ_REUSE_PORT};
+    FLOWMQ_REUSE_PORT,
+    FLOWMQ_KCP_PSK};
 
 spec("flowmq_socket_option metadata") {
   it("covers every public socket option exactly once") {

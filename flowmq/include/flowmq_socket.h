@@ -57,8 +57,11 @@ typedef enum flowmq_socket_option_e {
   FLOWMQ_RCVHWM_BYTES = 1102,
   FLOWMQ_FLOW_UPDATE_QUANTUM = 1103,
   FLOWMQ_FLOW_UPDATE_IVL = 1104,
-  FLOWMQ_REUSE_PORT = 1105
+  FLOWMQ_REUSE_PORT = 1105,
+  FLOWMQ_KCP_PSK = 1106
 } flowmq_socket_option_t;
+
+enum { FLOWMQ_KCP_PSK_BYTES = 32 };
 
 typedef struct flowmq_ctx_s flowmq_ctx_t;
 typedef struct flowmq_socket_s flowmq_socket_t;
@@ -123,6 +126,8 @@ FLOWMQ_C_API int flowmq_close(flowmq_socket_t *socket);
  * The application owns POSIX pathname cleanup after listener close.
  * WS/WSS uses ws[s]://host:port/path and the fmq.v6 subprotocol.
  * KCP uses kcp://numeric-address:port?conv=nonzero-uint32 in plain mode.
+ * Use kcp://numeric-address:port?auth=psk with FLOWMQ_KCP_PSK in authenticated
+ * mode. The PSK is configured separately from the endpoint.
  * Public bind requires a standalone socket. IPC, WS/WSS and KCP use copied
  * sends and return SALTS_ENOTSUP for peer pools. Port reuse also returns
  * SALTS_ENOTSUP for IPC listeners.
@@ -161,6 +166,9 @@ FLOWMQ_C_API int flowmq_last_endpoint(const flowmq_socket_t *socket, char *buffe
  * valid only on a ROUTER before runtime initialization; FlowMQ validates and
  * copies the immutable policy synchronously. A socket with this policy may
  * bind only a TLS listener configured to require client certificates.
+ * FLOWMQ_KCP_PSK copies a nonzero FLOWMQ_KCP_PSK_BYTES-byte key before
+ * bind/connect. It is write-only. A socket configured with this option
+ * accepts only KCP endpoints with ?auth=psk.
  * FLOW_UPDATE quantum defaults to one quarter of receive byte HWM with a
  * bounded 64 KiB floor, and its interval defaults to 10 ms. FLOWMQ_REUSE_PORT
  * defaults to 0; value 1 requests SO_REUSEPORT and fails bind with

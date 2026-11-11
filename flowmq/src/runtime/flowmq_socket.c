@@ -90,6 +90,8 @@ _Static_assert(FLOWMQ_SOCKET_FRAME_SEGMENT_CAPACITY <=
                "frame descriptors must fit the reusable CNet vector");
 _Static_assert(FLOWMQ_SOCKET_PEER_CAPACITY == FLOWMQ_PEER_POOL_MAX_PEERS,
                "public pool capacity must match socket peer storage");
+_Static_assert((int)FLOWMQ_KCP_PSK_BYTES == (int)CNET_KCP_PSK_BYTES,
+               "FlowMQ and CNet must agree on the PSK size");
 _Static_assert(CNET_RETAINED_VECTOR_MAX >= 32u,
                "FlowMQ 1 MiB retained batching requires 32 logical CNet ranges");
 _Static_assert(CNET_RETAINED_VECTOR_MAX <= FLOWMQ_SOCKET_OUTBOUND_CAPACITY,
@@ -321,6 +323,7 @@ struct flowmq_socket_s {
   unsigned tls_client_initialized : 1;
   unsigned tls_server_initialized : 1;
   unsigned tls_require_client_certificate : 1;
+  unsigned kcp_psk_configured : 1;
   unsigned send_peer_active : 1;
   unsigned reply_peer_valid : 1;
   unsigned request_peer_valid : 1;
@@ -334,6 +337,7 @@ struct flowmq_socket_s {
   char tls_cert_file[FLOWMQ_SOCKET_TLS_PATH_CAPACITY];
   char tls_key_file[FLOWMQ_SOCKET_TLS_PATH_CAPACITY];
   char tls_key_password[FLOWMQ_SOCKET_TLS_PASSWORD_CAPACITY];
+  unsigned char kcp_psk[FLOWMQ_KCP_PSK_BYTES];
   char tls_server_name[FLOWMQ_SOCKET_OPTION_TLS_SERVER_NAME_CAPACITY];
 };
 
@@ -388,6 +392,7 @@ static int flowmq_socket_rearm_receive(flowmq_socket_peer_t *peer);
 
 static void flowmq_socket_cancel_send_route(flowmq_socket_t *socket);
 static void flowmq_socket_fail(flowmq_socket_t *socket, int status);
+static void flowmq_socket_clear_secret(void *value, size_t size);
 static int flowmq_socket_peer_ready(const flowmq_socket_peer_t *peer);
 
 static int flowmq_socket_pool_reserve(flowmq_socket_peer_t *peer) {
@@ -2891,10 +2896,20 @@ static void flowmq_socket_packet_state(void *user, cnet_packet_endpoint *packet,
                                       const cnet_datagram_peer *address,
                                       uint32_t conversation) {
   flowmq_socket_t *socket = (flowmq_socket_t *)user;
+  flowmq_socket_peer_t *peer = flowmq_socket_packet_peer(socket, session);
   (void)address;
   (void)conversation;
-  if (state == CNET_PACKET_SESSION_OPEN) {
-    flowmq_socket_peer_t *peer = socket->packet_opening_peer;
+  if (state == CNET_PACKET_SESSION_CLOSED) {
+    if (peer != NULL) {
+      peer->packet_session = (cnet_packet_session){0};
+      flowmq_socket_peer_terminal(peer);
+    }
+    return;
+  }
+  if (peer == NULL) {
+    /* Plain KCP reports OPEN inline. PSK first reports CONNECTING, and its
+     * later OPEN must reuse the peer reserved for this session generation. */
+    peer = socket->packet_opening_peer;
     if (peer == NULL) peer = flowmq_socket_peer_acquire(socket);
     if (peer == NULL) {
       (void)cnet_packet_session_close(packet, session);
@@ -2903,14 +2918,8 @@ static void flowmq_socket_packet_state(void *user, cnet_packet_endpoint *packet,
     peer->packet_session = session;
     peer->packet_handshake_deadline_ms =
         monotonic_ms() + FLOWMQ_SOCKET_PACKET_HANDSHAKE_TIMEOUT_MS;
-    flowmq_socket_peer_connected(peer);
-  } else if (state == CNET_PACKET_SESSION_CLOSED) {
-    flowmq_socket_peer_t *peer = flowmq_socket_packet_peer(socket, session);
-    if (peer != NULL) {
-      peer->packet_session = (cnet_packet_session){0};
-      flowmq_socket_peer_terminal(peer);
-    }
   }
+  if (state == CNET_PACKET_SESSION_OPEN) flowmq_socket_peer_connected(peer);
 }
 
 static void flowmq_socket_packet_receive(void *user, cnet_packet_endpoint *packet,
@@ -2964,6 +2973,11 @@ static int flowmq_socket_packet_init(flowmq_socket_t *socket,
   config.datagram.max_datagram_bytes = CNET_KCP_DEFAULT_MTU;
   config.datagram.receive_buffer_bytes = CNET_KCP_DEFAULT_MTU;
   config.datagram.reuse_port = bind ? socket->reuse_port : 0;
+  if (socket->kcp_psk_configured) {
+    config.security.mode = CNET_KCP_SECURITY_PSK_V1;
+    memcpy(config.security.pre_shared_key, socket->kcp_psk, sizeof(socket->kcp_psk));
+    config.kcp.mtu = config.security.fec.max_payload_bytes - CNET_KCP_SECURE_RECORD_OVERHEAD;
+  }
   config.observer = (cnet_packet_observer){
       .on_admit = bind ? flowmq_socket_packet_admit : NULL,
       .on_state = flowmq_socket_packet_state,
@@ -2976,7 +2990,11 @@ static int flowmq_socket_packet_init(flowmq_socket_t *socket,
       ? cnet_packet_endpoint_init_external(&socket->packet, &config, &terminal,
                                            socket->external_backend)
       : cnet_packet_endpoint_init_ex(&socket->packet, &config, &terminal);
+  flowmq_socket_clear_secret(config.security.pre_shared_key,
+                             sizeof(config.security.pre_shared_key));
   if (status != SALTS_OK) return status;
+  /* The packet endpoint owns its key copy, including across reconnects. */
+  flowmq_socket_clear_secret(socket->kcp_psk, sizeof(socket->kcp_psk));
   socket->packet_family = strchr(config.datagram.host, ':') == NULL
       ? CNET_DATAGRAM_ADDRESS_IPV4 : CNET_DATAGRAM_ADDRESS_IPV6;
   socket->packet_conversation = parts->conversation;
@@ -3039,7 +3057,12 @@ static int flowmq_socket_endpoint_connect(flowmq_socket_t *socket,
     flowmq_cnet_endpoint_t parts;
     status = flowmq_cnet_endpoint_parse(endpoint->uri, false, &parts);
     if (status == SALTS_OK) status = flowmq_socket_packet_connect(peer, &parts);
-    if (status != SALTS_OK) flowmq_socket_peer_release(peer);
+    if (status == SALTS_OK) {
+      endpoint->active = 1u;
+      endpoint->retry_pending = 0u;
+    } else {
+      flowmq_socket_peer_release(peer);
+    }
     return status;
   }
   const char *uri = endpoint->uri;
@@ -3186,7 +3209,7 @@ static int flowmq_socket_runtime_init(flowmq_socket_t *socket,
   return SALTS_OK;
 }
 
-static void flowmq_socket_clear_secret(char *value, size_t size) {
+static void flowmq_socket_clear_secret(void *value, size_t size) {
   volatile char *bytes = (volatile char *)value;
   for (size_t i = 0u; i < size; ++i) bytes[i] = 0;
 }
@@ -3593,6 +3616,7 @@ int flowmq_close(flowmq_socket_t *socket) {
   if (socket->pool_initialized) mem_destroy(&socket->message_pool);
   flowmq_socket_clear_secret(socket->tls_key_password,
                              sizeof(socket->tls_key_password));
+  flowmq_socket_clear_secret(socket->kcp_psk, sizeof(socket->kcp_psk));
   free(socket->inbound);
   free(socket->peers);
   --socket->ctx->socket_count;
@@ -3612,6 +3636,9 @@ static int flowmq_socket_bind_common(flowmq_socket_t *socket,
   if (socket->external_stopping) return SALTS_ESHUTDOWN;
   status = flowmq_cnet_endpoint_parse(endpoint, true, &parts);
   if (status != SALTS_OK) return status;
+  if (socket->kcp_psk_configured !=
+      (parts.transport == FLOWMQ_TRANSPORT_KCP && parts.conversation == 0u))
+    return SALTS_EINVAL;
   if (external && !flowmq_cnet_supports(parts.transport, FLOWMQ_CNET_EXTERNAL_LISTENER))
     return SALTS_ENOTSUP;
   if (socket->listener_initialized) return SALTS_EALREADY;
@@ -3722,6 +3749,9 @@ int flowmq_connect(flowmq_socket_t *socket, const char *endpoint) {
   if (socket == NULL || socket->ctx == NULL) return SALTS_EINVAL;
   status = flowmq_cnet_endpoint_parse(endpoint, false, &parts);
   if (status != SALTS_OK) return status;
+  if (socket->kcp_psk_configured !=
+      (parts.transport == FLOWMQ_TRANSPORT_KCP && parts.conversation == 0u))
+    return SALTS_EINVAL;
   if (!flowmq_cnet_uses_tls(parts.transport) && socket->tls_identity_policy != NULL)
     return SALTS_EINVAL;
   if (socket->pattern.desc->routing_class == FLOWMQ_PATTERN_ROUTE_SINGLE) {
@@ -3794,6 +3824,16 @@ int flowmq_setsockopt(flowmq_socket_t *socket, int option, const void *value,
   if (desc == NULL) return SALTS_EPROTO;
 
   switch (option) {
+  case FLOWMQ_KCP_PSK: {
+    const unsigned char *key = value;
+    unsigned char nonzero = 0u;
+    for (size_t i = 0u; i < size; ++i) nonzero |= key[i];
+    if (nonzero == 0u) return SALTS_EINVAL;
+    memcpy(socket->kcp_psk, value, size);
+    socket->kcp_psk_configured = 1u;
+    return SALTS_OK;
+  }
+
   case FLOWMQ_SUBSCRIBE:
   case FLOWMQ_UNSUBSCRIBE: {
     int changed = 0;
@@ -5284,10 +5324,15 @@ static int flowmq_socket_progress_local(flowmq_socket_t *socket) {
 #if defined(FLOWMQ_BATCH_PROBE)
     ++socket->batch_probe.local_used_peers;
 #endif
-    if (flowmq_peer_state_needs_close_retry(&peer->state) &&
-        socket->transport == FLOWMQ_TRANSPORT_KCP) {
+    if (peer->packet_handshake_deadline_ms != 0u && flowmq_socket_peer_ready(peer))
+      peer->packet_handshake_deadline_ms = 0u;
+    if (socket->transport == FLOWMQ_TRANSPORT_KCP &&
+        (flowmq_peer_state_needs_close_retry(&peer->state) ||
+         (peer->packet_handshake_deadline_ms != 0u &&
+          monotonic_ms() >= peer->packet_handshake_deadline_ms))) {
       status = flowmq_peer_state_transition(&peer->state, FLOWMQ_PEER_LIFECYCLE_CLOSING);
       if (status != SALTS_OK) return status;
+      peer->packet_handshake_deadline_ms = 0u;
       status = cnet_packet_session_close(&socket->packet, peer->packet_session);
       if (status != SALTS_OK && status != SALTS_EALREADY) return status;
       continue;
@@ -5308,14 +5353,6 @@ static int flowmq_socket_progress_local(flowmq_socket_t *socket) {
       }
     }
     if (!flowmq_peer_state_is_connected(&peer->state)) continue;
-    if (peer->packet_handshake_deadline_ms != 0u) {
-      if (flowmq_socket_peer_ready(peer)) {
-        peer->packet_handshake_deadline_ms = 0u;
-      } else if (monotonic_ms() >= peer->packet_handshake_deadline_ms) {
-        flowmq_socket_peer_fail(peer);
-        continue;
-      }
-    }
     if (peer->ws != NULL) {
       status = flowmq_socket_ws_progress(peer);
       if (status != SALTS_OK && status != SALTS_EBUSY && status != SALTS_ENOBUFS)
@@ -5632,13 +5669,13 @@ static uint32_t flowmq_socket_local_external_timeout(
     if (flowmq_peer_state_needs_close_retry(&peer->state))
       return 0u;
     if (peer->ws != NULL && peer->ws->terminal) return 0u;
+    if (peer->packet_handshake_deadline_ms != 0u && !flowmq_socket_peer_ready(peer)) {
+      wait_ms = flowmq_socket_wait_until_ms(now_ms, peer->packet_handshake_deadline_ms, wait_ms);
+      if (wait_ms == 0u) return 0u;
+    }
     if (!flowmq_peer_state_is_connected(&peer->state)) continue;
     if (peer->ws != NULL) {
       wait_ms = flowmq_socket_ws_external_timeout(peer, now_ms, wait_ms);
-      if (wait_ms == 0u) return 0u;
-    }
-    if (peer->packet_handshake_deadline_ms != 0u && !flowmq_socket_peer_ready(peer)) {
-      wait_ms = flowmq_socket_wait_until_ms(now_ms, peer->packet_handshake_deadline_ms, wait_ms);
       if (wait_ms == 0u) return 0u;
     }
     if (peer->commit_pending) return 0u;
