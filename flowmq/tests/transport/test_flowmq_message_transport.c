@@ -468,7 +468,8 @@ static void wss_authentication(bool shared) {
                                  sizeof(reconnect)), SALTS_OK);
     check_equal(flowmq_connect(client, endpoint), SALTS_OK);
     flowmq_pollitem_t items[] = {
-        {.socket = client, .events = FLOWMQ_POLLOUT}, {.socket = router}};
+        {.socket = client, .events = FLOWMQ_POLLOUT},
+        {.socket = router, .events = FLOWMQ_POLLIN | FLOWMQ_POLLOUT}};
     const uint64_t deadline = monotonic_ms() + (rejected[i].rejected_hello ? 5000u : 250u);
     uint64_t rejections;
     do {
@@ -476,7 +477,12 @@ static void wss_authentication(bool shared) {
       size_t size = sizeof(rejections);
       check_equal(shared ? flowmq_owner_poll(fixture.owner, items, 2u, 10u, &ready)
                          : flowmq_poll(items, 2u, 10u, &ready), SALTS_OK);
-      check_equal(ready, 0u);
+      check((items[0].revents & FLOWMQ_POLLOUT) == 0,
+            "Rejected WSS client became writable (case %zu, shared %d, events %d)",
+            i, (int)shared, (int)items[0].revents);
+      check(items[1].revents == 0,
+            "WSS ROUTER reported events for a rejected client (case %zu, shared %d, events %d)",
+            i, (int)shared, (int)items[1].revents);
       check_equal(flowmq_getsockopt(router, FLOWMQ_TLS_IDENTITY_REJECTIONS, &rejections,
                                    &size), SALTS_OK);
     } while (rejections == 0u && monotonic_ms() < deadline);

@@ -275,7 +275,8 @@ one-second Upgrade deadline. Each binary WebSocket message carries one
 complete FMQ frame. FMQ multipart flags link the individual frames.
 CNet handles WebSocket masking, fragmentation, and control frames.
 WSS supports required client certificates and certificate-to-HELLO
-identity policies for ROUTER sockets.
+identity policies for ROUTER sockets. A ROUTER with an identity policy
+sends SETTINGS only after it authorizes the peer's HELLO identity.
 
 KCP currently uses plain sessions. Conversation IDs select a session and
 provide no encryption or authentication. When both FMQ heartbeat interval
