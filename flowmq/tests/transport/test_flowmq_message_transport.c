@@ -2,6 +2,7 @@
 #include "flowmq_protocol.h"
 #include "flowmq_socket.h"
 #include "flowmq_socket_external_internal.h"
+#include "flowmq_socket_packet_test.h"
 #include "flowmq_tls_identity_map.h"
 #include "flowmq_tls_test_material.h"
 #include "flowmq_transport.h"
@@ -443,6 +444,156 @@ static void check_kcp_peer_backpressure(const char *uri) {
   pattern_fixture_term(&fixture);
 }
 
+typedef struct kcp_terminal_trace {
+  cnet_packet_session retired;
+  cnet_packet_session replacement;
+  size_t retired_index;
+  size_t replacement_index;
+  size_t size;
+  uint64_t tag;
+  size_t cancellations;
+} kcp_terminal_trace;
+
+static void trace_kcp_terminal(void *user, size_t peer_index,
+                               cnet_packet_session session, size_t size,
+                               int status, uint64_t tag) {
+  kcp_terminal_trace *trace = user;
+  if (status == SALTS_ECANCELED) {
+    ++trace->cancellations;
+    trace->retired = session;
+    trace->retired_index = peer_index;
+    trace->size = size;
+    trace->tag = tag;
+  } else if (status == SALTS_OK && trace->cancellations == 1u &&
+             session.slot == trace->retired.slot) {
+    trace->replacement = session;
+    trace->replacement_index = peer_index;
+  }
+}
+
+static void check_kcp_peer_generation(const char *uri) {
+  static const char identity[] = "reused";
+  static const char neighbor_id[] = "neighbor";
+  const int heartbeat_interval = 25;
+  const int heartbeat_timeout = 500;
+  const int send_hwm = 1;
+  const size_t credit = 16u;
+  pattern_fixture fixture = {0};
+  kcp_terminal_trace trace = {0};
+  flowmq_router_peer_status_t peer = FLOWMQ_ROUTER_PEER_STATUS_INIT;
+  char endpoint[320u];
+  size_t endpoint_size;
+  size_t ready;
+
+  pattern_fixture_init(&fixture, uri, true);
+  flowmq_socket_t *router = pattern_socket(&fixture, FLOWMQ_ROUTER, true);
+  flowmq_socket_t *neighbor = pattern_socket(&fixture, FLOWMQ_DEALER, false);
+  flowmq_socket_t *old = flowmq_socket(fixture.ctx, FLOWMQ_DEALER);
+  flowmq_socket_t *replacement = flowmq_socket(fixture.ctx, FLOWMQ_DEALER);
+  check_not_null(old);
+  check_not_null(replacement);
+  if (fixture.kcp_psk) {
+    set_test_kcp_psk(old, 1u);
+    set_test_kcp_psk(replacement, 1u);
+  }
+  check_equal(flowmq_setsockopt(old, FLOWMQ_IDENTITY, identity, strlen(identity)), SALTS_OK);
+  check_equal(flowmq_setsockopt(replacement, FLOWMQ_IDENTITY, identity, strlen(identity)),
+              SALTS_OK);
+  check_equal(flowmq_setsockopt(replacement, FLOWMQ_RCVHWM_BYTES, &credit, sizeof(credit)),
+              SALTS_OK);
+  check_equal(flowmq_setsockopt(neighbor, FLOWMQ_IDENTITY, neighbor_id, strlen(neighbor_id)),
+              SALTS_OK);
+  check_equal(flowmq_setsockopt(router, FLOWMQ_SNDHWM, &send_hwm, sizeof(send_hwm)),
+              SALTS_OK);
+  check_equal(flowmq_setsockopt(router, FLOWMQ_HEARTBEAT_IVL, &heartbeat_interval,
+                               sizeof(heartbeat_interval)), SALTS_OK);
+  check_equal(flowmq_setsockopt(router, FLOWMQ_HEARTBEAT_TIMEOUT, &heartbeat_timeout,
+                               sizeof(heartbeat_timeout)), SALTS_OK);
+  pattern_bind(&fixture, router, uri);
+  check_equal(flowmq_last_endpoint(router, endpoint, sizeof(endpoint), &endpoint_size), SALTS_OK);
+  check_equal(flowmq_connect(neighbor, endpoint), SALTS_OK);
+  check_equal(wait_for(fixture.owner, neighbor, router, FLOWMQ_POLLOUT), SALTS_OK);
+  check_equal(flowmq_connect(old, endpoint), SALTS_OK);
+  check_equal(wait_for_kcp_peer(fixture.owner, router, old, identity, 0u, 1u), SALTS_OK);
+
+  cnet_packet_send_terminal_fn terminal =
+      flowmq_socket_test_observe_packet_sends(router, trace_kcp_terminal, &trace);
+  check_equal(send_routed(router, identity, "old", 3u), SALTS_OK);
+  check_equal(flowmq_router_peer_status(router, identity, strlen(identity), &peer), SALTS_OK);
+  check_equal(peer.outstanding_messages, 1u);
+  check_equal(peer.completed_messages, 0u);
+
+  /* Stop polling the old DEALER so its DATA remains unacknowledged at expiry. */
+  flowmq_pollitem_t item = {.socket = router};
+  const uint64_t deadline = monotonic_ms() + 5000u;
+  int status;
+  do {
+    check_equal(flowmq_owner_poll(fixture.owner, &item, 1u, 5u, &ready), SALTS_OK);
+    status = flowmq_router_peer_status(router, identity, strlen(identity), &peer);
+  } while ((status == SALTS_OK || trace.cancellations == 0u) && monotonic_ms() < deadline);
+  check_equal(status, SALTS_ENOENT);
+  check_equal(trace.cancellations, 1u);
+  check_true(cnet_packet_session_valid(trace.retired));
+
+  check_equal(flowmq_connect(replacement, endpoint), SALTS_OK);
+  check_equal(wait_for_kcp_peer(fixture.owner, router, replacement, identity, 0u, credit),
+              SALTS_OK);
+  check_equal(trace.replacement.slot, trace.retired.slot);
+  check_true(trace.replacement.generation != trace.retired.generation);
+  check_equal(trace.replacement_index, trace.retired_index);
+
+  check_equal(flowmq_send(router, identity, strlen(identity),
+                          FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), SALTS_OK);
+  check_equal(flowmq_send(router, "new", 3u, FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), SALTS_OK);
+  check_equal(flowmq_send(router, "tail", 4u, FLOWMQ_DONTWAIT), SALTS_OK);
+  check_equal(flowmq_owner_poll(fixture.owner, &item, 1u, 0u, &ready), SALTS_OK);
+
+  /* CNet drains before CLOSED. Inject both stale terminal outcomes into the
+   * actual FlowMQ callback while replacement DATA waits for its own ACK. */
+  terminal(router, NULL, trace.retired, trace.size, SALTS_OK, trace.tag);
+  terminal(router, NULL, trace.retired, trace.size, SALTS_ECANCELED, trace.tag);
+  check_equal(trace.cancellations, 1u);
+  check_equal(flowmq_router_peer_status(router, identity, strlen(identity), &peer), SALTS_OK);
+  check_true(peer.ready);
+  check_equal(peer.admitted_messages, 1u);
+  check_equal(peer.completed_messages, 0u);
+  check_equal(peer.completed_bytes, 0u);
+  check_equal(peer.outstanding_messages, 1u);
+  check_equal(peer.outstanding_bytes, 7u);
+  check_equal(peer.send_credit_bytes, credit - 7u);
+  check_equal(send_routed(router, identity, "hwm", 3u), SALTS_ENOBUFS);
+
+  check_equal(send_routed(router, neighbor_id, "live", 4u), SALTS_OK);
+  receive_part(fixture.owner, neighbor, router, "live", 4u, 0);
+  check_equal(flowmq_send(neighbor, "reply", 5u, FLOWMQ_DONTWAIT), SALTS_OK);
+  receive_part(fixture.owner, router, neighbor, neighbor_id, strlen(neighbor_id), 1);
+  receive_part(fixture.owner, router, neighbor, "reply", 5u, 0);
+
+  check_equal(wait_for_kcp_peer(fixture.owner, router, replacement, identity, 1u, credit - 7u),
+              SALTS_OK);
+  check_received_part(replacement, "new", 3u, 1);
+  check_received_part(replacement, "tail", 4u, 0);
+  check_equal(wait_for_kcp_peer(fixture.owner, router, replacement, identity, 1u, credit),
+              SALTS_OK);
+  check_equal(flowmq_router_peer_status(router, identity, strlen(identity), &peer), SALTS_OK);
+  check_equal(peer.completed_messages, 1u);
+  check_equal(peer.completed_bytes, 7u);
+  check_equal(peer.outstanding_messages, 0u);
+  check_equal(peer.outstanding_bytes, 0u);
+  check_equal(peer.rejected_messages, 1u);
+  unsigned char unexpected;
+  size_t received_size;
+  check_equal(flowmq_recv(replacement, &unexpected, sizeof(unexpected), &received_size,
+                          FLOWMQ_DONTWAIT), SALTS_EBUSY);
+
+  flowmq_socket_test_observe_packet_sends(router, NULL, NULL);
+  check_equal(flowmq_close(old), SALTS_OK);
+  check_equal(flowmq_close(replacement), SALTS_OK);
+  pattern_close(&fixture, neighbor);
+  pattern_close(&fixture, router);
+  pattern_fixture_term(&fixture);
+}
+
 static void check_subscription(pattern_fixture *fixture, const char *uri) {
   static const unsigned char subscribed[] = {1u, 'f', 'm', 'q', '.'};
   const int retry_ms = 5;
@@ -851,6 +1002,11 @@ spec("FlowMQ message transports") {
   it("isolates a KCP peer stalled at its message and byte HWM from a healthy neighbor") {
     check_kcp_peer_backpressure("kcp://127.0.0.1:0?conv=4281");
     check_kcp_peer_backpressure("kcp://127.0.0.1:0?auth=psk");
+  }
+
+  it("isolates stale KCP terminals after a ROUTER peer slot is reused") {
+    check_kcp_peer_generation("kcp://127.0.0.1:0?conv=4281");
+    check_kcp_peer_generation("kcp://127.0.0.1:0?auth=psk");
   }
 
   it("carries the full KCP part size with PSK overhead on a shared Owner") {

@@ -33,6 +33,9 @@ cmake_config_target(
   ALIAS FlowMQ::Transport
   FOLDER "flowmq/transport")
 set_target_properties(flowmq_transport PROPERTIES EXCLUDE_FROM_ALL TRUE)
+if(BUILD_TESTS)
+  target_compile_definitions(flowmq_transport PRIVATE FLOWMQ_PACKET_TEST=1)
+endif()
 
 target_include_directories(
   flowmq_transport
