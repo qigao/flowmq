@@ -315,14 +315,14 @@ spec("FlowMQ local IPC transport") {
       static const char unrelated[] = "other.data";
       static const char before[] = "ipc.before";
       static const char after[] = "ipc.after";
-      const int retry_ms = 5;
+      const flowmq_reconnect_config_t reconnect = {32u, 30000u, 5u, 5u};
       client = flowmq_socket(ctx, FLOWMQ_SUB);
       server = flowmq_socket(ctx, FLOWMQ_XPUB);
       check_not_null(client);
       check_not_null(server);
       check_equal(flowmq_setsockopt(client, FLOWMQ_SUBSCRIBE, prefix, sizeof(prefix) - 1u), SALTS_OK);
-      check_equal(flowmq_setsockopt(client, FLOWMQ_RECONNECT_IVL, &retry_ms,
-                                   sizeof(retry_ms)), SALTS_OK);
+      check_equal(flowmq_setsockopt(client, FLOWMQ_RECONNECT, &reconnect,
+                                   sizeof(reconnect)), SALTS_OK);
       ipc_bind(server, endpoint, &bound);
       check_equal(flowmq_connect(client, endpoint), SALTS_OK);
       ipc_receive(server, client, subscription, sizeof(subscription), 0);
@@ -343,15 +343,15 @@ spec("FlowMQ local IPC transport") {
     it("cancels an unfinished IPC multipart send before reconnecting") {
       static const char old[] = "old-part";
       static const char fresh[] = "fresh-message";
-      const int retry_ms = 5;
+      const flowmq_reconnect_config_t reconnect = {32u, 30000u, 5u, 5u};
       unsigned char data[32];
       size_t length;
       client = flowmq_socket(ctx, FLOWMQ_PAIR);
       server = flowmq_socket(ctx, FLOWMQ_PAIR);
       check_not_null(client);
       check_not_null(server);
-      check_equal(flowmq_setsockopt(client, FLOWMQ_RECONNECT_IVL, &retry_ms,
-                                   sizeof(retry_ms)), SALTS_OK);
+      check_equal(flowmq_setsockopt(client, FLOWMQ_RECONNECT, &reconnect,
+                                   sizeof(reconnect)), SALTS_OK);
       ipc_bind(server, endpoint, &bound);
       check_equal(flowmq_connect(client, endpoint), SALTS_OK);
       check_equal(ipc_poll(client, server, FLOWMQ_POLLOUT), SALTS_OK);
@@ -445,7 +445,7 @@ spec("FlowMQ local IPC transport") {
 
     it("closes and rebinds an IPC listener while dials are unadopted") {
       static const char payload[] = "after-listener-drain";
-      const int retry_ms = 5;
+      const flowmq_reconnect_config_t reconnect = {32u, 30000u, 5u, 5u};
 
       for (size_t i = 0u; i < 4u; ++i) {
         size_t ready;
@@ -453,8 +453,8 @@ spec("FlowMQ local IPC transport") {
         client = flowmq_socket(ctx, FLOWMQ_PAIR);
         check_not_null(server);
         check_not_null(client);
-        check_equal(flowmq_setsockopt(client, FLOWMQ_RECONNECT_IVL, &retry_ms,
-                                     sizeof(retry_ms)), SALTS_OK);
+        check_equal(flowmq_setsockopt(client, FLOWMQ_RECONNECT, &reconnect,
+                                     sizeof(reconnect)), SALTS_OK);
         ipc_bind(server, endpoint, &bound);
         check_equal(flowmq_connect(client, endpoint), SALTS_OK);
         flowmq_pollitem_t dial = {.socket = client, .events = FLOWMQ_POLLOUT};

@@ -9,8 +9,6 @@ set(FLOWMQ_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/pattern/flowmq_subscription_set.h
     ${CMAKE_CURRENT_SOURCE_DIR}/session/flowmq_flow_control.c
     ${CMAKE_CURRENT_SOURCE_DIR}/session/flowmq_flow_control.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/session/flowmq_reconnect.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/session/flowmq_reconnect.h
     ${PROJECT_SOURCE_DIR}/flowmq/src/security/flowmq_tls_identity_map.c)
 
 set(FLOWMQ_CORE_HEADERS

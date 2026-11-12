@@ -65,7 +65,7 @@ cmake_add_test(
   LIBS FlowMQ::Core Salts::TinyTest
   FOLDER "flowmq/tests/core")
 
-foreach(test_name IN ITEMS pattern pattern_state flow_control reconnect subscription_set)
+foreach(test_name IN ITEMS pattern pattern_state flow_control subscription_set)
   cmake_add_test(
     test_flowmq_${test_name}
     SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/core/test_flowmq_${test_name}.c
@@ -249,7 +249,6 @@ set(FLOWMQ_CORE_TESTS
     test_flowmq_pattern
     test_flowmq_pattern_state
     test_flowmq_flow_control
-    test_flowmq_reconnect
     test_flowmq_subscription_set
     test_flowmq_tls_identity_map)
 set(FLOWMQ_TRANSPORT_TESTS

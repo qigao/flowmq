@@ -33,9 +33,9 @@ int main(void)
     flowmq_socket_t *router = NULL;
     flowmq_owner_t *owner = NULL;
     flowmq_socket_t *owner_socket = NULL;
-    int reconnect_ms = 25;
+    const flowmq_reconnect_config_t reconnect = {4u, 1000u, 25u, 100u};
     int reuse_port = 0;
-    int reconnect_read = 0;
+    flowmq_reconnect_config_t reconnect_read = {0};
     size_t reconnect_read_size = sizeof(reconnect_read);
     size_t send_hwm_bytes = 4096u;
     flowmq_router_peer_status_t peer_status = FLOWMQ_ROUTER_PEER_STATUS_INIT;
@@ -67,12 +67,16 @@ int main(void)
     if (flowmq_setsockopt(router, FLOWMQ_REUSE_PORT, &reuse_port,
                           sizeof(reuse_port)) != 0)
         goto cleanup;
-    if (flowmq_setsockopt(router, FLOWMQ_RECONNECT_IVL, &reconnect_ms,
-                          sizeof(reconnect_ms)) != 0)
+    /* Reconnect policy struct ABI */
+    if (flowmq_setsockopt(router, FLOWMQ_RECONNECT, &reconnect,
+                          sizeof(reconnect)) != 0)
         goto cleanup;
-    if (flowmq_getsockopt(router, FLOWMQ_RECONNECT_IVL, &reconnect_read,
+    if (flowmq_getsockopt(router, FLOWMQ_RECONNECT, &reconnect_read,
                           &reconnect_read_size) != 0 ||
-        reconnect_read != reconnect_ms)
+        reconnect_read.max_attempts != reconnect.max_attempts ||
+        reconnect_read.episode_timeout_ms != reconnect.episode_timeout_ms ||
+        reconnect_read.initial_backoff_ms != reconnect.initial_backoff_ms ||
+        reconnect_read.max_backoff_ms != reconnect.max_backoff_ms)
         goto cleanup;
 
     /* size_t ABI */

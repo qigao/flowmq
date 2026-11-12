@@ -375,7 +375,7 @@ static int mail_open(mail_lane *lane) {
   char endpoint[128];
   size_t size = 0u, ready = 0u;
   const int hwm = MAIL_CAPACITY;
-  const int reconnect = -1;
+  const flowmq_reconnect_config_t reconnect = FLOWMQ_RECONNECT_DISABLED;
   /* Boundary fixtures leave twice the tested burst in the other byte budget,
    * so message-HWM and byte-HWM rejection are independently exercised. */
   const size_t hwm_bytes = (lane->run->admission_limit != 0u
@@ -400,7 +400,7 @@ static int mail_open(mail_lane *lane) {
   }
   flowmq_socket_t *sockets[] = {lane->sender, lane->receiver};
   for (size_t i = 0; i < 2u; ++i) {
-    status = flowmq_setsockopt(sockets[i], FLOWMQ_RECONNECT_IVL, &reconnect, sizeof(reconnect));
+    status = flowmq_setsockopt(sockets[i], FLOWMQ_RECONNECT, &reconnect, sizeof(reconnect));
     if (status == SALTS_OK) status = flowmq_setsockopt(sockets[i], FLOWMQ_SNDHWM, &hwm, sizeof(hwm));
     if (status == SALTS_OK) status = flowmq_setsockopt(sockets[i], FLOWMQ_RCVHWM, &hwm, sizeof(hwm));
     if (status == SALTS_OK) status = flowmq_setsockopt(sockets[i], FLOWMQ_SNDHWM_BYTES, &hwm_bytes, sizeof(hwm_bytes));

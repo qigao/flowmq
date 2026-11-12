@@ -129,7 +129,8 @@ static int wake_receive(wake_worker *worker, size_t sequence, int measured) {
 
 static int wake_open(wake_worker *worker) {
   wake_run *run = worker->run;
-  int status, hwm = WAKE_MESSAGES, reconnect = -1;
+  int status, hwm = WAKE_MESSAGES;
+  const flowmq_reconnect_config_t reconnect = FLOWMQ_RECONNECT_DISABLED;
   worker->ctx = flowmq_ctx_new();
   if (worker->ctx == NULL) return SALTS_ENOMEM;
   if (!worker->sender && run->policy >= 2u) {
@@ -145,7 +146,7 @@ static int wake_open(wake_worker *worker) {
   if (status == SALTS_OK)
     status = flowmq_setsockopt(worker->socket, FLOWMQ_RCVHWM, &hwm, sizeof(hwm));
   if (status == SALTS_OK)
-    status = flowmq_setsockopt(worker->socket, FLOWMQ_RECONNECT_IVL, &reconnect, sizeof(reconnect));
+    status = flowmq_setsockopt(worker->socket, FLOWMQ_RECONNECT, &reconnect, sizeof(reconnect));
   if (status != SALTS_OK) return status;
   if (worker->sender) {
     size_t size = 0u;

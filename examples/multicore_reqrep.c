@@ -18,8 +18,7 @@ enum {
   EXAMPLE_POLL_MS = 1,
   EXAMPLE_ENDPOINT_BYTES = 128,
   EXAMPLE_MESSAGE_BYTES = 64,
-  EXAMPLE_HWM = 1,
-  EXAMPLE_RECONNECT_DISABLED = -1
+  EXAMPLE_HWM = 1
 };
 
 typedef struct example_run_s {
@@ -50,11 +49,11 @@ static void example_error(example_run_t *run, int status) {
 
 static int example_socket_options(flowmq_socket_t *socket) {
   const int hwm = EXAMPLE_HWM;
-  const int reconnect = EXAMPLE_RECONNECT_DISABLED;
+  const flowmq_reconnect_config_t reconnect = FLOWMQ_RECONNECT_DISABLED;
   int status = flowmq_setsockopt(socket, FLOWMQ_SNDHWM, &hwm, sizeof(hwm));
   if (status == SALTS_OK) status = flowmq_setsockopt(socket, FLOWMQ_RCVHWM, &hwm, sizeof(hwm));
   if (status == SALTS_OK)
-    status = flowmq_setsockopt(socket, FLOWMQ_RECONNECT_IVL, &reconnect, sizeof(reconnect));
+    status = flowmq_setsockopt(socket, FLOWMQ_RECONNECT, &reconnect, sizeof(reconnect));
   return status;
 }
 
