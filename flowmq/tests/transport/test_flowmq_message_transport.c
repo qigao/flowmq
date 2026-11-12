@@ -360,16 +360,18 @@ static void check_ws_upgrade_responses(const char *uri) {
     const char *offers;
     const char *status;
     const char *header;
+    bool oversized_frame;
   } cases[] = {
       {"/fmq", "12", "Sec-WebSocket-Protocol: fmq.v6\r\n", "426",
-       "Sec-WebSocket-Version: 13\r\n"},
-      {"/fmq", "013", "Sec-WebSocket-Protocol: fmq.v6\r\n", "400", NULL},
-      {"/missing", "13", "Sec-WebSocket-Protocol: fmq.v6\r\n", "404", NULL},
-      {"/fmq", "13", "Sec-WebSocket-Protocol: fmq.V6\r\n", "400", NULL},
-      {"/fmq", "13", NULL, "431", NULL},
+       "Sec-WebSocket-Version: 13\r\n", false},
+      {"/fmq", "013", "Sec-WebSocket-Protocol: fmq.v6\r\n", "400", NULL, false},
+      {"/missing", "13", "Sec-WebSocket-Protocol: fmq.v6\r\n", "404", NULL, false},
+      {"/fmq", "13", "Sec-WebSocket-Protocol: fmq.V6\r\n", "400", NULL, false},
+      {"/fmq", "13", NULL, "431", NULL, false},
       {"/fmq", "13", "Sec-WebSocket-Protocol: other\r\n"
                      "Sec-WebSocket-Protocol: more, fmq.v6\r\n", "101",
-       "Sec-WebSocket-Protocol: fmq.v6\r\n"}};
+       "Sec-WebSocket-Protocol: fmq.v6\r\n", false},
+      {"/fmq", "13", "Sec-WebSocket-Protocol: fmq.v6\r\n", "101", NULL, true}};
   pattern_fixture fixture = {0};
   char endpoint[FLOWMQ_CNET_URI_CAPACITY];
   size_t endpoint_size;
@@ -383,6 +385,9 @@ static void check_ws_upgrade_responses(const char *uri) {
     raw_ws_client raw = {0};
     char request[FLOWMQ_WS_HEADER_LIMIT + 16u];
     unsigned char early_data[6u + 125u];
+    /* A masked binary frame advertises 2 MiB. Do not send any payload. */
+    unsigned char oversized_frame[] = {
+        0x82u, 0xffu, 0u, 0u, 0u, 0u, 0u, 0x20u, 0u, 0u, 0x19u, 0x2fu, 0x45u, 0xc1u};
     raw_ws_connect(&raw, endpoint, &fixture.tls);
     uint64_t deadline = monotonic_ms() + 5000u;
     while (!raw.connected && !raw.closed && monotonic_ms() < deadline)
@@ -417,8 +422,12 @@ static void check_ws_upgrade_responses(const char *uri) {
     if (cases[i].header != NULL) check_not_null(strstr(raw.received, cases[i].header));
     if (strcmp(cases[i].status, "101") == 0) {
       check_not_null(strstr(raw.received, "Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n"));
-      /* WebSocket OPEN is established, but this peer has not sent FMQ HELLO/SETTINGS. */
-      raw_ws_send_early_data(&raw, early_data);
+      if (cases[i].oversized_frame) {
+        raw_ws_send(&raw, oversized_frame, sizeof(oversized_frame));
+      } else {
+        /* WebSocket OPEN is established, but FMQ HELLO/SETTINGS are absent. */
+        raw_ws_send_early_data(&raw, early_data);
+      }
     } else {
       const char *connection = strcmp(cases[i].status, "426") == 0
           ? "Connection: Upgrade, close\r\n" : "Connection: close\r\n";
@@ -473,7 +482,7 @@ static bool raw_ws_received_control(const raw_ws_client *raw, unsigned char opco
   return false;
 }
 
-static void check_ws_coalesced_upgrade_and_control(void) {
+static void check_ws_coalesced_upgrade_and_control(bool secure) {
   const cnet_listener_config listener_config = {
       .backend = flowmq_cnet_backend(), .host = "127.0.0.1", .backlog = 1u};
   const flowmq_protocol_settings_t settings = {
@@ -484,6 +493,7 @@ static void check_ws_coalesced_upgrade_and_control(void) {
   static const unsigned char close_payload[] = {0x03u, 0xe8u};
   const int reconnect = -1;
   cnet_listener listener = {0};
+  cnet_tls_server tls_server = {0};
   raw_ws_client raw = {0};
   pattern_fixture fixture = {0};
   uint16_t port;
@@ -497,8 +507,8 @@ static void check_ws_coalesced_upgrade_and_control(void) {
 
   check_equal(cnet_listener_init(&listener, &listener_config), SALTS_OK);
   check_equal(cnet_listener_port(&listener, &port), SALTS_OK);
-  check_true(snprintf(endpoint, sizeof(endpoint), "ws://127.0.0.1:%u/fmq",
-                      (unsigned)port) > 0);
+  check_true(snprintf(endpoint, sizeof(endpoint), "%s://127.0.0.1:%u/fmq",
+                      secure ? "wss" : "ws", (unsigned)port) > 0);
   pattern_fixture_init(&fixture, endpoint, true);
   flowmq_socket_t *client = pattern_socket(&fixture, FLOWMQ_PAIR, false);
   check_equal(flowmq_setsockopt(client, FLOWMQ_RECONNECT_IVL, &reconnect, sizeof(reconnect)),
@@ -512,9 +522,17 @@ static void check_ws_coalesced_upgrade_and_control(void) {
     check_equal(cnet_listener_wait(&listener, 1u, &listening), SALTS_OK);
   }
   check_equal(listening, 1);
-  raw_ws_init(&raw, FLOWMQ_TRANSPORT_TCP);
+  raw_ws_init(&raw, secure ? FLOWMQ_TRANSPORT_TLS : FLOWMQ_TRANSPORT_TCP);
   const cnet_observer observer = raw_ws_observer(&raw);
-  check_equal(cnet_listener_accept(&listener, &raw.client, &observer, &raw.connection), SALTS_OK);
+  if (secure) {
+    const cnet_tls_server_config tls_config = {
+        .size = sizeof(tls_config), .cert_file = fixture.tls.cert, .key_file = fixture.tls.key};
+    check_equal(cnet_tls_server_init(&tls_server, &tls_config), SALTS_OK);
+    check_equal(cnet_listener_accept_tls(&listener, &raw.client, &tls_server, &observer,
+                                          &raw.connection), SALTS_OK);
+  } else {
+    check_equal(cnet_listener_accept(&listener, &raw.client, &observer, &raw.connection), SALTS_OK);
+  }
   deadline = monotonic_ms() + 5000u;
   const char *end;
   while ((end = strstr(raw.received, "\r\n\r\n")) == NULL && monotonic_ms() < deadline)
@@ -592,6 +610,7 @@ static void check_ws_coalesced_upgrade_and_control(void) {
   check_true(raw_ws_received_control(&raw, 0x08u, close_payload, sizeof(close_payload)));
   check_equal(cnet_client_stop(&raw.client, 5000u), SALTS_OK);
   check_equal(cnet_client_destroy(&raw.client), SALTS_OK);
+  if (secure) check_equal(cnet_tls_server_destroy(&tls_server), SALTS_OK);
   check_equal(cnet_listener_close(&listener), SALTS_OK);
   check_equal(cnet_listener_destroy(&listener), SALTS_OK);
   pattern_close(&fixture, client);
@@ -650,6 +669,16 @@ static void route_dealers(pattern_fixture *fixture, const char *uri) {
   receive_part(fixture->owner, router, fast, "fast", 4u, 1);
   receive_part(fixture->owner, router, fast, "two", 3u, 0);
 
+  /* Individually valid parts exceed the receiver's credit as a multipart.
+   * Reject the whole message before publishing any part or debiting credit. */
+  check_equal(flowmq_send(router, "slow", 4u, FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), SALTS_OK);
+  check_equal(flowmq_send(router, "abc", 3u, FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), SALTS_OK);
+  check_equal(flowmq_send(router, "def", 3u, FLOWMQ_DONTWAIT), SALTS_ENOBUFS);
+  check_equal(flowmq_router_peer_status(router, "slow", 4u, &peer), SALTS_OK);
+  check_equal(peer.send_credit_bytes, window);
+  check_equal(peer.admitted_messages, 0u);
+  check_equal(peer.outstanding_messages, 0u);
+
   check_equal(flowmq_send(router, "slow", 4u, FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), SALTS_OK);
   check_equal(flowmq_send(router, "reply", 5u, FLOWMQ_DONTWAIT), SALTS_OK);
   check_equal(wait_for(fixture->owner, slow, router, FLOWMQ_POLLIN), SALTS_OK);
@@ -675,7 +704,7 @@ static int send_routed(flowmq_socket_t *router, const char *identity,
   return flowmq_send(router, data, size, FLOWMQ_DONTWAIT);
 }
 
-static int wait_for_kcp_peer(flowmq_owner_t *owner, flowmq_socket_t *router,
+static int wait_for_router_peer(flowmq_owner_t *owner, flowmq_socket_t *router,
                              flowmq_socket_t *dealer, const char *identity,
                              uint64_t completed, uint64_t credit) {
   flowmq_pollitem_t local = {.socket = router};
@@ -734,10 +763,10 @@ static void check_kcp_peer_backpressure(const char *uri) {
   check_equal(flowmq_last_endpoint(router, endpoint, sizeof(endpoint), &endpoint_size), SALTS_OK);
   check_equal(flowmq_connect(fast, endpoint), SALTS_OK);
   check_equal(flowmq_connect(slow, endpoint), SALTS_OK);
-  check_equal(wait_for_kcp_peer(fixture.owner, router, slow, slow_id, 0u, receive_credit), SALTS_OK);
+  check_equal(wait_for_router_peer(fixture.owner, router, slow, slow_id, 0u, receive_credit), SALTS_OK);
   check_equal(wait_for(fixture.owner, fast, router, FLOWMQ_POLLOUT), SALTS_OK);
   /* Both endpoints must finish FMQ negotiation before ROUTER addresses fast_id. */
-  check_equal(wait_for_kcp_peer(fixture.owner, router, NULL, fast_id, 0u, 4u), SALTS_OK);
+  check_equal(wait_for_router_peer(fixture.owner, router, NULL, fast_id, 0u, 4u), SALTS_OK);
 
   check_equal(send_routed(router, slow_id, payload, sizeof(payload)), SALTS_OK);
   /* A second large part fits the remote credit and exceeds the local byte HWM. */
@@ -761,7 +790,7 @@ static void check_kcp_peer_backpressure(const char *uri) {
   check_equal(peer.send_credit_bytes, remaining_credit);
 
   /* KCP ACKs release the local HWM before the application reads any DATA. */
-  check_equal(wait_for_kcp_peer(fixture.owner, router, slow, slow_id, 2u, remaining_credit), SALTS_OK);
+  check_equal(wait_for_router_peer(fixture.owner, router, slow, slow_id, 2u, remaining_credit), SALTS_OK);
   check_equal(flowmq_router_peer_status(router, slow_id, sizeof(slow_id) - 1u, &peer), SALTS_OK);
   check_equal(peer.completed_messages, 2u);
   check_equal(peer.completed_bytes, send_hwm_bytes);
@@ -771,10 +800,10 @@ static void check_kcp_peer_backpressure(const char *uri) {
   check_equal(send_routed(router, slow_id, payload, sizeof(payload)), SALTS_ENOBUFS);
 
   check_received_part(slow, payload, sizeof(payload), 0);
-  check_equal(wait_for_kcp_peer(fixture.owner, router, slow, slow_id, 2u, sizeof(payload)), SALTS_OK);
+  check_equal(wait_for_router_peer(fixture.owner, router, slow, slow_id, 2u, sizeof(payload)), SALTS_OK);
   payload[0] = 0x66;
   check_equal(send_routed(router, slow_id, payload, sizeof(payload)), SALTS_OK);
-  check_equal(wait_for_kcp_peer(fixture.owner, router, slow, slow_id, 3u, remaining_credit), SALTS_OK);
+  check_equal(wait_for_router_peer(fixture.owner, router, slow, slow_id, 3u, remaining_credit), SALTS_OK);
   check_received_part(slow, "s", 1u, 0);
   check_received_part(slow, payload, sizeof(payload), 0);
   check_equal(flowmq_router_peer_status(router, slow_id, sizeof(slow_id) - 1u, &peer), SALTS_OK);
@@ -864,10 +893,10 @@ static void check_kcp_peer_generation(const char *uri) {
   check_equal(flowmq_last_endpoint(router, endpoint, sizeof(endpoint), &endpoint_size), SALTS_OK);
   check_equal(flowmq_connect(neighbor, endpoint), SALTS_OK);
   check_equal(wait_for(fixture.owner, neighbor, router, FLOWMQ_POLLOUT), SALTS_OK);
-  check_equal(wait_for_kcp_peer(fixture.owner, router, NULL, neighbor_id, 0u, 4u),
+  check_equal(wait_for_router_peer(fixture.owner, router, NULL, neighbor_id, 0u, 4u),
               SALTS_OK);
   check_equal(flowmq_connect(old, endpoint), SALTS_OK);
-  check_equal(wait_for_kcp_peer(fixture.owner, router, old, identity, 0u, 1u), SALTS_OK);
+  check_equal(wait_for_router_peer(fixture.owner, router, old, identity, 0u, 1u), SALTS_OK);
 
   cnet_packet_send_terminal_fn terminal =
       flowmq_socket_test_observe_packet_sends(router, trace_kcp_terminal, &trace);
@@ -889,7 +918,7 @@ static void check_kcp_peer_generation(const char *uri) {
   check_true(cnet_packet_session_valid(trace.retired));
 
   check_equal(flowmq_connect(replacement, endpoint), SALTS_OK);
-  check_equal(wait_for_kcp_peer(fixture.owner, router, replacement, identity, 0u, credit),
+  check_equal(wait_for_router_peer(fixture.owner, router, replacement, identity, 0u, credit),
               SALTS_OK);
   check_equal(trace.replacement.slot, trace.retired.slot);
   check_true(trace.replacement.generation != trace.retired.generation);
@@ -922,11 +951,11 @@ static void check_kcp_peer_generation(const char *uri) {
   receive_part(fixture.owner, router, neighbor, neighbor_id, strlen(neighbor_id), 1);
   receive_part(fixture.owner, router, neighbor, "reply", 5u, 0);
 
-  check_equal(wait_for_kcp_peer(fixture.owner, router, replacement, identity, 1u, credit - 7u),
+  check_equal(wait_for_router_peer(fixture.owner, router, replacement, identity, 1u, credit - 7u),
               SALTS_OK);
   check_received_part(replacement, "new", 3u, 1);
   check_received_part(replacement, "tail", 4u, 0);
-  check_equal(wait_for_kcp_peer(fixture.owner, router, replacement, identity, 1u, credit),
+  check_equal(wait_for_router_peer(fixture.owner, router, replacement, identity, 1u, credit),
               SALTS_OK);
   check_equal(flowmq_router_peer_status(router, identity, strlen(identity), &peer), SALTS_OK);
   check_equal(peer.completed_messages, 1u);
@@ -942,6 +971,91 @@ static void check_kcp_peer_generation(const char *uri) {
   flowmq_socket_test_observe_packet_sends(router, NULL, NULL);
   check_equal(flowmq_close(old), SALTS_OK);
   check_equal(flowmq_close(replacement), SALTS_OK);
+  pattern_close(&fixture, neighbor);
+  pattern_close(&fixture, router);
+  pattern_fixture_term(&fixture);
+}
+
+static flowmq_socket_t *connect_ws_dealer(pattern_fixture *fixture, flowmq_socket_t *router,
+                                         const char *endpoint, const char *identity,
+                                         size_t credit) {
+  flowmq_socket_t *dealer = pattern_socket(fixture, FLOWMQ_DEALER, false);
+  check_equal(flowmq_setsockopt(dealer, FLOWMQ_IDENTITY, identity, strlen(identity)), SALTS_OK);
+  check_equal(flowmq_setsockopt(dealer, FLOWMQ_RCVHWM_BYTES, &credit, sizeof(credit)), SALTS_OK);
+  check_equal(flowmq_connect(dealer, endpoint), SALTS_OK);
+  check_equal(wait_for(fixture->owner, dealer, router, FLOWMQ_POLLOUT), SALTS_OK);
+  check_equal(wait_for_router_peer(fixture->owner, router, NULL, identity, 0u, credit), SALTS_OK);
+  return dealer;
+}
+
+static void check_ws_peer_replacement(const char *uri) {
+  static const char identity[] = "reused";
+  static const char neighbor_id[] = "neighbor";
+  const int send_hwm = 1;
+  const size_t credit = 16u;
+  pattern_fixture fixture = {0};
+  char endpoint[FLOWMQ_CNET_URI_CAPACITY];
+  size_t endpoint_size;
+
+  pattern_fixture_init(&fixture, uri, true);
+  flowmq_socket_t *router = pattern_socket(&fixture, FLOWMQ_ROUTER, true);
+  check_equal(flowmq_setsockopt(router, FLOWMQ_SNDHWM, &send_hwm, sizeof(send_hwm)),
+              SALTS_OK);
+  pattern_bind(&fixture, router, uri);
+  check_equal(flowmq_last_endpoint(router, endpoint, sizeof(endpoint), &endpoint_size), SALTS_OK);
+  flowmq_socket_t *neighbor = connect_ws_dealer(&fixture, router, endpoint, neighbor_id, credit);
+  flowmq_socket_t *dealer = connect_ws_dealer(&fixture, router, endpoint, identity, credit);
+
+  /* Retain inbound data from each retired generation while a fresh DEALER
+   * claims the same identity. Exceed the ROUTER's fixed peer-slot count. */
+  for (unsigned char generation = 0u; generation < 5u; ++generation) {
+    check_equal(flowmq_send(dealer, &generation, 1u, FLOWMQ_DONTWAIT), SALTS_OK);
+    check_equal(wait_for(fixture.owner, router, dealer, FLOWMQ_POLLIN), SALTS_OK);
+    check_equal(send_routed(router, identity, "in flight", 9u), SALTS_OK);
+    check_equal(send_routed(router, identity, "full", 4u), SALTS_ENOBUFS);
+    check_equal(flowmq_send(router, identity, strlen(identity),
+                            FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), SALTS_OK);
+    check_equal(flowmq_send(router, "prefix", 6u, FLOWMQ_DONTWAIT | FLOWMQ_SNDMORE), SALTS_OK);
+    pattern_close(&fixture, dealer);
+
+    flowmq_router_peer_status_t peer = FLOWMQ_ROUTER_PEER_STATUS_INIT;
+    flowmq_pollitem_t item = {.socket = router};
+    const uint64_t deadline = monotonic_ms() + 5000u;
+    int status;
+    do {
+      size_t ready;
+      check_equal(flowmq_owner_poll(fixture.owner, &item, 1u, 1u, &ready), SALTS_OK);
+      status = flowmq_router_peer_status(router, identity, strlen(identity), &peer);
+    } while (status == SALTS_OK && monotonic_ms() < deadline);
+    check_equal(status, SALTS_ENOENT);
+    check_equal(flowmq_send(router, "suffix", 6u, FLOWMQ_DONTWAIT), SALTS_ENOTCONN);
+
+    dealer = connect_ws_dealer(&fixture, router, endpoint, identity, credit);
+    check_received_part(router, identity, strlen(identity), 1);
+    check_received_part(router, &generation, 1u, 0);
+    check_equal(flowmq_router_peer_status(router, identity, strlen(identity), &peer), SALTS_OK);
+    check_equal(peer.admitted_messages, 0u);
+    check_equal(peer.completed_messages, 0u);
+    check_equal(peer.rejected_messages, 0u);
+    check_equal(peer.outstanding_messages, 0u);
+    check_equal(peer.send_credit_bytes, credit);
+    unsigned char unexpected;
+    size_t received_size;
+    check_equal(flowmq_recv(dealer, &unexpected, sizeof(unexpected), &received_size,
+                            FLOWMQ_DONTWAIT), SALTS_EBUSY);
+    check_equal(send_routed(router, neighbor_id, "live", 4u), SALTS_OK);
+    receive_part(fixture.owner, neighbor, router, "live", 4u, 0);
+  }
+
+  check_equal(send_routed(router, identity, "fresh", 5u), SALTS_OK);
+  receive_part(fixture.owner, dealer, router, "fresh", 5u, 0);
+  check_equal(wait_for_router_peer(fixture.owner, router, NULL, identity, 1u, 11u), SALTS_OK);
+  flowmq_router_peer_status_t peer = FLOWMQ_ROUTER_PEER_STATUS_INIT;
+  check_equal(flowmq_router_peer_status(router, identity, strlen(identity), &peer), SALTS_OK);
+  check_equal(peer.completed_messages, 1u);
+  check_equal(peer.completed_bytes, 5u);
+  check_equal(peer.outstanding_messages, 0u);
+  pattern_close(&fixture, dealer);
   pattern_close(&fixture, neighbor);
   pattern_close(&fixture, router);
   pattern_fixture_term(&fixture);
@@ -994,12 +1108,50 @@ static void check_subscription(pattern_fixture *fixture, const char *uri) {
   pattern_close(fixture, xpub);
 }
 
+static void check_pub_sub(pattern_fixture *fixture, const char *uri) {
+  static const char prefix[] = "fmq.";
+  static const char matching[] = "fmq.match";
+  flowmq_socket_t *pub = pattern_socket(fixture, FLOWMQ_PUB, true);
+  flowmq_socket_t *sub = pattern_socket(fixture, FLOWMQ_SUB, false);
+  char endpoint[FLOWMQ_CNET_URI_CAPACITY];
+  size_t endpoint_size;
+  size_t matches = 0u;
+  size_t ready;
+
+  check_equal(flowmq_setsockopt(sub, FLOWMQ_SUBSCRIBE, prefix, sizeof(prefix) - 1u),
+              SALTS_OK);
+  pattern_bind(fixture, pub, uri);
+  check_equal(flowmq_last_endpoint(pub, endpoint, sizeof(endpoint), &endpoint_size), SALTS_OK);
+  check_equal(flowmq_connect(sub, endpoint), SALTS_OK);
+  flowmq_pollitem_t items[] = {{.socket = pub}, {.socket = sub}};
+  const uint64_t deadline = monotonic_ms() + 5000u;
+  do {
+    check_equal(fixture->owner != NULL
+                    ? flowmq_owner_poll(fixture->owner, items, 2u, 1u, &ready)
+                    : flowmq_poll(items, 2u, 1u, &ready), SALTS_OK);
+    check_equal(items[0].revents | items[1].revents, 0);
+    check_equal(flowmq_socket_internal_fanout_match_count(
+                    pub, matching, sizeof(matching) - 1u, &matches), SALTS_OK);
+  } while (matches == 0u && monotonic_ms() < deadline);
+  check_equal(matches, 1u);
+  check_equal(flowmq_send(pub, "unmatched", 9u, FLOWMQ_DONTWAIT), SALTS_OK);
+  check_equal(flowmq_send(pub, matching, sizeof(matching) - 1u, FLOWMQ_DONTWAIT), SALTS_OK);
+  receive_part(fixture->owner, sub, pub, matching, sizeof(matching) - 1u, 0);
+  unsigned char unexpected;
+  size_t received;
+  check_equal(flowmq_recv(sub, &unexpected, sizeof(unexpected), &received, FLOWMQ_DONTWAIT),
+              SALTS_EBUSY);
+  pattern_close(fixture, sub);
+  pattern_close(fixture, pub);
+}
+
 static void messaging_patterns(const char *uri, bool shared) {
   pattern_fixture fixture = {0};
   pattern_fixture_init(&fixture, uri, shared);
   request_reply(&fixture, uri);
   route_dealers(&fixture, uri);
   check_subscription(&fixture, uri);
+  if (!fixture.kcp) check_pub_sub(&fixture, uri);
   pattern_fixture_term(&fixture);
 }
 
@@ -1289,13 +1441,38 @@ spec("FlowMQ message transports") {
     wss_authentication(true);
   }
 
-  it("qualifies HTTP Upgrade responses and rejects early FMQ DATA over WS and WSS") {
+  it("qualifies HTTP Upgrade responses and rejects early DATA and oversized frames") {
     check_ws_upgrade_responses("ws://127.0.0.1:0/fmq");
     check_ws_upgrade_responses("wss://127.0.0.1:0/fmq");
   }
 
   it("preserves coalesced Upgrade bytes, fragmented DATA and WebSocket control frames") {
-    check_ws_coalesced_upgrade_and_control();
+    check_ws_coalesced_upgrade_and_control(false);
+    check_ws_coalesced_upgrade_and_control(true);
+  }
+
+  it("rejects unoffered and duplicate server-selected subprotocol fields") {
+    static const char response_prefix[] =
+        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n";
+    static const char *const selections[] = {
+        "Sec-WebSocket-Protocol: unoffered\r\n",
+        "Sec-WebSocket-Protocol: fmq.v6\r\nSec-WebSocket-Protocol: fmq.v6\r\n"};
+    for (size_t i = 0u; i < sizeof(selections) / sizeof(selections[0]); ++i) {
+      char accept[FLOWMQ_WS_ACCEPT_CAPACITY] = "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=";
+      char response[256u];
+      const int size = snprintf(response, sizeof(response), "%s%s\r\n",
+                                response_prefix, selections[i]);
+      check_true(size > 0 && (size_t)size < sizeof(response));
+      check_equal(flowmq_ws_upgrade_validate(false, response, (size_t)size, "/fmq", accept),
+                  SALTS_EPROTO);
+    }
+  }
+
+  it("isolates WS and WSS multipart cancellation across peer generations") {
+    check_ws_peer_replacement("ws://127.0.0.1:0/fmq");
+    check_ws_peer_replacement("wss://127.0.0.1:0/fmq");
   }
 
   it("drives fragmented WebSocket messages and a TCP neighbor on one Owner") {
