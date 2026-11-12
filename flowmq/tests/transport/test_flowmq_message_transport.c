@@ -1,4 +1,6 @@
 #include "flowmq_owner.h"
+#include "flowmq_cnet_transport.h"
+#include "flowmq_cnet_websocket.h"
 #include "flowmq_protocol.h"
 #include "flowmq_socket.h"
 #include "flowmq_socket_external_internal.h"
@@ -250,6 +252,187 @@ static void pattern_fixture_term(pattern_fixture *fixture) {
   if (fixture->owner != NULL) check_equal(flowmq_owner_term(fixture->owner), SALTS_OK);
   check_equal(flowmq_ctx_term(fixture->ctx), SALTS_OK);
   tls_files_free(&fixture->tls);
+}
+
+typedef struct raw_ws_client {
+  cnet_client client;
+  cnet_connection connection;
+  char received[1024u];
+  size_t used;
+  bool connected;
+  bool closed;
+} raw_ws_client;
+
+static void raw_ws_state(void *user, cnet_connection connection,
+                         cnet_connection_state state, const cnet_error *error) {
+  raw_ws_client *raw = user;
+  (void)error;
+  if (state == CNET_CONNECTION_CONNECTED) {
+    raw->connected = true;
+    check_equal(cnet_receive(&raw->client, connection, 1u), SALTS_OK);
+  } else if (state == CNET_CONNECTION_CLOSED || state == CNET_CONNECTION_FAILED) {
+    raw->closed = true;
+  }
+}
+
+static void raw_ws_receive(void *user, cnet_connection connection,
+                           const cnet_receive_view *view) {
+  raw_ws_client *raw = user;
+  check_true(view->size < sizeof(raw->received) - raw->used);
+  memcpy(raw->received + raw->used, view->data, view->size);
+  raw->used += view->size;
+  raw->received[raw->used] = '\0';
+  check_equal(cnet_receive(&raw->client, connection, 1u), SALTS_OK);
+}
+
+static void raw_ws_connect(raw_ws_client *raw, const char *endpoint,
+                           const tls_files *tls) {
+  flowmq_cnet_endpoint_t parts;
+  flowmq_io_config_t io;
+  flowmq_timeout_config_t timeouts = {0};
+  cnet_client_config config;
+  char stream_uri[FLOWMQ_CNET_URI_CAPACITY];
+  check_equal(flowmq_cnet_endpoint_parse(endpoint, false, &parts), SALTS_OK);
+  const bool secure = parts.transport == FLOWMQ_TRANSPORT_WSS;
+  parts.transport = secure ? FLOWMQ_TRANSPORT_TLS : FLOWMQ_TRANSPORT_TCP;
+  check_equal(flowmq_cnet_endpoint_format(&parts, stream_uri, sizeof(stream_uri)), SALTS_OK);
+  flowmq_io_config_init(&io);
+  flowmq_timeouts_resolve(&timeouts, 5000u);
+  check_equal(flowmq_cnet_client_config(&io, &timeouts, parts.transport,
+                                       1u, 16384u, &config), SALTS_OK);
+  check_equal(cnet_client_init(&raw->client, &config), SALTS_OK);
+  const cnet_tls_client_config credentials = {
+      .size = sizeof(credentials), .ca_file = tls->ca, .server_name = "localhost"};
+  const cnet_connect_options options = {
+      .uri = stream_uri,
+      .observer = {.on_state = raw_ws_state, .on_receive = raw_ws_receive, .user = raw},
+      .tls = secure ? &credentials : NULL};
+  check_equal(cnet_connect(&raw->client, &options, &raw->connection), SALTS_OK);
+}
+
+static void raw_ws_progress(raw_ws_client *raw, flowmq_owner_t *owner,
+                            flowmq_socket_t *server) {
+  flowmq_pollitem_t item = {.socket = server, .events = FLOWMQ_POLLIN};
+  size_t events, ready;
+  check_equal(cnet_client_poll(&raw->client, 0u, &events), SALTS_OK);
+  check_equal(flowmq_owner_poll(owner, &item, 1u, 1u, &ready), SALTS_OK);
+  check_equal(item.revents & (FLOWMQ_POLLIN | FLOWMQ_POLLERR), 0);
+}
+
+static void raw_ws_send(raw_ws_client *raw, void *bytes, size_t size) {
+  mem_buffer_t *buffer = mem_wrap_external(bytes, size, NULL, NULL);
+  check_not_null(buffer);
+  check_equal(cnet_send_buffer(&raw->client, raw->connection, buffer), SALTS_OK);
+  mem_buffer_release(buffer);
+}
+
+static void raw_ws_send_early_data(raw_ws_client *raw, unsigned char *wire) {
+  const flowmq_protocol_frame_t frame = {
+      .kind = FLOWMQ_PROTOCOL_FRAME_DATA, .pattern = FLOWMQ_PROTOCOL_PAIR,
+      .message_id = 1u,
+      .payload = vstr_from_cstr("too early")};
+  static const unsigned char mask[] = {0x19u, 0x2fu, 0x45u, 0xc1u};
+  tstr encoded = NULL;
+  check_equal(flowmq_protocol_encode_frame(&frame, 125u, &encoded), SALTS_OK);
+  const size_t size = tstr_len(encoded);
+  check_true(size <= 125u);
+  wire[0] = 0x82u;
+  wire[1] = (unsigned char)(0x80u | size);
+  memcpy(wire + 2u, mask, sizeof(mask));
+  for (size_t i = 0u; i < size; ++i)
+    wire[6u + i] = (unsigned char)encoded[i] ^ mask[i % sizeof(mask)];
+  tstr_free(encoded);
+  raw_ws_send(raw, wire, 6u + size);
+}
+
+static void check_ws_upgrade_responses(const char *uri) {
+  static const struct {
+    const char *path;
+    const char *version;
+    const char *offers;
+    const char *status;
+    const char *header;
+  } cases[] = {
+      {"/fmq", "12", "Sec-WebSocket-Protocol: fmq.v6\r\n", "426",
+       "Sec-WebSocket-Version: 13\r\n"},
+      {"/fmq", "013", "Sec-WebSocket-Protocol: fmq.v6\r\n", "400", NULL},
+      {"/missing", "13", "Sec-WebSocket-Protocol: fmq.v6\r\n", "404", NULL},
+      {"/fmq", "13", "Sec-WebSocket-Protocol: fmq.V6\r\n", "400", NULL},
+      {"/fmq", "13", NULL, "431", NULL},
+      {"/fmq", "13", "Sec-WebSocket-Protocol: other\r\n"
+                     "Sec-WebSocket-Protocol: more, fmq.v6\r\n", "101",
+       "Sec-WebSocket-Protocol: fmq.v6\r\n"}};
+  pattern_fixture fixture = {0};
+  char endpoint[FLOWMQ_CNET_URI_CAPACITY];
+  size_t endpoint_size;
+
+  pattern_fixture_init(&fixture, uri, true);
+  flowmq_socket_t *server = pattern_socket(&fixture, FLOWMQ_PAIR, true);
+  pattern_bind(&fixture, server, uri);
+  check_equal(flowmq_last_endpoint(server, endpoint, sizeof(endpoint), &endpoint_size), SALTS_OK);
+
+  for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+    raw_ws_client raw = {0};
+    char request[FLOWMQ_WS_HEADER_LIMIT + 16u];
+    unsigned char early_data[6u + 125u];
+    raw_ws_connect(&raw, endpoint, &fixture.tls);
+    uint64_t deadline = monotonic_ms() + 5000u;
+    while (!raw.connected && !raw.closed && monotonic_ms() < deadline)
+      raw_ws_progress(&raw, fixture.owner, server);
+    check_true(raw.connected && !raw.closed);
+    const int prefix_size = snprintf(request, sizeof(request),
+        "GET %s HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n"
+        "Connection: Upgrade\r\nSec-WebSocket-Version: %s\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n%s",
+        cases[i].path, cases[i].version,
+        cases[i].offers == NULL ? "Sec-WebSocket-Protocol: fmq.v6\r\nX-Pad: "
+                                : cases[i].offers);
+    check_true(prefix_size > 0 && (size_t)prefix_size < sizeof(request) - 4u);
+    size_t size = (size_t)prefix_size;
+    if (cases[i].offers == NULL) {
+      memset(request + size, 'a', sizeof(request) - size - 4u);
+      size = sizeof(request) - 4u;
+      memcpy(request + size, "\r\n", 2u);
+      size += 2u;
+    }
+    memcpy(request + size, "\r\n", 2u);
+    raw_ws_send(&raw, request, size + 2u);
+
+    deadline = monotonic_ms() + 5000u;
+    while (!raw.closed && strstr(raw.received, "\r\n\r\n") == NULL &&
+           monotonic_ms() < deadline)
+      raw_ws_progress(&raw, fixture.owner, server);
+    const char *end = strstr(raw.received, "\r\n\r\n");
+    check_not_null(end);
+    check_equal(memcmp(raw.received, "HTTP/1.1 ", 9u), 0);
+    check_equal(memcmp(raw.received + 9u, cases[i].status, 3u), 0);
+    if (cases[i].header != NULL) check_not_null(strstr(raw.received, cases[i].header));
+    if (strcmp(cases[i].status, "101") == 0) {
+      check_not_null(strstr(raw.received, "Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n"));
+      /* WebSocket OPEN is established, but this peer has not sent FMQ HELLO/SETTINGS. */
+      raw_ws_send_early_data(&raw, early_data);
+    } else {
+      const char *connection = strcmp(cases[i].status, "426") == 0
+          ? "Connection: Upgrade, close\r\n" : "Connection: close\r\n";
+      check_not_null(strstr(raw.received, connection));
+      check_equal(raw.used, (size_t)(end - raw.received) + 4u);
+    }
+    deadline = monotonic_ms() + 5000u;
+    while (!raw.closed && monotonic_ms() < deadline)
+      raw_ws_progress(&raw, fixture.owner, server);
+    check_true(raw.closed);
+    check_equal(cnet_client_stop(&raw.client, 5000u), SALTS_OK);
+    check_equal(cnet_client_destroy(&raw.client), SALTS_OK);
+  }
+
+  flowmq_socket_t *client = pattern_socket(&fixture, FLOWMQ_PAIR, false);
+  check_equal(flowmq_connect(client, endpoint), SALTS_OK);
+  check_equal(wait_for(fixture.owner, client, server, FLOWMQ_POLLOUT), SALTS_OK);
+  check_equal(flowmq_send(client, "good", 4u, FLOWMQ_DONTWAIT), SALTS_OK);
+  receive_part(fixture.owner, server, client, "good", 4u, 0);
+  pattern_close(&fixture, client);
+  pattern_close(&fixture, server);
+  pattern_fixture_term(&fixture);
 }
 
 static void request_reply(pattern_fixture *fixture, const char *uri) {
@@ -934,6 +1117,11 @@ spec("FlowMQ message transports") {
   it("enforces WSS trust, hostname and mutual TLS ROUTER identity before READY") {
     wss_authentication(false);
     wss_authentication(true);
+  }
+
+  it("qualifies HTTP Upgrade responses and rejects early FMQ DATA over WS and WSS") {
+    check_ws_upgrade_responses("ws://127.0.0.1:0/fmq");
+    check_ws_upgrade_responses("wss://127.0.0.1:0/fmq");
   }
 
   it("drives fragmented WebSocket messages and a TCP neighbor on one Owner") {

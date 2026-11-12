@@ -16,5 +16,6 @@ int flowmq_ws_upgrade_validate(bool server, const char *data, size_t size,
                                char accept[FLOWMQ_WS_ACCEPT_CAPACITY]);
 int flowmq_ws_server_response(const char *accept, char *response,
                               size_t capacity, size_t *size);
+const char *flowmq_ws_server_rejection(int status);
 
 #endif

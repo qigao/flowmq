@@ -110,6 +110,7 @@ cmake_add_test(
   LIBS FlowMQ::Transport Salts::CNet Salts::TinyTest
   INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/runtime
            ${PROJECT_SOURCE_DIR}/flowmq/src/runtime
+           ${PROJECT_SOURCE_DIR}/flowmq/src/transport/cnet
   FOLDER "flowmq/tests/transport")
 set_tests_properties(test_flowmq_message_transport PROPERTIES TIMEOUT 30)
 

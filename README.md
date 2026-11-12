@@ -272,8 +272,12 @@ its resources before terminating its context.
 FlowMQ parses the HTTP/1.1 Upgrade with llhttp and computes the
 `Sec-WebSocket-Accept` value with GmSSL SHA-1. It validates the requested
 resource, including its query, limits headers to 8 KiB, and applies a
-one-second Upgrade deadline. Each binary WebSocket message carries one
-complete FMQ frame. FMQ multipart flags link the individual frames.
+one-second Upgrade deadline. The listener combines subprotocol offers from
+repeated request fields. It responds to malformed requests, unknown resources,
+unsupported versions and oversized headers before disconnecting. An unsupported
+version receives `426` with the supported WebSocket version.
+Each binary WebSocket message carries one complete FMQ frame. FMQ multipart
+flags link the individual frames.
 CNet handles WebSocket masking, fragmentation, and control frames.
 WSS supports required client certificates and certificate-to-HELLO
 identity policies for ROUTER sockets. A ROUTER with an identity policy

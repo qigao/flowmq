@@ -67,6 +67,23 @@ int flowmq_ws_server_response(const char *accept, char *response,
   return SALTS_OK;
 }
 
+const char *flowmq_ws_server_rejection(int status) {
+  switch (status) {
+  case SALTS_EPROTO:
+    return "HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+  case SALTS_ENOENT:
+    return "HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+  case SALTS_ENOTSUP:
+    return "HTTP/1.1 426 Upgrade Required\r\nConnection: Upgrade, close\r\n"
+           "Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\nContent-Length: 0\r\n\r\n";
+  case SALTS_EMSGSIZE:
+    return "HTTP/1.1 431 Request Header Fields Too Large\r\n"
+           "Connection: close\r\nContent-Length: 0\r\n\r\n";
+  default:
+    return NULL;
+  }
+}
+
 typedef struct flowmq_ws_headers_s {
   vstr url;
   vstr field;
@@ -77,6 +94,7 @@ typedef struct flowmq_ws_headers_s {
   vstr protocol;
   vstr accept;
   bool server;
+  bool protocol_offered;
   bool upgrade;
   bool connection_upgrade;
   bool complete;
@@ -128,7 +146,15 @@ static int flowmq_ws_header_complete(llhttp_t *parser) {
   if (vstr_ieq(field, WS_LITERAL("Host"))) single = &headers->host;
   else if (vstr_ieq(field, WS_LITERAL("Sec-WebSocket-Key"))) single = &headers->key;
   else if (vstr_ieq(field, WS_LITERAL("Sec-WebSocket-Version"))) single = &headers->version;
-  else if (vstr_ieq(field, WS_LITERAL("Sec-WebSocket-Protocol"))) single = &headers->protocol;
+  else if (vstr_ieq(field, WS_LITERAL("Sec-WebSocket-Protocol"))) {
+    if (headers->server) {
+      if (value.len == 0u) return -1;
+      /* RFC 6455 permits a request's offers to span multiple field lines. */
+      headers->protocol_offered |= flowmq_ws_token(value, WS_LITERAL(FLOWMQ_WS_PROTOCOL), false);
+    } else {
+      single = &headers->protocol;
+    }
+  }
   else if (vstr_ieq(field, WS_LITERAL("Sec-WebSocket-Accept"))) single = &headers->accept;
   else if (vstr_ieq(field, WS_LITERAL("Connection")))
     headers->connection_upgrade |= flowmq_ws_token(value, WS_LITERAL("Upgrade"), true);
@@ -169,6 +195,19 @@ static int flowmq_ws_validate_key(vstr key, char *accept) {
   return valid ? flowmq_ws_accept(text, accept) : SALTS_EPROTO;
 }
 
+static int flowmq_ws_validate_version(vstr version) {
+  unsigned number = 0u;
+  if (version.len == 0u || version.len > 3u ||
+      (version.len > 1u && version.data[0] == '0'))
+    return SALTS_EPROTO;
+  for (size_t i = 0u; i < version.len; ++i) {
+    if (version.data[i] < '0' || version.data[i] > '9') return SALTS_EPROTO;
+    number = number * 10u + (unsigned)(version.data[i] - '0');
+  }
+  if (number > 255u) return SALTS_EPROTO;
+  return number == 13u ? SALTS_OK : SALTS_ENOTSUP;
+}
+
 int flowmq_ws_upgrade_validate(bool server, const char *data, size_t size,
                                const char *path,
                                char accept[FLOWMQ_WS_ACCEPT_CAPACITY]) {
@@ -190,16 +229,17 @@ int flowmq_ws_upgrade_validate(bool server, const char *data, size_t size,
       !headers.connection_upgrade || !headers.upgrade)
     return SALTS_EPROTO;
 
-  const vstr protocol = WS_LITERAL(FLOWMQ_WS_PROTOCOL);
   if (server) {
-    if (llhttp_get_method(&parser) != HTTP_GET || headers.host.len == 0u ||
-        !vstr_eq(headers.url, vstr_from_buf(path, strlen(path))) ||
-        !vstr_eq(headers.version, WS_LITERAL("13")) ||
-        !flowmq_ws_token(headers.protocol, protocol, false))
+    if (llhttp_get_method(&parser) != HTTP_GET || headers.host.len == 0u)
       return SALTS_EPROTO;
+    const int version_status = flowmq_ws_validate_version(headers.version);
+    if (version_status != SALTS_OK) return version_status;
+    if (!vstr_eq(headers.url, vstr_from_buf(path, strlen(path)))) return SALTS_ENOENT;
+    if (!headers.protocol_offered) return SALTS_EPROTO;
     return flowmq_ws_validate_key(headers.key, accept);
   }
-  return llhttp_get_status_code(&parser) == 101 && vstr_eq(headers.protocol, protocol) &&
+  return llhttp_get_status_code(&parser) == 101 &&
+         vstr_eq(headers.protocol, WS_LITERAL(FLOWMQ_WS_PROTOCOL)) &&
          vstr_eq(headers.accept, vstr_from_buf(accept, strlen(accept)))
       ? SALTS_OK : SALTS_EPROTO;
 }
