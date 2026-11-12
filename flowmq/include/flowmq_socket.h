@@ -177,7 +177,7 @@ FLOWMQ_C_API int flowmq_last_endpoint(const flowmq_socket_t *socket, char *buffe
  * `flowmq_tls_identity_map_config_t` from `flowmq_tls_identity_map.h`. It is
  * valid only on a ROUTER before runtime initialization; FlowMQ validates and
  * copies the immutable policy synchronously. A socket with this policy may
- * bind only a TLS listener configured to require client certificates.
+ * bind only a TLS or WSS listener configured to require client certificates.
  * FLOWMQ_KCP_PSK copies a nonzero FLOWMQ_KCP_PSK_BYTES-byte key before
  * bind/connect. It is write-only. A socket configured with this option
  * accepts only KCP endpoints with ?auth=psk.
@@ -236,8 +236,9 @@ FLOWMQ_C_API int flowmq_send(flowmq_socket_t *socket, const void *data,
                              size_t size, int flags);
 
 /**
- * Admit one canonical non-empty Salts Core slice through the plaintext TCP
- * immediate DATA lane without copying payload bytes.
+ * Admit one canonical non-empty Salts Core slice through the TCP or TLS
+ * immediate DATA lane without copying the payload at FlowMQ admission.
+ * CNet encrypts the retained plaintext on TLS.
  *
  * This is an explicit ownership-bearing alternative to flowmq_send(); it does
  * not change the borrowed-input/copy contract of that API. On SALTS_OK, CNet
@@ -294,9 +295,8 @@ FLOWMQ_C_API int flowmq_recv(flowmq_socket_t *socket, void *data,
  * On SALTS_OK, ownership of the dequeued inbound buffer is transferred to
  * `out`; the caller releases it with mem_slice_release(). The returned slice
  * remains valid across later owner-thread socket progress, sends, and receives.
- * Because FlowMQ 1.1 receive storage is backed by the socket-owned Salts memory
- * pool, every returned slice must be released before flowmq_close(). The API
- * does not copy into a detached buffer to extend lifetime across socket close.
+ * Multi-range input is coalesced when a contiguous slice is requested.
+ * Release every returned slice before flowmq_close().
  *
  * Flow credit, HWM occupancy, multipart state and REQ/REP state advance when
  * the message part is dequeued, exactly as for flowmq_recv(); application hold
@@ -318,9 +318,9 @@ FLOWMQ_C_API int flowmq_recv_slice(flowmq_socket_t *socket,
  * Core slices without coalescing segmented DATA payload ranges.
  *
  * On SALTS_OK, ownership of exactly *count slice descriptors is transferred to
- * the caller. Release every returned descriptor with mem_slice_release().
- * One-range DATA returns count 1; multi-range DATA returns the bounded payload
- * vector already owned by the FlowMQ inbound queue.
+ * the caller. Release every returned descriptor with mem_slice_release()
+ * before flowmq_close(). One-range DATA returns count 1. Multi-range DATA
+ * returns the bounded payload vector already owned by the FlowMQ inbound queue.
  *
  * The caller provides capacity empty/zero-initialized descriptors. If capacity
  * is smaller than the queued part's required range count, the call returns

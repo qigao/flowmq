@@ -31,15 +31,15 @@ FMP/1 typed message 或 FES/1 application envelope
                     ↓ bytes
               FMQ/6 DATA payload
                     ↓ frame
-           CNet TCP 或 verified TLS
+           CNet TCP / TLS / IPC / WS / WSS / KCP
 
 FMS/3 只允许位于 FMQ/6 HELLO payload
 ```
 
 - FMQ/6 拥有连接协商、传输 credit 和消息边界；只接受 PUB/SUB、PUSH/PULL、
   ROUTER/DEALER、PAIR、REQ/REP、XPUB/XSUB。
-- FMS/3 只拥有 security envelope 的 wire 语法。credential verifier 尚未接入时，socket
-  boundary 继续 fail fast 拒绝非空 security payload。
+- FMS/3 定义 security envelope 语法。socket runtime 接收空 HELLO payload。TLS/WSS
+  ROUTER 的可选证书身份策略读取已验证的证书指纹和 HELLO identity 字段。
 - FES/1 拥有 ESB message kind 与 kind-specific metadata。它是普通 DATA payload，不能声明新
   socket pattern，也不能改变 FMQ flow-control 状态。
 - FMP/1 拥有 media-provider schema version 与 typed validation，不拥有 delivery、receipt 或

@@ -1,24 +1,21 @@
 # FMQ/6 与 FMS/3 Wire Protocol
 
-FMQ/6 是 FlowMQ 唯一 socket framing；FMS/3 是可选但不可降级的 HELLO security
-envelope。本文是 wire 字段、校验、分片、心跳、pattern、queue 和
+FMQ/6 是 FlowMQ 的 socket framing。FMS/3 定义可选 HELLO security envelope 的语法。
+本文是 wire 字段、校验、分片、心跳、pattern、queue 和
 backpressure 边界的唯一详细正文。
 
 协议总索引见 [PROTOCOL_SPEC.md](PROTOCOL_SPEC.md)。本文定义 wire envelope，不定义应用 payload。
 
 ## 1. 分层与版本
 
-FMQ/6 位于 CNet TCP/TLS 有序字节流之上，应用协议位于 FMQ `DATA` payload 之内：
+应用协议位于 FMQ `DATA` payload 内。FlowMQ 在下列 CNet transport 上使用同一套
+FMQ/6 帧格式。
 
-```text
-     应用 payload
-              |
-       FMQ/6 DATA payload
-              |
-  FMQ/6 frame + FMS/3 HELLO
-              |
-       CNet TCP / TLS
-```
+| Transport | FMQ/6 封装 |
+| --- | --- |
+| TCP、TLS、IPC | 在有序字节流中连续传输 FMQ frame |
+| WS、WSS | 完成 HTTP Upgrade 并选定 `fmq.v6` 后，每个 binary message 携带一个完整 FMQ frame |
+| KCP | 普通或 PSK 会话建立后，每个 KCP 逻辑消息携带一个完整 FMQ frame |
 
 整数使用 network byte order（big-endian）。文本是无 NUL 的有界 UTF-8，BYTES
 字段保持 binary-safe。decoder 必须拒绝版本错误、保留字段非零、长度不一致、
@@ -28,8 +25,8 @@ FMQ/6 位于 CNet TCP/TLS 有序字节流之上，应用协议位于 FMQ `DATA` 
 其他版本必须返回协议错误，不得协商、fallback 或静默接受旧版本。
 
 一次连接双方各发送一个 `HELLO` 和一个 `SETTINGS`。只有 HELLO、SETTINGS 完成且
-pattern pairing 合法后才能接受 `DATA`。可信 FMQ/6 的 HELLO payload 必须为空；配置 security binding 时必须
-使用 FMS/3，trusted 与 secure 两种模式不互相降级。
+pattern pairing 合法后才能接受 `DATA`。当前 socket runtime 的 HELLO payload 为空。
+TLS/WSS 的证书身份校验使用 HELLO 的 identity 字段。
 
 ## 2. Frame layout
 
@@ -74,7 +71,7 @@ payload backing 必须保持到 send 完成。
 每个方向的状态顺序固定为：
 
 ```text
-TCP/TLS connected -> HELLO -> SETTINGS -> READY -> DATA/FLOW_UPDATE
+transport ready -> HELLO -> SETTINGS -> READY -> DATA/FLOW_UPDATE
 ```
 
 SETTINGS payload 为 32 bytes，全部字段使用 big-endian：
@@ -96,7 +93,7 @@ FLOW_UPDATE payload 为 24 bytes：
 | 8 | 8 | consumed data | 单调不减 |
 | 16 | 8 | max data | 单调不减且不小于 consumed data |
 
-发送方始终满足 `sent_data <= max_data`。接收方在应用释放 DATA payload 后按
+发送方始终满足 `sent_data <= max_data`。接收方在应用取走 DATA part 后按
 `max_data = consumed_data + receive_hwm_bytes` 推进窗口。控制帧、ROUTER 合成的
 identity part 和 XPUB 合成的 subscription event 不计 DATA credit。达到 quantum 或
 最早未公布消费达到 interval 时，owner 的下一次 `send`、`recv` 或 `poll` 进度发送
@@ -127,18 +124,15 @@ channel binding 只能为空或 32 bytes。`AUTH` 必须包含 identity、method
 `ACCEPTED` 不包含 identity、method 或 credential，只可包含 channel binding；
 `NONE` 只能用空 HELLO payload 表示，不能编码为非空 FMS3。
 
-FMS/3 只描述 wire envelope，不决定 provider 是否接受 credential。配置 security
-binding 后，server 必须在创建 live peer、加入 selector/route registry 或发布 graph
-message 前完成认证、claimed identity 与 principal 一致性以及 CONNECT ACL。后续
-SUBSCRIBE、READ、WRITE、EXECUTE 仍需 ACL 检查。credential 只在 provider lease 和
-HELLO 边界内存在，消费或释放前必须清零。
+FMS/3 codec 负责 wire envelope 与字段校验。socket runtime 仅接收空 HELLO payload，
+credential provider 和应用 ACL 尚未接入。若后续启用 FMS/3 provider，接纳 peer 前需验证
+credential、claimed identity 与 principal 的一致性和 CONNECT ACL。应用操作再检查各自的
+ACL，credential 在 provider lease 内使用，消费或释放前清零。
 
-明文 TCP 不提供 transport confidentiality；有保密或网络身份要求时必须选择 TLS。
-TLS client 必须验证证书链与主机名，TLS listener 必须显式提供 certificate/key；mTLS
-identity binding 还必须验证客户端证书，并将证书 SHA-256 fingerprint 与 HELLO claimed
-identity 绑定。任何证书或 identity binding 失败都必须关闭连接，不得回退到明文 TCP。
-当前 CNet endpoint 只接受空 HELLO security payload；FMS/3 provider binding 在接入 endpoint
-前不得宣称已启用。
+TLS/WSS client 由 CNet 验证证书链及服务器身份，listener 配置 certificate/key。
+配置 `FLOWMQ_TLS_IDENTITY_POLICY` 的 ROUTER 在发送 SETTINGS 前将已验证的证书
+SHA-256 指纹与 HELLO identity 匹配。配置该策略的 listener 必须要求客户端证书。
+身份校验失败关闭当前连接。
 
 ## 4. Pattern registry
 
@@ -190,7 +184,7 @@ credit window、decoder 和 pattern peer state。旧 session 未完成的 outbou
 
 CNet 从初次拨号起计算单轮预算，默认最多 32 次尝试、30 秒，采用 100 ms 起步、
 1 秒封顶的指数退避与抖动。只有完整的 FMQ READY 才清零尝试次数和退避。
-READY 后断线开启新一轮预算。经传输层或 FMQ 确认的身份认证失败会结束当轮重连。
+READY 后断线可开启新一轮预算。报告证书拒绝或 HELLO 身份拒绝时结束当轮重连。
 `FLOWMQ_RECONNECT_DISABLED` 允许一次初始拨号，关闭自动重连。
 进度由 socket 或显式 owner lane 驱动。
 
@@ -215,7 +209,7 @@ socket facade 当前只提供 `FLOWMQ_HEARTBEAT_IVL` 与 `FLOWMQ_HEARTBEAT_TIMEO
 | --- | --- |
 | graph publish success | 当前 graph attempt 成功 |
 | frame admission | 本地有界发送边界接管 encoded frame |
-| transport send success | CNet 完成一次完整有序写入 |
+| transport send success | CNet 完成逻辑写入。KCP 的终态在逻辑消息得到 KCP ACK 后报告 |
 | storage accept | durable owner transaction 已提交 |
 | delivery/completion | consumer/worker 完成且 storage settlement 成功 |
 
@@ -225,10 +219,9 @@ owned buffer。raw socket bytes、decoder buffer 和 frame view 只能留在 CNe
 
 ## 7. Pattern queue 与 backpressure
 
-queue 和 HWM 是本地 pattern/session 状态；远端 DATA credit 由第 2.1 节的 SETTINGS /
-FLOW_UPDATE 协调，但不替代本地容量限制。所有 accepted frame 仍由全局 `frame_hwm_messages` /
-`frame_hwm_bytes` admission 计费；只有最终 completion、drop 或 shutdown cancel
-才能释放该全局 budget。
+发送和接收使用本地消息数与字节数 HWM。每个 peer 的发送占用包含已排队和在途的 DATA，
+由发送完成或会话取消结算。接收占用在应用取走消息时更新。远端累计 credit 由第 2.1 节的
+SETTINGS / FLOW_UPDATE 协调。
 
 TCP/TLS 已负责可靠有序传输与拥塞控制；FMQ/6 不在同一 TCP/TLS stream 内发送 FEC
 repair symbol。此类冗余不能绕过 TCP head-of-line blocking，只会消耗额外带宽和 CPU。
@@ -242,16 +235,14 @@ repair symbol。此类冗余不能绕过 TCP head-of-line blocking，只会消�
 可重放的 global pending queue，全体 peer 不可写时返回 `SALTS_EBUSY` 或
 `SALTS_ENOBUFS`。
 
-每个 transport write 当前只提交一个连续 encoded frame，没有 iovec batch。成功 send
-只表示 frame 已进入所选 peer 的本地有界队列，不表示远端接收或业务完成。peer 协议错误、
-断线或 write 失败只关闭对应 connection，不污染同一 listener 的其他 peer；已经绑定到该
-peer 且尚未发送的 frame 会随 peer 状态释放，不会改投。
+TCP/TLS 的逻辑写入可以使用 retained vector 或合批发送多个已编码 frame。
+WS/WSS 和 KCP 保持一个逻辑消息携带一个完整 FMQ frame 的边界。成功 send 表示本地接纳。
+peer 发生协议错误、断线或 write 失败时，已绑定该 peer 的未发送 frame 随旧会话结算。
 
 ### 7.2 当前 shutdown 语义
 
-`flowmq_close()` 立即停止 caller-driven progress、关闭 listener/client，并释放 peer queue、
-接收 queue、decoder、TLS 与 pool 资源。当前 API 没有 linger、drain 或 durable pending
-语义；应用若需要确认处理结果，必须在关闭前通过自己的业务协议完成确认。
+普通 socket 用 `flowmq_close()` 关闭，Owner socket 用 `flowmq_owner_close_socket()`。
+两者在回收前推进传输关闭并结算在途资源。应用通过业务协议确认处理结果，并在关闭前完成确认。
 
 ## 8. Implementation evidence
 

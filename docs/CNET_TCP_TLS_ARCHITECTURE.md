@@ -1,5 +1,8 @@
 # FlowMQ CNet TCP/TLS 与 ZeroMQ socket 模型
 
+本文展开 TCP/TLS 的数据路径。各 transport 的公开能力见
+[根 README](../README.md#runtime-model)。
+
 ## 决策
 
 FlowMQ 的公开目标是 ZeroMQ 的 context/socket 调用方式和消息模式语义，不采用
@@ -32,7 +35,7 @@ worker 保持最后一条应答的进度直到该信号，再在各自 owner 上
 
 ## ZeroMQ 模式契约
 
-TCP/TLS 第一阶段承载以下经典 socket 模式；bind/connect 方向不决定 pattern：
+TCP/TLS 承载以下 socket 模式。bind/connect 决定连接方向，pattern 决定消息语义。
 
 | Socket | Compatible peers | Send | Receive | Routing |
 | --- | --- | --- | --- | --- |
@@ -66,30 +69,27 @@ socket owner lane，pattern FSM 与网络 peer 使用同一事实源。
 仍单独调用 `cnet_listener_wait()`；ordinary `poll` 对列表中的 socket 执行非阻塞
 progress，并以 1ms 有界间隔重复检查，提供统一 timeout 语义。
 
-本轮迁移使用的 Salts 2.3.0-rc.1 SDK 已提供 `cnet_listener_attach_external()`、
-`cnet_listener_submit_external_accept()` 和 `cnet_listener_route_external_completion()`，
-可以由宿主通过共享 NativeIO backend 推进 accept，与 `cnet_listener_wait()` 互斥。
-FlowMQ 现有 explicit owner 仍只开放 TCP client-side；服务端接入属于尚未实现的
-[Acceptor–Connector 设计](ARCHITECTURE.md#acceptorconnector-接入决策2026-10-10)，
-不能把 SDK 能力当作当前 FlowMQ 已支持的行为。
+公开 `flowmq_owner_socket()` 的客户端支持 TCP、IPC、WS/WSS 和 KCP，并由
+`flowmq_owner_poll()` 统一推进。直接 TLS 使用普通 socket。公开 `flowmq_bind()` 使用普通
+socket，TCP 与 IPC 另有内部 shared-listener 验收路径。接纳流程见
+[Acceptor–Connector 设计](ARCHITECTURE.md#acceptorconnector-接入决策2026-10-10)。
 
 ### 协议 READY 与重连退避
 
-连接 endpoint 拥有退避状态，peer generation 拥有一次性的 READY 标记。
+连接 endpoint 持有 CNet recovery state，每代 peer 持有本次尝试的 ticket。
 TCP/TLS `CONNECTED` 只表示 transport 建连成功；只有本地 HELLO/SETTINGS 的发送完成、
 远端 HELLO/SETTINGS 的接收与校验全部成功，才重置该 endpoint 的退避。
 TX-first 与 RX-first 均经过同一 READY gate。错误 pattern 或 TLS certificate/HELLO
-identity 校验失败不能重置退避，也不能使 DATA 获得发送资格。
+identity 校验失败关闭该 peer。报告证书或 HELLO 身份拒绝时结束当前恢复轮次。
 
 READY 是本地协议状态，不是对端应用执行确认。TLS 身份拒绝的重连测试由连接方
-ROUTER 执行 identity policy，并观测它自己的 endpoint 退避；不能从被服务端拒绝的
-客户端推断远端授权已成功或尚未成功。现有 FMQ/6 没有提供这样的远端确认。
+ROUTER 执行 identity policy，并验证它自己的恢复轮次结束。远端业务结果由应用协议确认。
 
 重连不重放旧 DATA。旧 peer 关闭时取消绑定到它的未完成 multipart，释放暂存内容，
 下一次发送返回 `SALTS_ENOTCONN`；新 READY 会话仅接受随后显式提交的新消息。
 XSUB 的期望订阅重新同步属于控制面恢复，与 DATA replay 分开。
-这些边界由 `test_flowmq_peer_state` 的握手排列测试及 `test_flowmq_socket` 的真实
-TCP 错误 HELLO、TLS 身份拒绝、multipart 断连和 XSUB 重连测试覆盖（#118 / #120）。
+这些边界由 `test_flowmq_socket` 的真实 TCP 错误 HELLO、TLS 身份拒绝、multipart 断连
+与 XSUB 重连测试覆盖。`test_flowmq_owner_fault` 还验证了迟到 TCP 建连完成与代际隔离。
 
 ### 已观察完成批次的错误边界
 
@@ -162,19 +162,15 @@ multipart message 仍只有一个 CNet logical send terminal。超限返回显�
 `SALTS_EMSGSIZE`，不 split、不 flatten、不 copy；已经成功 staged 的前缀仍由 socket 持有，
 可由调用者重试 final part，或在 disconnect/cancel/close 时精确释放。
 
-PAIR/PUSH/DEALER/REQ/REP 与 ROUTER 的 retained multipart 都保持选定 peer/generation pinning；
-REQ/REP FSM 只在 final aggregate admission 成功后完成本次 send transaction。retained
-multipart PUB/XPUB 暂时 `SALTS_ENOTSUP`，因为 multi-peer atomic retained ownership 需要独立
-设计；final-only retained publication 维持现有 mute/drop 语义。plaintext TCP 支持 retained
-surface；TLS 仍明确返回 `SALTS_ENOTSUP`，不会隐式转成 copy/encryption fallback。
+PAIR/PUSH/DEALER/REQ/REP 与 ROUTER 的 retained multipart 绑定选定的 peer generation。
+REQ/REP FSM 在 final aggregate admission 成功后完成本次 send transaction。PUB/XPUB
+在第一 part 冻结匹配的 peer 集合，最后一 part 为每个仍可接纳的 peer 原子提交同一
+retained publication 的一个有界引用。
 
-需要排队的完整 frame 只平铺一次到其 canonical `mem_buffer_t`。plaintext TCP flush
-将这些 owner buffers 转成 `mem_slice_t` 并通过 `cnet_send_slicev` retained admission
-提交；FlowMQ 随即释放自己的 slice/queue 引用，CNet 在 logical terminal 前保持 backing
-ownership。一个 FlowMQ queued batch 最多使用 `CNET_RETAINED_VECTOR_MAX`（当前 32）
-个 logical ranges；CNet 再按 `NATIVE_IO_VECTOR_MAX`（当前 16）切成 successive native
-windows，期间不 flatten、不复制 payload，也不发布中间 send terminal。TLS 仍明确使用
-copy/encryption path，不从 rejected retained-SG 隐式 fallback。
+TCP 和 TLS 均支持 `flowmq_send_slice()`，经 `cnet_send_slicev()` 接纳。CNet 持有 payload
+引用直到逻辑终态。TCP retained vector 可由 CNet 分为 successive NativeIO windows，
+TLS 则由 CNet 加密 retained plaintext。排队的普通 copied frame 可用 bounded vector
+发送，符合小帧条件时可在 FlowMQ 合批后用 `cnet_send_buffer()` 发送。
 
 立即发送的数据路径从 `payload -> FlowMQ 1MiB scratch -> CNet slot` 缩短为
 `payload -> CNet slot`，payload copy 从两次减为一次。queued TCP 的 frame payload
@@ -183,47 +179,24 @@ copy/encryption path，不从 rejected retained-SG 隐式 fallback。
 
 普通 `flowmq_send` 仍不是跨 poll 的 borrowed-send，也不改变原有完成语义。
 只有显式 `flowmq_send_slice` 把 canonical owner lifetime 延伸到网络 terminal，而且通过
-Salts Core refcount 表达，不保留裸 caller pointer。TLS 仍必须让加密层接受其明确的
-copy/encryption plaintext path。任何 retained admission 失败都不留下 backing retain，
+Salts Core refcount 表达。任何 retained admission 失败都不留下本次请求的 backing retain，
 也不提交 peer credit/HWM；queued copy path 的 buffer 仍由原 owner 持有。
 
 ## 接收内存与所有权
 
-当前 receive decode 之后存在两个明确的 copy boundary：
+TCP 对符合条件的 DATA 使用 CNet owned-receive backing。FlowMQ 从有界 stream
+中投影 payload ranges，并把它们转入 multipart staging 和 inbound queue。TLS 与
+TCP 的其他输入形状走 copied stream decoder。
 
-```text
-flowmq_stream_decoder_next()
-        -> frame.payload borrowed view
-        -> flowmq_socket_stage_bytes()
-             copy -> socket message_pool mem_buffer_t
-        -> inbound ring owns mem_buffer_t
-        -> flowmq_recv()
-             copy -> caller storage
-```
+| API | 成功取走一个 part 时的内存操作 |
+| --- | --- |
+| `flowmq_recv()` | 将 payload 直接复制到 caller buffer |
+| `flowmq_recv_slice()` | 单 range 转移所有权，多 range 合并为一个连续 slice |
+| `flowmq_recv_slicev()` | 转移 inbound queue 已持有的 payload ranges |
 
-`flowmq_recv_slice` 只消除第二个边界，不伪装成 CNet-ingress zero-copy。成功 dequeue 时，
-inbound ring 的唯一 canonical `mem_buffer_t` reference 直接转移到 caller 的
-`mem_slice_t`；FlowMQ 不执行 retain+release 对，也不把 bytes 复制到新的 detached storage。
-这使 zero-length part 也能保持同样的 ownership-transfer 规则。
-
-receive credit、inbound HWM accounting、`RCVMORE` 与 pattern/REQ/REP FSM 都在 dequeue
-成功时推进，与 `flowmq_recv` 保持一致；应用随后持有 slice 的时间不会占用 transport
-credit 或 socket inbound occupancy。caller 必须提供空的输出 slice；非空 descriptor
-直接返回 `SALTS_EINVAL` 且不修改原 owner，避免覆盖 live reference。对合法的空输出，
-错误、DONTWAIT would-block 与非法 FSM 路径都保持为空且不取得 ownership。
-
-Salts `1.8.3` 是本仓当前 released producer baseline，并已包含 CNet owned-receive #594/#597 的 producer-owned receive contract。本次依赖对齐仍不改变 FlowMQ runtime ownership，因此这里继续描述现有 socket `message_pool` owner；迁移到 CNet producer-owned backing 由 FlowMQ #46 单独实现和验证。
-
-该 surface 的 lifetime 明确受 socket memory pool 约束。Salts 1.8.3 的 `mem_destroy()`
-会直接销毁 pool slab，并不等待 outstanding pooled buffers，所以返回的 slice 可以跨后续
-owner-thread `poll/send/recv` progress 持有，但必须在 `flowmq_close()` 前
-`mem_slice_release()`。FlowMQ 不通过隐藏 copy 来制造 close 后 lifetime。若未来要求 slice
-跨 socket/context destruction 存活，需要 Salts 提供 detachable/refcounted pool owner，
-或另行定义显式 non-pooled receive ownership。
-
-decoder payload -> message_pool 的第一次 copy 仍保留。是否让 stream decoder/CNet 直接产出
-canonical owned receive backing 是独立的后续优化，因为它会改变 decoder consume/lifetime
-边界，不应与 public recv-slice ABI 的第一阶段混合。
+成功 dequeue 时更新 receive credit、HWM、`RCVMORE` 与 pattern FSM。输出 slice 必须
+为空，释放所有返回的 slice 后才能关闭 socket。详细路径见
+[Receive 数据路径](ARCHITECTURE.md#receive-数据路径)。
 
 ## TCP latency policy
 
@@ -240,8 +213,10 @@ CNet logical terminal。FlowMQ 不用 copy fallback 掩盖这一 transport effec
 
 - TLS client 始终验证证书链与 hostname/IP，不提供 insecure fallback。
 - TLS server 必须显式提供 certificate/key。
-- mTLS 可验证客户端证书链；当前 socket 尚未把证书 fingerprint 绑定到 HELLO identity。
-  因此 endpoint 只接受空 FMS/3 HELLO payload，不能宣称已启用业务 principal binding。
+- TLS/WSS ROUTER 可设置 `FLOWMQ_TLS_IDENTITY_POLICY`。FlowMQ 在发送 SETTINGS
+  前将已验证证书的 SHA-256 指纹与 HELLO identity 匹配。配置此策略的 listener
+  必须启用 `FLOWMQ_TLS_REQUIRE_CLIENT_CERTIFICATE`。
+- 当前 socket 接收空 HELLO payload。FMS/3 credential provider 尚未接入。
 - 密钥与密码归 transport owner，销毁前清零；错误与日志不得输出 secret。
 
 ## 迁移与验证
@@ -265,9 +240,8 @@ READY 前无 lease、终止后容量回收、残留 multipart 代际、握手期
 `test_flowmq_public_c11` / `test_flowmq_public_cpp17` 复用 package consumer，
 检查共享库公开 ABI；仅启用测试时要求 C++ 编译器，产品仍是 C11。
 
-Windows 使用已发布 Salts 2.3.0-rc.1 / Salts Utils 4.3.0-rc.1，通过 user
-preset 构建和 CTest 验证；pool 生命周期与 Owner fault 用例各重复 20 次通过。
-可在 VsDevCmd 环境复现：
+2026-10-10 的 Windows 验收使用 Salts 2.3.0-rc.1 / Salts Utils 4.3.0-rc.1；
+pool 生命周期与 Owner fault 用例各重复 20 次通过。该次记录使用以下本地 preset：
 
 ```sh
 cmake --build --preset win-release-user
@@ -277,5 +251,5 @@ ctest --preset win-release-user -R "^test_flowmq_(peer_pool|owner_fault_pool)$" 
 
 #123 的 Windows 安装 SDK C11/C++17 consumer、TCP/TLS 1/2/4 progress owners
 对照现已执行；原始数据、波动与复测、复现命令和剩余范围见
-[peer pool 验收记录](PEER_POOL_QUALIFICATION.md)。跨平台 CI 实跑与独立的
-retained-byte/分配成本证据仍待完成，当前测量不证明普遍性能收益。
+[peer pool 验收记录](PEER_POOL_QUALIFICATION.md)。当前跨平台运行矩阵见
+[原生 SDK 工作流](../.github/workflows/native-sdk-release.yml)。
