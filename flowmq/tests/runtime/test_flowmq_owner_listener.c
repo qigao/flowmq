@@ -1,4 +1,5 @@
 #include "flowmq_owner.h"
+#include "flowmq_owner_internal.h"
 #include "flowmq_peer_pool.h"
 #include "flowmq_socket_external_internal.h"
 #include "tinytest.h"
@@ -21,6 +22,38 @@ typedef struct listener_fixture_s {
   flowmq_socket_t *clients[LISTENER_CLIENTS];
   char *ipc_directory;
 } listener_fixture;
+
+typedef struct listener_cancel_trace_s {
+  native_io_completion terminal;
+  size_t count;
+} listener_cancel_trace;
+
+static int listener_capture_cancelled(
+    void *user, const native_io_completion *completions, size_t count,
+    size_t socket_capacity, flowmq_owner_batch_route_fn route, void *route_user) {
+  listener_cancel_trace *trace = user;
+  for (size_t i = 0u; i < count; ++i) {
+    if (completions[i].kind == NATIVE_IO_COMPLETION_CANCELLED) {
+      trace->terminal = completions[i];
+      ++trace->count;
+    }
+  }
+  return flowmq_owner_batch_route(completions, count, socket_capacity,
+                                   route, route_user);
+}
+
+static void listener_capture_idle_accept_cancel(
+    flowmq_owner_t *owner, flowmq_socket_t *listener, listener_cancel_trace *trace) {
+  const uint64_t deadline = monotonic_ms() + LISTENER_DEADLINE_MS;
+  int status;
+  while ((status = flowmq_socket_internal_stop_external(listener)) == SALTS_EBUSY &&
+         monotonic_ms() < deadline)
+    check_equal(flowmq_owner_internal_progress_once(owner, 1u,
+                      listener_capture_cancelled, trace), SALTS_OK);
+  check_equal(status, SALTS_OK);
+  check_equal(trace->count, 1u);
+  check_true(native_io_request_valid(trace->terminal.request));
+}
 
 static void listener_configure(flowmq_socket_t *socket) {
   const int reconnect = -1;
@@ -200,6 +233,7 @@ spec("FlowMQ internal shared listener integration") {
 
   it("shares a wait between TCP and IPC listeners through IPC close and rebind") {
     char endpoint[256];
+    listener_cancel_trace retired_accept = {0};
     f.ipc_directory = tt_make_temp_dir("fmqipc");
     check_not_null(f.ipc_directory);
     const char *name = f.ipc_directory;
@@ -229,6 +263,15 @@ spec("FlowMQ internal shared listener integration") {
       check_equal(ready, 0u);
 
       if (round != 0u) {
+        /* This value came from the old listener's real cancelled accept.
+         * Replay it after rebinding while the new accept is pending. */
+        bool consumed = true;
+        size_t events = 1u;
+        check_equal(flowmq_socket_internal_route_external_completion(
+                        f.owned[0], &retired_accept.terminal, &consumed, &events),
+                    SALTS_OK);
+        check_false(consumed);
+        check_equal(events, 0u);
         f.clients[0] = flowmq_socket(f.ctx, FLOWMQ_PAIR);
         check_not_null(f.clients[0]);
         listener_connect_to(f.clients[0], f.owned[0]);
@@ -236,6 +279,8 @@ spec("FlowMQ internal shared listener integration") {
         listener_exchange(&f, f.owned[0], f.clients[0], (unsigned char)(round + 20u));
       }
       listener_exchange(&f, f.owned[1], f.clients[1], (unsigned char)(round + 40u));
+      if (round == 0u)
+        listener_capture_idle_accept_cancel(f.owner, f.owned[0], &retired_accept);
       check_equal(flowmq_owner_close_socket(f.owner, f.owned[0]), SALTS_OK);
       f.owned[0] = NULL;
 #if !defined(_WIN32)
