@@ -2,7 +2,9 @@
 #include "flowmq_socket_external_internal.h"
 #include "flowmq_peer_pool.h"
 #include "tinytest.h"
+#include <core/clock.h>
 #include <core/error.h>
+#include <threads/threads.h>
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -307,3 +309,178 @@ spec("FlowMQ actual NativeIO batch routing faults") {
     }
   }
 }
+
+#if !defined(FLOWMQ_TEST_OWNER_LISTENER)
+enum { LATE_CONNECT_EPISODE_MS = 500u, LATE_CONNECT_TEST_MS = 5000u };
+
+typedef struct late_connect_fixture_s {
+  flowmq_ctx_t *ctx;
+  flowmq_owner_t *owner;
+  flowmq_socket_t *client;
+  flowmq_socket_t *server;
+  native_io_completion completion;
+  uint64_t episode_expires;
+  bool close_first;
+  bool replacement_routed;
+} late_connect_fixture;
+
+static int late_connect_dispatch(
+    void *user, const native_io_completion *completions, size_t count,
+    size_t socket_capacity, flowmq_owner_batch_route_fn route, void *route_user) {
+  late_connect_fixture *f = user;
+  check_equal(socket_capacity, 1u);
+  /* This owner has a single dialer and no other outstanding I/O. */
+  check_equal(count, 1u);
+  check_equal(completions[0].kind, NATIVE_IO_COMPLETION_OK);
+  check_equal(completions[0].status, SALTS_OK);
+  f->completion = completions[0];
+  check_true(native_io_request_valid(f->completion.request));
+  uint64_t now = monotonic_ms();
+  while (now < f->episode_expires) {
+    sleep_ms((uint32_t)(f->episode_expires - now));
+    now = monotonic_ms();
+  }
+  uint32_t wait_ms = 1u;
+  check_equal(flowmq_socket_internal_external_timeout(f->client, 1000u, &wait_ms),
+              SALTS_OK);
+  check_equal(wait_ms, 0u);
+  if (f->close_first)
+    check_equal(flowmq_socket_internal_progress_local(f->client), SALTS_OK);
+
+  const int status = flowmq_owner_batch_route(
+      completions, count, socket_capacity, route, route_user);
+  if (!f->close_first) {
+    /* The CONNECTED callback itself must reject the expired attempt before
+     * the Owner's post-route progress pass has a chance to close it. */
+    uint64_t backoff;
+    uint32_t attempts;
+    bool sealed;
+    check_equal(flowmq_socket_internal_endpoint_backoff(
+                    f->client, 0u, &backoff, &attempts, &sealed), SALTS_OK);
+    check_true(sealed);
+    check_equal(attempts, 1u);
+    check_equal(backoff, 0u);
+  }
+  return status;
+}
+
+static int late_connect_replacement_dispatch(
+    void *user, const native_io_completion *completions, size_t count,
+    size_t socket_capacity, flowmq_owner_batch_route_fn route, void *route_user) {
+  late_connect_fixture *f = user;
+  check_equal(count, 1u);
+  check_equal(completions[0].kind, NATIVE_IO_COMPLETION_OK);
+  /* The replacement has a real pending connect completion. The old event
+   * must not claim that request or advance the replacement handshake. */
+  bool consumed = true;
+  size_t events = 1u;
+  check_equal(flowmq_socket_internal_route_external_completion(
+                  f->client, &f->completion, &consumed, &events), SALTS_OK);
+  check_false(consumed);
+  check_equal(events, 0u);
+  f->replacement_routed = true;
+  return flowmq_owner_batch_route(completions, count, socket_capacity, route, route_user);
+}
+
+spec("FlowMQ real TCP connect completion at the recovery deadline") {
+  static late_connect_fixture fixture;
+
+  before_each() {
+    const flowmq_owner_config_t config = {sizeof(config), 1u};
+    const flowmq_reconnect_config_t reconnect = {3u, LATE_CONNECT_EPISODE_MS, 1u, 2u};
+    memset(&fixture, 0, sizeof(fixture));
+    fixture.ctx = flowmq_ctx_new();
+    check_not_null(fixture.ctx);
+    fixture.owner = flowmq_owner_new(fixture.ctx, &config);
+    check_not_null(fixture.owner);
+    fixture.client = flowmq_owner_socket(fixture.owner, FLOWMQ_PAIR);
+    fixture.server = flowmq_socket(fixture.ctx, FLOWMQ_PAIR);
+    check_not_null(fixture.client);
+    check_not_null(fixture.server);
+#if defined(FLOWMQ_TEST_PEER_POOL)
+    flowmq_peer_pool_config_t pool = FLOWMQ_PEER_POOL_CONFIG_INIT;
+    pool.max_peers = pool.max_connecting = 1u;
+    check_equal(flowmq_socket_set_peer_pool(fixture.client, &pool), SALTS_OK);
+#endif
+    check_equal(flowmq_setsockopt(fixture.client, FLOWMQ_RECONNECT, &reconnect,
+                                 sizeof(reconnect)), SALTS_OK);
+    check_equal(flowmq_bind(fixture.server, "tcp://127.0.0.1:0"), SALTS_OK);
+  }
+
+  after_each() {
+    if (fixture.server != NULL) check_equal(flowmq_close(fixture.server), SALTS_OK);
+    if (fixture.client != NULL)
+      check_equal(flowmq_owner_close_socket(fixture.owner, fixture.client), SALTS_OK);
+    if (fixture.owner != NULL) check_equal(flowmq_owner_term(fixture.owner), SALTS_OK);
+    if (fixture.ctx != NULL) check_equal(flowmq_ctx_term(fixture.ctx), SALTS_OK);
+  }
+
+  for (size_t close_first = 0u; close_first < 2u; ++close_first) {
+    it("discards a late successful TCP connect (close queued first %zu)", close_first) {
+      char endpoint[128];
+      size_t endpoint_size = 0u;
+      check_equal(flowmq_last_endpoint(fixture.server, endpoint, sizeof(endpoint),
+                                       &endpoint_size), SALTS_OK);
+      check_equal(flowmq_connect(fixture.client, endpoint), SALTS_OK);
+      fixture.episode_expires = monotonic_ms() + LATE_CONNECT_EPISODE_MS;
+      fixture.close_first = close_first != 0u;
+      const uint64_t deadline = monotonic_ms() + LATE_CONNECT_TEST_MS;
+      while (!native_io_request_valid(fixture.completion.request) &&
+             monotonic_ms() < deadline)
+        check_equal(flowmq_owner_internal_progress_once(
+                        fixture.owner, 1u, late_connect_dispatch, &fixture), SALTS_OK);
+      check_true(native_io_request_valid(fixture.completion.request));
+
+      uint64_t backoff = 0u;
+      uint32_t attempts = 0u;
+      bool sealed = false;
+      short revents;
+      while (!sealed && monotonic_ms() < deadline) {
+        check_equal(flowmq_owner_internal_step(fixture.owner, 1u), SALTS_OK);
+        check_equal(flowmq_socket_internal_endpoint_backoff(
+                        fixture.client, 0u, &backoff, &attempts, &sealed), SALTS_OK);
+      }
+      check_true(sealed);
+      check_equal(attempts, 1u);
+      check_equal(backoff, 0u);
+      check_equal(flowmq_socket_internal_poll_revents(
+                      fixture.client, FLOWMQ_POLLOUT | FLOWMQ_POLLERR, &revents),
+                  SALTS_OK);
+      check_equal(revents, 0);
+
+      /* Reuse the same endpoint after the old peer's terminal and replay the
+       * observed completion while the replacement dial is pending. */
+      int status;
+      while ((status = flowmq_connect(fixture.client, endpoint)) == SALTS_EBUSY &&
+             monotonic_ms() < deadline)
+        check_equal(flowmq_owner_internal_step(fixture.owner, 1u), SALTS_OK);
+      check_equal(status, SALTS_OK);
+      const uint64_t replacement_deadline = monotonic_ms() + LATE_CONNECT_TEST_MS;
+      while (!fixture.replacement_routed && monotonic_ms() < replacement_deadline)
+        check_equal(flowmq_owner_internal_progress_once(fixture.owner, 1u,
+                        late_connect_replacement_dispatch, &fixture), SALTS_OK);
+      check_true(fixture.replacement_routed);
+
+      flowmq_pollitem_t server = {.socket = fixture.server, .events = FLOWMQ_POLLIN};
+      const char payload = 'x';
+      status = SALTS_EBUSY;
+      size_t ready = 0u;
+      while (ready == 0u && monotonic_ms() < replacement_deadline) {
+        check_equal(flowmq_owner_internal_step(fixture.owner, 1u), SALTS_OK);
+        if (status == SALTS_EBUSY)
+          status = flowmq_send(fixture.client, &payload, sizeof(payload), FLOWMQ_DONTWAIT);
+        check_true(status == SALTS_OK || status == SALTS_EBUSY);
+        check_equal(flowmq_poll(&server, 1u, 0u, &ready), SALTS_OK);
+      }
+      check_equal(status, SALTS_OK);
+      check_equal(ready, 1u);
+      char received;
+      size_t size = 0u;
+      check_equal(flowmq_recv(fixture.server, &received, sizeof(received), &size,
+                              FLOWMQ_DONTWAIT), SALTS_OK);
+      check_equal(size, sizeof(payload));
+      check_equal(received, payload);
+    }
+  }
+}
+#endif
