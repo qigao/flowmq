@@ -9,8 +9,6 @@
 #include "flowmq_pattern_state.h"
 #include "flowmq_peer_state.h"
 #include "flowmq_protocol_internal.h"
-#include "flowmq_reconnect.h"
-#include "flowmq_reconnect_ready.h"
 #include "flowmq_stream_decoder.h"
 #include "flowmq_subscription_set.h"
 #include "flowmq_socket_option.h"
@@ -28,6 +26,7 @@
 
 #include <cnet/cnet.h>
 #include <cnet/manager.h>
+#include <cnet/recovery_policy.h>
 #include <cnet/websocket_transport.h>
 #include <cnet/client_pool.h>
 #include <core/clock.h>
@@ -53,8 +52,6 @@ enum {
   FLOWMQ_SOCKET_MULTIPART_CAPACITY = 64u,
   FLOWMQ_SOCKET_DEFAULT_HWM = 1000u,
   FLOWMQ_SOCKET_DEFAULT_HWM_BYTES = 16u * 1024u * 1024u,
-  FLOWMQ_SOCKET_DEFAULT_RECONNECT_IVL_MS = 100,
-  FLOWMQ_SOCKET_DEFAULT_RECONNECT_IVL_MAX_MS = 0,
   FLOWMQ_SOCKET_HARD_HWM_BYTES = FLOWMQ_SOCKET_OPTION_HWM_BYTES_MAX,
   FLOWMQ_SOCKET_MAX_FRAME_SIZE = 1024u * 1024u,
   FLOWMQ_SOCKET_FRAME_PACKET_CAPACITY =
@@ -116,8 +113,7 @@ typedef struct flowmq_socket_peer_s flowmq_socket_peer_t;
 
 /* Endpoint policy survives a connection; all mutable wire/session state does not. */
 typedef struct flowmq_socket_endpoint_s {
-  flowmq_reconnect_t reconnect;
-  uint64_t next_attempt_ms;
+  cnet_reconnect_state recovery;
   char uri[FLOWMQ_CNET_URI_CAPACITY];
   unsigned used : 1;
   unsigned active : 1;
@@ -232,7 +228,8 @@ struct flowmq_socket_peer_s {
   unsigned heartbeat_active : 1;
   unsigned pong_pending : 1;
   unsigned owned_receive_active : 1;
-  unsigned reconnect_ready_recorded;
+  cnet_reconnect_ticket attempt;
+  bool reconnect_security_failure;
 };
 
 struct flowmq_ctx_s {
@@ -307,8 +304,7 @@ struct flowmq_socket_s {
   uint32_t flow_update_quantum;
   int heartbeat_interval_ms;
   int heartbeat_timeout_ms;
-  int reconnect_interval_ms;
-  int reconnect_interval_max_ms;
+  flowmq_reconnect_config_t reconnect;
   int flow_update_interval_ms;
   int reuse_port;
   int async_error;
@@ -716,22 +712,25 @@ static void flowmq_socket_fail(flowmq_socket_t *socket, int status) {
   if (socket->async_error == SALTS_OK) socket->async_error = status;
 }
 
-static int flowmq_socket_endpoint_schedule(flowmq_socket_t *socket,
-                                           flowmq_socket_endpoint_t *endpoint) {
-  uint64_t delay_ms = 0u;
-  uint64_t now_ms;
-  int status;
-  if (socket == NULL || endpoint == NULL || !endpoint->used)
-    return SALTS_EINVAL;
+static int flowmq_socket_endpoint_settle(flowmq_socket_t *socket,
+                                         flowmq_socket_endpoint_t *endpoint,
+                                         cnet_reconnect_ticket attempt,
+                                         cnet_reconnect_failure_kind kind) {
+  cnet_reconnect_state *recovery = &endpoint->recovery;
+  const uint64_t now = monotonic_ms();
   endpoint->active = 0u;
   endpoint->retry_pending = 0u;
-  if (socket->external_stopping) return SALTS_OK;
-  if (socket->reconnect_interval_ms < 0) return SALTS_OK;
-  status = flowmq_reconnect_next(&endpoint->reconnect, &delay_ms);
-  if (status != SALTS_OK) return status;
-  now_ms = monotonic_ms();
-  endpoint->next_attempt_ms =
-      delay_ms > UINT64_MAX - now_ms ? UINT64_MAX : now_ms + delay_ms;
+  if (recovery->sealed) return SALTS_OK;
+  if (socket->external_stopping || socket->reconnect.max_attempts == 1u)
+    kind = CNET_RECONNECT_PERMANENT;
+  const int status = recovery->protocol_ready
+      ? cnet_reconnect_lost(recovery, attempt, kind, now,
+                            now + socket->reconnect.episode_timeout_ms)
+      : cnet_reconnect_failed(recovery, attempt, kind, now);
+  if (status != SALTS_OK || recovery->sealed) return status;
+  if (recovery->attempts >= recovery->config.max_attempts ||
+      recovery->next_attempt_ms >= recovery->config.deadline_ms)
+    return cnet_reconnect_seal(recovery);
   endpoint->retry_pending = 1u;
   socket->reconnect_pending = 1u;
   return SALTS_OK;
@@ -2153,6 +2152,7 @@ static int flowmq_socket_tls_identity_verify(flowmq_socket_peer_t *peer,
                                             fingerprint, claimed_identity);
   }
   if (status == SALTS_OK) return SALTS_OK;
+  peer->reconnect_security_failure = true;
   if (socket->tls_identity_rejections != UINT64_MAX)
     ++socket->tls_identity_rejections;
   return SALTS_EPERM;
@@ -2160,24 +2160,21 @@ static int flowmq_socket_tls_identity_verify(flowmq_socket_peer_t *peer,
 
 /* A successful transport connect is not a recovered FMQ/6 peer session.
  * Only the full HELLO + SETTINGS exchange can reset reconnect backoff. */
-static void flowmq_socket_peer_reconnect_protocol_ready(flowmq_socket_peer_t *peer) {
-  flowmq_socket_endpoint_t *endpoint;
-  int status;
-  if (peer == NULL || !flowmq_peer_state_ready(&peer->state)) return;
-  status = flowmq_socket_pool_ready(peer);
-  if (status != SALTS_OK) {
-    flowmq_socket_fail(peer->owner, status);
-    flowmq_socket_peer_fail(peer);
-    return;
+static int flowmq_socket_peer_protocol_ready(flowmq_socket_peer_t *peer) {
+  if (!flowmq_peer_state_ready(&peer->state)) return SALTS_OK;
+  flowmq_socket_t *socket = peer->owner;
+  if (peer->endpoint_index < FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY) {
+    flowmq_socket_endpoint_t *endpoint = &socket->endpoints[peer->endpoint_index];
+    const int status = cnet_reconnect_protocol_ready(&endpoint->recovery,
+                                                     peer->attempt, monotonic_ms());
+    if (status != SALTS_OK && status != SALTS_EALREADY) {
+      if (status != SALTS_ETIMEDOUT) flowmq_socket_fail(socket, status);
+      return status;
+    }
   }
-  if (peer->endpoint_index >= FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY) return;
-  endpoint = &peer->owner->endpoints[peer->endpoint_index];
-  if (!endpoint->used || !endpoint->active) return;
-  status = flowmq_reconnect_reset_on_protocol_ready(
-      &endpoint->reconnect, &peer->state, &peer->reconnect_ready_recorded);
-  if (status != SALTS_OK && status != SALTS_EBUSY &&
-      status != SALTS_EALREADY)
-    flowmq_socket_fail(peer->owner, status);
+  const int status = flowmq_socket_pool_ready(peer);
+  if (status != SALTS_OK) flowmq_socket_fail(socket, status);
+  return status;
 }
 
 static int flowmq_socket_process_receive(flowmq_socket_peer_t *peer) {
@@ -2249,7 +2246,7 @@ static int flowmq_socket_process_receive(flowmq_socket_peer_t *peer) {
         status = flowmq_peer_state_handshake_mark(
             &peer->state, FLOWMQ_PEER_HANDSHAKE_SETTINGS_RX);
       if (status == SALTS_OK)
-        flowmq_socket_peer_reconnect_protocol_ready(peer);
+        status = flowmq_socket_peer_protocol_ready(peer);
       if (status == SALTS_OK && peer->heartbeat_active)
         flowmq_protocol_heartbeat_deadlines_on_receive(
             &peer->heartbeat, hrtime());
@@ -2454,19 +2451,21 @@ static int flowmq_socket_peer_protocol_start(flowmq_socket_peer_t *peer) {
 static void flowmq_socket_peer_connected(flowmq_socket_peer_t *peer) {
   flowmq_socket_t *socket = peer->owner;
   int flow_control_status;
-  if (peer->endpoint_index < FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY) {
-    flowmq_socket_endpoint_t *endpoint =
-        &socket->endpoints[peer->endpoint_index];
-    if (endpoint->used) {
-      endpoint->active = 1u;
-      endpoint->retry_pending = 0u;
-      /* CONNECTED has no authority to reset protocol recovery state. */
-    }
-  }
+  if (peer->state.lifecycle == FLOWMQ_PEER_LIFECYCLE_CLOSING) return;
   if (flowmq_peer_state_transition(
           &peer->state, FLOWMQ_PEER_LIFECYCLE_CONNECTED) != SALTS_OK) {
     flowmq_socket_fail(socket, SALTS_EPROTO);
     return;
+  }
+  if (peer->endpoint_index < FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY) {
+    flowmq_socket_endpoint_t *endpoint = &socket->endpoints[peer->endpoint_index];
+    const int status = cnet_reconnect_connected(&endpoint->recovery, peer->attempt,
+                                                 monotonic_ms());
+    if (status != SALTS_OK) {
+      if (status != SALTS_ETIMEDOUT) flowmq_socket_fail(socket, status);
+      flowmq_socket_peer_fail(peer);
+      return;
+    }
   }
   if (socket->pattern.desc->routing_class == FLOWMQ_PATTERN_ROUTE_SINGLE) {
     for (size_t i = 0u; i < FLOWMQ_SOCKET_PEER_CAPACITY; ++i) {
@@ -2498,7 +2497,9 @@ static void flowmq_socket_peer_terminal(flowmq_socket_peer_t *peer) {
   if (peer->endpoint_index < FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY) {
     flowmq_socket_endpoint_t *endpoint =
         &socket->endpoints[peer->endpoint_index];
-    int reconnect_status = flowmq_socket_endpoint_schedule(socket, endpoint);
+    int reconnect_status = flowmq_socket_endpoint_settle(
+        socket, endpoint, peer->attempt, peer->reconnect_security_failure
+            ? CNET_RECONNECT_SECURITY : CNET_RECONNECT_TRANSIENT);
     if (reconnect_status != SALTS_OK)
       flowmq_socket_fail(socket, reconnect_status);
   }
@@ -2514,11 +2515,15 @@ static void flowmq_socket_on_state(void *user, cnet_connection connection,
                                    cnet_connection_state state,
                                    const cnet_error *error) {
   flowmq_socket_peer_t *peer = (flowmq_socket_peer_t *)user;
-  (void)error;
   peer->connection = connection;
   if (state == CNET_CONNECTION_CONNECTED)
     flowmq_socket_peer_connected(peer);
   else if (state == CNET_CONNECTION_CLOSED || state == CNET_CONNECTION_FAILED) {
+    if (error != NULL &&
+        (error->status == SALTS_EAUTH ||
+         (error->tls.reason != CRYPTO_TLS_FAILURE_NONE &&
+          error->tls.reason != CRYPTO_TLS_FAILURE_HANDSHAKE)))
+      peer->reconnect_security_failure = true;
     if (peer->ws != NULL && peer->ws->link.impl != NULL)
       peer->ws->terminal = true;
     else
@@ -2714,8 +2719,9 @@ static void flowmq_socket_on_send(void *user, cnet_connection connection,
     flowmq_socket_fail(peer->owner, SALTS_EPROTO);
     return;
   }
-  if (completed == FLOWMQ_PEER_WRITE_SETTINGS)
-    flowmq_socket_peer_reconnect_protocol_ready(peer);
+  if (completed == FLOWMQ_PEER_WRITE_SETTINGS &&
+      flowmq_socket_peer_protocol_ready(peer) != SALTS_OK)
+    flowmq_socket_peer_fail(peer);
   if (completed == FLOWMQ_PEER_WRITE_DATA) {
     flowmq_socket_peer_record_completion(peer);
     if (peer->outbound_bytes >= peer->inflight_payload_size)
@@ -3062,7 +3068,7 @@ static flowmq_socket_endpoint_t *flowmq_socket_endpoint_acquire(
   if (socket == NULL || endpoint_index == NULL) return NULL;
   for (size_t i = 0u; i < FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY; ++i) {
     flowmq_socket_endpoint_t *endpoint = &socket->endpoints[i];
-    if (!endpoint->used) {
+    if (!endpoint->active && !endpoint->retry_pending) {
       memset(endpoint, 0, sizeof(*endpoint));
       endpoint->used = 1u;
       *endpoint_index = i;
@@ -3072,40 +3078,42 @@ static flowmq_socket_endpoint_t *flowmq_socket_endpoint_acquire(
   return NULL;
 }
 
+static bool flowmq_socket_dial_contended(int status) {
+  return status == SALTS_EBUSY || status == SALTS_ENOBUFS ||
+         status == SALTS_EALREADY;
+}
+
 static int flowmq_socket_endpoint_connect(flowmq_socket_t *socket,
                                           size_t endpoint_index) {
-  flowmq_socket_endpoint_t *endpoint;
-  flowmq_socket_peer_t *peer;
-  cnet_connect_options options;
-  cnet_observer observer;
-  char stream_uri[FLOWMQ_CNET_URI_CAPACITY];
+  flowmq_socket_endpoint_t *endpoint = &socket->endpoints[endpoint_index];
   int status;
-  if (socket == NULL || endpoint_index >= FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY)
-    return SALTS_EINVAL;
-  endpoint = &socket->endpoints[endpoint_index];
-  if (!endpoint->used) return SALTS_ENOENT;
-  if (endpoint->active) return SALTS_EALREADY;
   if (socket->transport != FLOWMQ_TRANSPORT_KCP) {
     size_t work;
     status = cnet_manager_advance(&socket->manager, FLOWMQ_SOCKET_PEER_CAPACITY, &work);
     if (status != SALTS_OK) return status;
   }
-  peer = flowmq_socket_peer_acquire(socket);
+  flowmq_socket_peer_t *peer = flowmq_socket_peer_acquire(socket);
   if (peer == NULL) return SALTS_ENOBUFS;
-  peer->endpoint_index = endpoint_index;
-  if (socket->transport == FLOWMQ_TRANSPORT_KCP) {
-    flowmq_cnet_endpoint_t parts;
-    status = flowmq_cnet_endpoint_parse(endpoint->uri, false, &parts);
-    if (status == SALTS_OK) status = flowmq_socket_packet_connect(peer, &parts);
-    if (status == SALTS_OK) {
-      endpoint->active = 1u;
-      endpoint->retry_pending = 0u;
-    } else {
-      flowmq_socket_peer_release(peer);
-    }
+  uint64_t wait_ms;
+  status = cnet_reconnect_begin(&endpoint->recovery, monotonic_ms(),
+                                 &peer->attempt, &wait_ms);
+  if (status != SALTS_OK) {
+    flowmq_socket_peer_release(peer);
     return status;
   }
+  peer->endpoint_index = endpoint_index;
+  /* The packet adapter can call CONNECTED before returning from open. */
+  endpoint->active = 1u;
+  endpoint->retry_pending = 0u;
   const char *uri = endpoint->uri;
+  if (socket->transport == FLOWMQ_TRANSPORT_KCP) {
+    flowmq_cnet_endpoint_t parts;
+    status = flowmq_cnet_endpoint_parse(uri, false, &parts);
+    if (status == SALTS_OK) status = flowmq_socket_packet_connect(peer, &parts);
+    if (status == SALTS_OK) return SALTS_OK;
+    goto rejected;
+  }
+  char stream_uri[FLOWMQ_CNET_URI_CAPACITY];
   if (flowmq_cnet_is_websocket(socket->transport)) {
     flowmq_cnet_endpoint_t parts;
     status = flowmq_cnet_endpoint_parse(uri, false, &parts);
@@ -3114,57 +3122,56 @@ static int flowmq_socket_endpoint_connect(flowmq_socket_t *socket,
           ? FLOWMQ_TRANSPORT_TLS : FLOWMQ_TRANSPORT_TCP;
       status = flowmq_cnet_endpoint_format(&parts, stream_uri, sizeof(stream_uri));
     }
-    if (status != SALTS_OK) {
-      flowmq_socket_peer_release(peer);
-      return status;
-    }
+    if (status != SALTS_OK) goto rejected;
     uri = stream_uri;
   }
-  observer = flowmq_socket_observer(peer);
-  options = (cnet_connect_options){
+  const cnet_observer observer = flowmq_socket_observer(peer);
+  const cnet_connect_options options = {
       .uri = uri,
       .observer = observer,
-      .tls = NULL,
       .tls_client = flowmq_cnet_uses_tls(socket->transport)
-                        ? &socket->tls_client
-                        : NULL};
+                        ? &socket->tls_client : NULL};
   const cnet_manager_attachment attachment = {.observer = observer, .hold_context = true};
   status = flowmq_socket_pool_reserve(peer);
   if (status == SALTS_OK)
     status = cnet_manager_reserve(&socket->manager, &attachment, &peer->managed);
   if (status == SALTS_OK)
     status = cnet_manager_connect(&socket->manager, peer->managed, &options, &peer->connection);
-  if (status != SALTS_OK) {
+  if (status == SALTS_OK) return SALTS_OK;
+
+rejected: {
+    const int settle_status = flowmq_socket_endpoint_settle(
+        socket, endpoint, peer->attempt, flowmq_socket_dial_contended(status)
+            ? CNET_RECONNECT_TRANSIENT : CNET_RECONNECT_PERMANENT);
     flowmq_socket_peer_release(peer);
-    return status;
+    return settle_status == SALTS_OK ? status : settle_status;
   }
-  endpoint->active = 1u;
-  endpoint->retry_pending = 0u;
-  return SALTS_OK;
 }
 
 static int flowmq_socket_reconnect_progress(flowmq_socket_t *socket) {
-  const uint64_t now_ms = monotonic_ms();
-  /* Keep established-connection progress at one predictable branch. */
   if (!socket->reconnect_pending) return SALTS_OK;
   socket->reconnect_pending = 0u;
   for (size_t i = 0u; i < FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY; ++i) {
     flowmq_socket_endpoint_t *endpoint = &socket->endpoints[i];
-    int status;
-    if (!endpoint->used || endpoint->active || !endpoint->retry_pending)
-      continue;
-    if (now_ms < endpoint->next_attempt_ms) {
-      socket->reconnect_pending = 1u;
-      continue;
-    }
-    status = flowmq_socket_endpoint_connect(socket, i);
-    if (status == SALTS_OK) continue;
-    if (status == SALTS_EBUSY || status == SALTS_ENOBUFS ||
-        status == SALTS_EALREADY) {
-      socket->reconnect_pending = 1u;
+    if (!endpoint->retry_pending) continue;
+    const uint64_t now_ms = monotonic_ms();
+    if (now_ms >= endpoint->recovery.config.deadline_ms) {
+      endpoint->retry_pending = 0u;
+      const int status = cnet_reconnect_seal(&endpoint->recovery);
+      if (status != SALTS_OK) return status;
       continue;
     }
-    return status;
+    if (now_ms >= endpoint->recovery.next_attempt_ms) {
+      const int status = flowmq_socket_endpoint_connect(socket, i);
+      if (status == SALTS_ETIMEDOUT && endpoint->retry_pending) {
+        endpoint->retry_pending = 0u;
+        const int seal_status = cnet_reconnect_seal(&endpoint->recovery);
+        if (seal_status != SALTS_OK) return seal_status;
+      } else if (status != SALTS_OK && !flowmq_socket_dial_contended(status)) {
+        return status;
+      }
+    }
+    if (endpoint->retry_pending) socket->reconnect_pending = 1u;
   }
   return SALTS_OK;
 }
@@ -3462,9 +3469,7 @@ flowmq_socket_t *flowmq_socket(flowmq_ctx_t *ctx, int type) {
   socket->receive_hwm = FLOWMQ_SOCKET_DEFAULT_HWM;
   socket->send_hwm_bytes = FLOWMQ_SOCKET_DEFAULT_HWM_BYTES;
   socket->receive_hwm_bytes = FLOWMQ_SOCKET_DEFAULT_HWM_BYTES;
-  socket->reconnect_interval_ms = FLOWMQ_SOCKET_DEFAULT_RECONNECT_IVL_MS;
-  socket->reconnect_interval_max_ms =
-      FLOWMQ_SOCKET_DEFAULT_RECONNECT_IVL_MAX_MS;
+  socket->reconnect = (flowmq_reconnect_config_t)FLOWMQ_RECONNECT_DEFAULT;
   socket->flow_update_interval_ms =
       FLOWMQ_FLOW_CONTROL_DEFAULT_UPDATE_INTERVAL_MS;
   socket->peers = (flowmq_socket_peer_t *)calloc(
@@ -3784,7 +3789,6 @@ int flowmq_connect(flowmq_socket_t *socket, const char *endpoint) {
   flowmq_socket_endpoint_t *owned_endpoint;
   size_t endpoint_index = FLOWMQ_SOCKET_ENDPOINT_NONE;
   size_t endpoint_size;
-  uint64_t reconnect_max_ms;
   int status;
   if (socket == NULL || socket->ctx == NULL) return SALTS_EINVAL;
   status = flowmq_cnet_endpoint_parse(endpoint, false, &parts);
@@ -3800,7 +3804,8 @@ int flowmq_connect(flowmq_socket_t *socket, const char *endpoint) {
         return SALTS_EBUSY;
     }
     for (size_t i = 0u; i < FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY; ++i) {
-      if (socket->endpoints[i].used) return SALTS_EBUSY;
+      if (socket->endpoints[i].active || socket->endpoints[i].retry_pending)
+        return SALTS_EBUSY;
     }
   }
   endpoint_size = strlen(endpoint) + 1u;
@@ -3816,17 +3821,15 @@ int flowmq_connect(flowmq_socket_t *socket, const char *endpoint) {
   owned_endpoint = flowmq_socket_endpoint_acquire(socket, &endpoint_index);
   if (owned_endpoint == NULL) return SALTS_ENOBUFS;
   memcpy(owned_endpoint->uri, endpoint, endpoint_size);
-  reconnect_max_ms =
-      socket->reconnect_interval_max_ms >= socket->reconnect_interval_ms &&
-              socket->reconnect_interval_ms >= 0
-          ? (uint64_t)socket->reconnect_interval_max_ms
-          : 0u;
-  status = flowmq_reconnect_init(
-      &owned_endpoint->reconnect,
-      socket->reconnect_interval_ms >= 0
-          ? (uint64_t)socket->reconnect_interval_ms
-          : 0u,
-      reconnect_max_ms, hrtime() ^ (uint64_t)(endpoint_index + 1u));
+  const cnet_reconnect_config config = {
+      .size = sizeof(config),
+      .version = CNET_RECOVERY_POLICY_VERSION,
+      .max_attempts = socket->reconnect.max_attempts,
+      .deadline_ms = monotonic_ms() + socket->reconnect.episode_timeout_ms,
+      .initial_backoff_ms = socket->reconnect.initial_backoff_ms,
+      .maximum_backoff_ms = socket->reconnect.max_backoff_ms,
+      .jitter_seed = hrtime() ^ (uint64_t)(endpoint_index + 1u)};
+  status = cnet_reconnect_init(&owned_endpoint->recovery, &config);
   if (status == SALTS_OK)
     status = flowmq_socket_endpoint_connect(socket, endpoint_index);
   if (status != SALTS_OK) {
@@ -3912,14 +3915,13 @@ int flowmq_setsockopt(flowmq_socket_t *socket, int option, const void *value,
     return SALTS_OK;
   }
 
-  case FLOWMQ_RECONNECT_IVL:
-  case FLOWMQ_RECONNECT_IVL_MAX: {
-    int value_int;
-    memcpy(&value_int, value, sizeof(value_int));
-    if (option == FLOWMQ_RECONNECT_IVL)
-      socket->reconnect_interval_ms = value_int;
-    else
-      socket->reconnect_interval_max_ms = value_int;
+  case FLOWMQ_RECONNECT: {
+    flowmq_reconnect_config_t config;
+    memcpy(&config, value, sizeof(config));
+    if (config.max_attempts == 0u || config.episode_timeout_ms == 0u ||
+        config.initial_backoff_ms > config.max_backoff_ms)
+      return SALTS_EINVAL;
+    socket->reconnect = config;
     return SALTS_OK;
   }
 
@@ -4011,16 +4013,9 @@ int flowmq_getsockopt(const flowmq_socket_t *socket, int option, void *value,
   if (status != SALTS_OK) return status;
 
   switch (option) {
-  case FLOWMQ_RECONNECT_IVL: {
-    int result = socket->reconnect_interval_ms;
-    memcpy(value, &result, sizeof(result));
+  case FLOWMQ_RECONNECT:
+    memcpy(value, &socket->reconnect, sizeof(socket->reconnect));
     return SALTS_OK;
-  }
-  case FLOWMQ_RECONNECT_IVL_MAX: {
-    int result = socket->reconnect_interval_max_ms;
-    memcpy(value, &result, sizeof(result));
-    return SALTS_OK;
-  }
   case FLOWMQ_RCVMORE: {
     int result = socket->last_rcvmore;
     memcpy(value, &result, sizeof(result));
@@ -5331,6 +5326,18 @@ static int flowmq_socket_accept_stop(flowmq_socket_t *socket) {
   return status == SALTS_OK ? stop_status : status;
 }
 
+static uint64_t flowmq_socket_peer_recovery_deadline(
+    const flowmq_socket_peer_t *peer) {
+  if (peer->endpoint_index >= FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY ||
+      (peer->state.lifecycle != FLOWMQ_PEER_LIFECYCLE_ALLOCATED &&
+       peer->state.lifecycle != FLOWMQ_PEER_LIFECYCLE_CONNECTED))
+    return 0u;
+  const cnet_reconnect_state *recovery =
+      &peer->owner->endpoints[peer->endpoint_index].recovery;
+  return recovery->protocol_ready || recovery->sealed
+      ? 0u : recovery->config.deadline_ms;
+}
+
 static int flowmq_socket_progress_local(flowmq_socket_t *socket) {
   int status;
   if (socket->transport != FLOWMQ_TRANSPORT_KCP) {
@@ -5364,10 +5371,15 @@ static int flowmq_socket_progress_local(flowmq_socket_t *socket) {
 #if defined(FLOWMQ_BATCH_PROBE)
     ++socket->batch_probe.local_used_peers;
 #endif
+    const uint64_t recovery_deadline = flowmq_socket_peer_recovery_deadline(peer);
+    const bool recovery_expired = recovery_deadline != 0u &&
+        monotonic_ms() >= recovery_deadline;
+    if (recovery_expired && flowmq_peer_state_is_connected(&peer->state))
+      flowmq_socket_peer_fail(peer);
     if (peer->packet_handshake_deadline_ms != 0u && flowmq_socket_peer_ready(peer))
       peer->packet_handshake_deadline_ms = 0u;
     if (socket->transport == FLOWMQ_TRANSPORT_KCP &&
-        (flowmq_peer_state_needs_close_retry(&peer->state) ||
+        (recovery_expired || flowmq_peer_state_needs_close_retry(&peer->state) ||
          (peer->packet_handshake_deadline_ms != 0u &&
           monotonic_ms() >= peer->packet_handshake_deadline_ms))) {
       status = flowmq_peer_state_transition(&peer->state, FLOWMQ_PEER_LIFECYCLE_CLOSING);
@@ -5377,7 +5389,8 @@ static int flowmq_socket_progress_local(flowmq_socket_t *socket) {
       if (status != SALTS_OK && status != SALTS_EALREADY) return status;
       continue;
     }
-    if (flowmq_peer_state_needs_close_retry(&peer->state)) {
+    if (flowmq_peer_state_needs_close_retry(&peer->state) ||
+        (recovery_expired && peer->state.lifecycle == FLOWMQ_PEER_LIFECYCLE_ALLOCATED)) {
       status = cnet_close(&socket->client, peer->connection);
       if (status == SALTS_OK || status == SALTS_EALREADY) {
         if (flowmq_peer_state_transition(
@@ -5698,7 +5711,7 @@ static uint32_t flowmq_socket_local_external_timeout(
       if (!endpoint->used || endpoint->active || !endpoint->retry_pending)
         continue;
       candidate = flowmq_socket_wait_until_ms(
-          now_ms, endpoint->next_attempt_ms, wait_ms);
+          now_ms, endpoint->recovery.next_attempt_ms, wait_ms);
       if (candidate < wait_ms) wait_ms = candidate;
       if (wait_ms == 0u) return 0u;
     }
@@ -5710,6 +5723,11 @@ static uint32_t flowmq_socket_local_external_timeout(
     if (flowmq_peer_state_needs_close_retry(&peer->state))
       return 0u;
     if (peer->ws != NULL && peer->ws->terminal) return 0u;
+    const uint64_t recovery_deadline = flowmq_socket_peer_recovery_deadline(peer);
+    if (recovery_deadline != 0u) {
+      wait_ms = flowmq_socket_wait_until_ms(now_ms, recovery_deadline, wait_ms);
+      if (wait_ms == 0u) return 0u;
+    }
     if (peer->packet_handshake_deadline_ms != 0u && !flowmq_socket_peer_ready(peer)) {
       wait_ms = flowmq_socket_wait_until_ms(now_ms, peer->packet_handshake_deadline_ms, wait_ms);
       if (wait_ms == 0u) return 0u;
@@ -6068,13 +6086,15 @@ int flowmq_socket_internal_async_error_matches(
 
 int flowmq_socket_internal_endpoint_backoff(
     const flowmq_socket_t *socket, size_t endpoint_index,
-    uint64_t *current_delay_ms) {
+    uint64_t *current_delay_ms, uint32_t *attempts, bool *sealed) {
   if (socket == NULL || current_delay_ms == NULL ||
       endpoint_index >= FLOWMQ_SOCKET_ENDPOINT_SLOT_CAPACITY ||
       !socket->endpoints[endpoint_index].used)
     return SALTS_EINVAL;
-  *current_delay_ms =
-      socket->endpoints[endpoint_index].reconnect.current_delay_ms;
+  const cnet_reconnect_state *recovery = &socket->endpoints[endpoint_index].recovery;
+  *current_delay_ms = recovery->last_backoff_ms;
+  if (attempts != NULL) *attempts = recovery->attempts;
+  if (sealed != NULL) *sealed = recovery->sealed;
   return SALTS_OK;
 }
 

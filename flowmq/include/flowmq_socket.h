@@ -39,8 +39,6 @@ typedef enum flowmq_socket_option_e {
   FLOWMQ_SUBSCRIBE = 6,
   FLOWMQ_UNSUBSCRIBE = 7,
   FLOWMQ_RCVMORE = 13,
-  FLOWMQ_RECONNECT_IVL = 18,
-  FLOWMQ_RECONNECT_IVL_MAX = 21,
   FLOWMQ_SNDHWM = 23,
   FLOWMQ_RCVHWM = 24,
   FLOWMQ_HEARTBEAT_IVL = 75,
@@ -58,8 +56,23 @@ typedef enum flowmq_socket_option_e {
   FLOWMQ_FLOW_UPDATE_QUANTUM = 1103,
   FLOWMQ_FLOW_UPDATE_IVL = 1104,
   FLOWMQ_REUSE_PORT = 1105,
-  FLOWMQ_KCP_PSK = 1106
+  FLOWMQ_KCP_PSK = 1106,
+  FLOWMQ_RECONNECT = 1107
 } flowmq_socket_option_t;
+
+/** Startup policy for each outgoing endpoint. The first dial counts as an
+ * attempt. One attempt disables automatic reconnect. A new recovery episode
+ * starts on transport loss after FMQ READY. Backoff uses CNet exponential
+ * jitter bounded by max_backoff_ms. */
+typedef struct flowmq_reconnect_config_s {
+  uint32_t max_attempts;
+  uint32_t episode_timeout_ms;
+  uint32_t initial_backoff_ms;
+  uint32_t max_backoff_ms;
+} flowmq_reconnect_config_t;
+
+#define FLOWMQ_RECONNECT_DEFAULT {32u, 30000u, 100u, 1000u}
+#define FLOWMQ_RECONNECT_DISABLED {1u, 30000u, 0u, 0u}
 
 enum { FLOWMQ_KCP_PSK_BYTES = 32 };
 
@@ -138,8 +151,9 @@ FLOWMQ_C_API int flowmq_bind(flowmq_socket_t *socket, const char *endpoint);
  * Admit one asynchronous connection to an endpoint supported by flowmq_bind().
  * TCP, IPC, WS, WSS and KCP can share an explicit owner lane. WS/WSS and KCP
  * use copied sends. KCP limits each message part to 64 KiB.
- * Terminal states retry according to FLOWMQ_RECONNECT_IVL while the socket
- * continues to receive progress from its configured owner.
+ * Transient failures retry within FLOWMQ_RECONNECT's attempt and time limits
+ * as the socket's owner advances it. Reported certificate and FMQ identity
+ * rejections end recovery for the endpoint.
  */
 FLOWMQ_C_API int flowmq_connect(flowmq_socket_t *socket, const char *endpoint);
 
@@ -148,7 +162,7 @@ FLOWMQ_C_API int flowmq_last_endpoint(const flowmq_socket_t *socket, char *buffe
                                       size_t capacity, size_t *size);
 
 /**
- * Set a socket option. HWM message, heartbeat, and reconnect options use `int`;
+ * Set a socket option. HWM message and heartbeat options use `int`;
  * HWM byte options and FLOWMQ_FLOW_UPDATE_QUANTUM use `size_t`;
  * FLOWMQ_FLOW_UPDATE_IVL uses positive integer milliseconds. FLOWMQ_REUSE_PORT
  * uses int 0/1 and is consumed only when creating a listener. HWM values must
@@ -156,11 +170,9 @@ FLOWMQ_C_API int flowmq_last_endpoint(const flowmq_socket_t *socket, char *buffe
  * FLOWMQ_HEARTBEAT_IVL defaults to
  * zero (disabled); once enabled, FLOWMQ_HEARTBEAT_TIMEOUT defaults to the
  * interval unless explicitly set, and zero disables local timeout detection.
- * FLOWMQ_RECONNECT_IVL defaults to 100 ms; -1 disables reconnect and zero
- * schedules the next attempt without an interval. FLOWMQ_RECONNECT_IVL_MAX
- * defaults to zero (fixed interval); a value at least as large as IVL enables
- * bounded exponential backoff, while a smaller positive value is ignored.
- * Reconnect intervals may be randomized to avoid synchronized retries.
+ * FLOWMQ_RECONNECT copies a flowmq_reconnect_config_t before startup.
+ * Attempts and episode_timeout_ms must be positive. The initial backoff
+ * must fit within max_backoff_ms. See FLOWMQ_RECONNECT_DEFAULT.
  * FLOWMQ_TLS_IDENTITY_POLICY takes a complete
  * `flowmq_tls_identity_map_config_t` from `flowmq_tls_identity_map.h`. It is
  * valid only on a ROUTER before runtime initialization; FlowMQ validates and
@@ -180,8 +192,8 @@ FLOWMQ_C_API int flowmq_setsockopt(flowmq_socket_t *socket, int option,
                                    const void *value, size_t size);
 
 /**
- * Read a socket option into caller storage. FLOWMQ_RECONNECT_IVL and
- * FLOWMQ_RECONNECT_IVL_MAX return their configured `int` millisecond values.
+ * Read a socket option into caller storage. FLOWMQ_RECONNECT returns a
+ * flowmq_reconnect_config_t.
  * FLOWMQ_RCVMORE returns an `int` describing whether another part follows the
  * most recently received part. FLOWMQ_TLS_IDENTITY_REJECTIONS returns the
  * saturating `uint64_t` count of TLS peers rejected because their verified

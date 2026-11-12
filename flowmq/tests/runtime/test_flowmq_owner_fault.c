@@ -113,7 +113,7 @@ static void owner_fault_progress(owner_fault_fixture *f, bool inject) {
 static void owner_fault_open(owner_fault_fixture *f) {
   flowmq_owner_config_t config = FLOWMQ_OWNER_CONFIG_INIT;
   const int hwm = FAULT_MESSAGES;
-  const int reconnect_disabled = -1;
+  const flowmq_reconnect_config_t reconnect_disabled = FLOWMQ_RECONNECT_DISABLED;
   const size_t window = FAULT_MESSAGES * FAULT_BYTES;
   const size_t quantum = FAULT_BYTES;
   const int update_ms = 1;
@@ -136,7 +136,7 @@ static void owner_fault_open(owner_fault_fixture *f) {
     check_equal(flowmq_socket_set_peer_pool(f->clients[lane], &pool), SALTS_OK);
     check_equal(flowmq_socket_set_peer_pool(f->peers[lane], &pool), SALTS_OK);
 #endif
-    check_equal(flowmq_setsockopt(f->clients[lane], FLOWMQ_RECONNECT_IVL,
+    check_equal(flowmq_setsockopt(f->clients[lane], FLOWMQ_RECONNECT,
                                  &reconnect_disabled, sizeof(reconnect_disabled)),
                 SALTS_OK);
     check_equal(flowmq_setsockopt(f->clients[lane], FLOWMQ_SNDHWM,

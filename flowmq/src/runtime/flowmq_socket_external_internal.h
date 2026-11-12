@@ -94,7 +94,7 @@ int flowmq_socket_internal_async_error_matches(
  * Caller must own the socket's progress lane and may not use this for routing. */
 int flowmq_socket_internal_endpoint_backoff(
     const flowmq_socket_t *socket, size_t endpoint_index,
-    uint64_t *current_delay_ms);
+    uint64_t *current_delay_ms, uint32_t *attempts, bool *sealed);
 
 /* Private qualification query; never installed in the public SDK. */
 int flowmq_socket_internal_fanout_match_count(

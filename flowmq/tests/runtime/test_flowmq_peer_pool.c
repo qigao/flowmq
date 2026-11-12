@@ -15,11 +15,11 @@ static flowmq_peer_pool_snapshot_t pool_snapshot(flowmq_socket_t *socket) {
 
 static void pool_configure(flowmq_socket_t *socket, size_t peers, size_t connecting) {
   flowmq_peer_pool_config_t config = FLOWMQ_PEER_POOL_CONFIG_INIT;
-  const int reconnect = -1;
+  const flowmq_reconnect_config_t reconnect = FLOWMQ_RECONNECT_DISABLED;
   config.max_peers = peers;
   config.max_connecting = connecting;
   check_equal(flowmq_socket_set_peer_pool(socket, &config), SALTS_OK);
-  check_equal(flowmq_setsockopt(socket, FLOWMQ_RECONNECT_IVL,
+  check_equal(flowmq_setsockopt(socket, FLOWMQ_RECONNECT,
                                &reconnect, sizeof(reconnect)), SALTS_OK);
 }
 

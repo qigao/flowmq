@@ -12,8 +12,7 @@ static const int FLOWMQ_PUBLIC_OPTIONS[] = {
     FLOWMQ_SUBSCRIBE,
     FLOWMQ_UNSUBSCRIBE,
     FLOWMQ_RCVMORE,
-    FLOWMQ_RECONNECT_IVL,
-    FLOWMQ_RECONNECT_IVL_MAX,
+    FLOWMQ_RECONNECT,
     FLOWMQ_SNDHWM,
     FLOWMQ_RCVHWM,
     FLOWMQ_HEARTBEAT_IVL,
@@ -60,7 +59,7 @@ spec("flowmq_socket_option metadata") {
 
   it("describes access phase ABI and pattern restrictions") {
     const flowmq_socket_option_desc_t *reconnect =
-        flowmq_socket_option_descriptor(FLOWMQ_RECONNECT_IVL);
+        flowmq_socket_option_descriptor(FLOWMQ_RECONNECT);
     const flowmq_socket_option_desc_t *subscribe =
         flowmq_socket_option_descriptor(FLOWMQ_SUBSCRIBE);
     const flowmq_socket_option_desc_t *rcvmore =
@@ -70,13 +69,12 @@ spec("flowmq_socket_option metadata") {
     const flowmq_socket_option_desc_t *reuse_port =
         flowmq_socket_option_descriptor(FLOWMQ_REUSE_PORT);
 
-    check_equal(reconnect->value_kind, FLOWMQ_SOCKET_OPTION_VALUE_INT);
+    check_equal(reconnect->value_kind, FLOWMQ_SOCKET_OPTION_VALUE_STRUCT);
     check_equal(reconnect->access,
                 FLOWMQ_SOCKET_OPTION_ACCESS_SET |
                     FLOWMQ_SOCKET_OPTION_ACCESS_GET);
     check_equal(reconnect->set_phase, FLOWMQ_SOCKET_OPTION_SET_STARTUP);
-    check_equal(reconnect->abi_size, sizeof(int));
-    check_equal(reconnect->min_value, -1);
+    check_equal(reconnect->abi_size, sizeof(flowmq_reconnect_config_t));
 
     check_equal(subscribe->value_kind, FLOWMQ_SOCKET_OPTION_VALUE_BYTES);
     check_equal(subscribe->access, FLOWMQ_SOCKET_OPTION_ACCESS_SET);
@@ -103,14 +101,14 @@ spec("flowmq_socket_option metadata") {
         flowmq_pattern_descriptor(FLOWMQ_PROTOCOL_PAIR);
     const flowmq_pattern_desc_t *xsub =
         flowmq_pattern_descriptor(FLOWMQ_PROTOCOL_XSUB);
-    int reconnect = -1;
+    const flowmq_reconnect_config_t reconnect = FLOWMQ_RECONNECT_DISABLED;
 
     check_equal(flowmq_socket_option_validate_set(
-                    FLOWMQ_RECONNECT_IVL, 0, pair, &reconnect,
+                    FLOWMQ_RECONNECT, 0, pair, &reconnect,
                     sizeof(reconnect), NULL),
                 SALTS_OK);
     check_equal(flowmq_socket_option_validate_set(
-                    FLOWMQ_RECONNECT_IVL, 1, pair, &reconnect,
+                    FLOWMQ_RECONNECT, 1, pair, &reconnect,
                     sizeof(reconnect), NULL),
                 SALTS_EBUSY);
 
@@ -145,7 +143,7 @@ spec("flowmq_socket_option metadata") {
         flowmq_pattern_descriptor(FLOWMQ_PROTOCOL_PAIR);
     const flowmq_pattern_desc_t *router =
         flowmq_pattern_descriptor(FLOWMQ_PROTOCOL_ROUTER);
-    int reconnect = -2;
+    const flowmq_reconnect_config_t reconnect = FLOWMQ_RECONNECT_DEFAULT;
     int reuse_port = 2;
     int hwm = FLOWMQ_SOCKET_OPTION_MESSAGE_HWM_MAX + 1;
     size_t hwm_bytes = FLOWMQ_SOCKET_OPTION_HWM_BYTES_MAX + (size_t)1u;
@@ -154,8 +152,8 @@ spec("flowmq_socket_option metadata") {
         FLOWMQ_TLS_IDENTITY_MAP_CONFIG_INIT;
 
     check_equal(flowmq_socket_option_validate_set(
-                    FLOWMQ_RECONNECT_IVL, 0, pair, &reconnect,
-                    sizeof(reconnect), NULL),
+                    FLOWMQ_RECONNECT, 0, pair, &reconnect,
+                    sizeof(reconnect) - 1u, NULL),
                 SALTS_EINVAL);
     check_equal(flowmq_socket_option_validate_set(
                     FLOWMQ_SNDHWM, 0, pair, &hwm, sizeof(hwm), NULL),
@@ -197,17 +195,17 @@ spec("flowmq_socket_option metadata") {
   }
 
   it("uses descriptor ABI for getters without expanding get access") {
-    int value = 0;
+    flowmq_reconnect_config_t value = {0};
     size_t size = sizeof(value) - 1u;
 
     check_equal(flowmq_socket_option_prepare_get(
-                    FLOWMQ_RECONNECT_IVL, &value, &size, NULL),
+                    FLOWMQ_RECONNECT, &value, &size, NULL),
                 SALTS_EMSGSIZE);
     check_equal(size, sizeof(value));
 
     size = sizeof(value);
     check_equal(flowmq_socket_option_prepare_get(
-                    FLOWMQ_RECONNECT_IVL, NULL, &size, NULL),
+                    FLOWMQ_RECONNECT, NULL, &size, NULL),
                 SALTS_EINVAL);
     check_equal(size, sizeof(value));
 

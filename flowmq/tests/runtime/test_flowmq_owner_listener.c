@@ -56,9 +56,9 @@ static void listener_capture_idle_accept_cancel(
 }
 
 static void listener_configure(flowmq_socket_t *socket) {
-  const int reconnect = -1;
+  const flowmq_reconnect_config_t reconnect = FLOWMQ_RECONNECT_DISABLED;
   check_not_null(socket);
-  check_equal(flowmq_setsockopt(socket, FLOWMQ_RECONNECT_IVL,
+  check_equal(flowmq_setsockopt(socket, FLOWMQ_RECONNECT,
                                &reconnect, sizeof(reconnect)), SALTS_OK);
 #if defined(FLOWMQ_TEST_PEER_POOL)
   const flowmq_peer_pool_config_t config = FLOWMQ_PEER_POOL_CONFIG_INIT;

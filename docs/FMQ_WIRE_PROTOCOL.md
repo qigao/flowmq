@@ -183,16 +183,16 @@ session 断开会产生相应 UNSUBSCRIBE。
 
 ### 4.1 Reconnect session boundary
 
-`FLOWMQ_RECONNECT_IVL` 与 `FLOWMQ_RECONNECT_IVL_MAX` 只协调 TCP/TLS connection attempt，
-不改变 FMQ/6 wire。每次 reconnect 都必须重新执行 `HELLO -> SETTINGS -> READY`，生成新的
-session generation、credit window、decoder 和 pattern peer state。旧 session 未完成的
-outbound frame 不得自动移交或重播到新 session；需要 delivery guarantee 的应用协议必须
-自行定义 correlation、确认与幂等处理。
+`FLOWMQ_RECONNECT` 给 TCP、TLS、IPC、WS/WSS 和 KCP 的 outbound endpoint 配置有界重连。
+每次重连都要重新执行 `HELLO → SETTINGS → READY`，并创建新的 session generation、
+credit window、decoder 和 pattern peer state。旧 session 未完成的 outbound frame 不会
+转移或重播。需要交付保证的应用协议自行定义 correlation、确认与幂等处理。
 
-重连 deadline 和 attempt 仅在 socket owner 调用 `send`、`recv` 或 `poll` 时推进。
-IVL 默认 100ms，`-1` 禁用，`0` 允许下一轮 progress 立即尝试；IVL_MAX 默认 `0`，表示不做
-指数增长。正值只有在不小于 IVL 时才启用有界指数退避，实际 delay 可随机化以避免重连风暴。
-这些语义对应 [libzmq reconnect socket options](https://libzmq.readthedocs.io/en/latest/zmq_setsockopt.html#zmq-reconnect-ivl-set-reconnection-interval)。
+CNet 从初次拨号起计算单轮预算，默认最多 32 次尝试、30 秒，采用 100 ms 起步、
+1 秒封顶的指数退避与抖动。只有完整的 FMQ READY 才清零尝试次数和退避。
+READY 后断线开启新一轮预算。经传输层或 FMQ 确认的身份认证失败会结束当轮重连。
+`FLOWMQ_RECONNECT_DISABLED` 允许一次初始拨号，关闭自动重连。
+进度由 socket 或显式 owner lane 驱动。
 
 ## 5. Heartbeat
 

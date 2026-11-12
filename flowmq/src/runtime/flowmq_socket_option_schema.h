@@ -43,16 +43,11 @@
          (FLOWMQ_RCVMORE, FLOWMQ_SOCKET_OPTION_VALUE_INT,                           \
           FLOWMQ_SOCKET_OPTION_ACCESS_GET, FLOWMQ_SOCKET_OPTION_SET_STARTUP,         \
           FLOWMQ_SOCKET_OPTION_VALIDATE_EXACT, sizeof(int), 0, 0u, 0u),             \
-         (FLOWMQ_RECONNECT_IVL, FLOWMQ_SOCKET_OPTION_VALUE_INT,                     \
+         (FLOWMQ_RECONNECT, FLOWMQ_SOCKET_OPTION_VALUE_STRUCT,                      \
           FLOWMQ_SOCKET_OPTION_ACCESS_SET | FLOWMQ_SOCKET_OPTION_ACCESS_GET,         \
           FLOWMQ_SOCKET_OPTION_SET_STARTUP,                                         \
-          FLOWMQ_SOCKET_OPTION_VALIDATE_SIGNED_RANGE, sizeof(int), -1, INT_MAX,     \
-          0u),                                                                      \
-         (FLOWMQ_RECONNECT_IVL_MAX, FLOWMQ_SOCKET_OPTION_VALUE_INT,                 \
-          FLOWMQ_SOCKET_OPTION_ACCESS_SET | FLOWMQ_SOCKET_OPTION_ACCESS_GET,         \
-          FLOWMQ_SOCKET_OPTION_SET_STARTUP,                                         \
-          FLOWMQ_SOCKET_OPTION_VALIDATE_SIGNED_RANGE, sizeof(int), 0, INT_MAX,      \
-          0u),                                                                      \
+          FLOWMQ_SOCKET_OPTION_VALIDATE_EXACT,                                      \
+          sizeof(flowmq_reconnect_config_t), 0, 0u, 0u),                             \
          (FLOWMQ_SNDHWM, FLOWMQ_SOCKET_OPTION_VALUE_INT,                            \
           FLOWMQ_SOCKET_OPTION_ACCESS_SET, FLOWMQ_SOCKET_OPTION_SET_STARTUP,         \
           FLOWMQ_SOCKET_OPTION_VALIDATE_SIGNED_RANGE, sizeof(int), 1,               \

@@ -495,12 +495,12 @@ send completion 才从 current outstanding 扣除。远端 cumulative credit 是
 不暴露 peer slot、generation、ring cursor 或 raw cumulative credit counter，也不执行任何
 progress。peer retire 后不再可由该 API 查到；同 routing identity reconnect 得到全新统计。
 
-Outbound endpoint 是 URI 与重连退避的主事实源；peer 是一次 CNet connection session。
-终止回调先解除 endpoint 的 active session，再按既有 generation fencing 退休 peer，并为
-endpoint 安排下一次 caller-driven attempt。旧 peer 的 decoder、credit、subscription snapshot、
-multipart staging 与 outbound queue 都不会转移到新 peer；socket-owned XSUB desired
-subscriptions 会从事实源重放。`FLOWMQ_RECONNECT_IVL` 默认 100ms，`-1` 禁用；
-`FLOWMQ_RECONNECT_IVL_MAX=0` 使用固定间隔，正值启用有上限的指数退避。
+Outbound endpoint 持有 URI 和 CNet recovery state。CNet 根据每次拨号的票据管理尝试次数、
+退避、deadline 和安全终止。FlowMQ 持有 FMQ READY 与消息状态，并使用保留 context 的
+Manager attachment。peer 终止后，已入队的接收数据与未释放的 lease 仍属于原代际。
+旧 peer 的 decoder、credit、subscription snapshot、multipart staging 与 outbound queue
+不转移到新 peer。XSUB desired subscriptions 在新一代 READY 后从 socket 状态重放。
+应用在启动前以 `FLOWMQ_RECONNECT` 配置单轮重连预算。
 
 CFlow/CMeta 可服务于控制面配置、类型描述和 executor 组合，不参与逐消息数据热路径。
 

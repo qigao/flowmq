@@ -251,6 +251,11 @@ queues, reconnects, and deadlines through socket operations. Independent
 threads should create their own contexts and sockets, with each owner closing
 its resources before terminating its context.
 
+Configure outbound recovery with `FLOWMQ_RECONNECT` before binding or
+connecting. The default allows 32 attempts per episode within 30 seconds,
+with jittered backoff from a nominal 100 ms up to 1 second.
+`FLOWMQ_RECONNECT_DISABLED` permits a single initial dial.
+
 | Capability | Public entry point | Contract |
 | --- | --- | --- |
 | Socket I/O | [flowmq_socket.h](flowmq/include/flowmq_socket.h) | `bind`, `connect`, `send`, `recv`, and `poll` run on the owning thread |

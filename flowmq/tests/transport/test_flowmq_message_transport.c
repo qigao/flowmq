@@ -491,7 +491,7 @@ static void check_ws_coalesced_upgrade_and_control(bool secure) {
       .flow_update_quantum = 1024u, .flow_update_interval_ms = 10u};
   static const unsigned char ping[] = {'p', 'i', 'n', 'g'};
   static const unsigned char close_payload[] = {0x03u, 0xe8u};
-  const int reconnect = -1;
+  const flowmq_reconnect_config_t reconnect = FLOWMQ_RECONNECT_DISABLED;
   cnet_listener listener = {0};
   cnet_tls_server tls_server = {0};
   raw_ws_client raw = {0};
@@ -511,7 +511,7 @@ static void check_ws_coalesced_upgrade_and_control(bool secure) {
                       secure ? "wss" : "ws", (unsigned)port) > 0);
   pattern_fixture_init(&fixture, endpoint, true);
   flowmq_socket_t *client = pattern_socket(&fixture, FLOWMQ_PAIR, false);
-  check_equal(flowmq_setsockopt(client, FLOWMQ_RECONNECT_IVL, &reconnect, sizeof(reconnect)),
+  check_equal(flowmq_setsockopt(client, FLOWMQ_RECONNECT, &reconnect, sizeof(reconnect)),
               SALTS_OK);
   check_equal(flowmq_connect(client, endpoint), SALTS_OK);
   flowmq_pollitem_t item = {.socket = client};
@@ -1063,7 +1063,7 @@ static void check_ws_peer_replacement(const char *uri) {
 
 static void check_subscription(pattern_fixture *fixture, const char *uri) {
   static const unsigned char subscribed[] = {1u, 'f', 'm', 'q', '.'};
-  const int retry_ms = 5;
+  const flowmq_reconnect_config_t reconnect = {32u, 30000u, 5u, 5u};
   const int heartbeat_ms = 25;
   const int timeout_ms = 500;
   flowmq_socket_t *xpub = pattern_socket(fixture, FLOWMQ_XPUB, true);
@@ -1071,7 +1071,7 @@ static void check_subscription(pattern_fixture *fixture, const char *uri) {
   char endpoint[320u];
   size_t endpoint_size;
   check_equal(flowmq_setsockopt(sub, FLOWMQ_SUBSCRIBE, "fmq.", 4u), SALTS_OK);
-  check_equal(flowmq_setsockopt(sub, FLOWMQ_RECONNECT_IVL, &retry_ms, sizeof(retry_ms)),
+  check_equal(flowmq_setsockopt(sub, FLOWMQ_RECONNECT, &reconnect, sizeof(reconnect)),
               SALTS_OK);
   if (fixture->kcp) {
     check_equal(flowmq_setsockopt(sub, FLOWMQ_HEARTBEAT_IVL, &heartbeat_ms,
@@ -1224,7 +1224,7 @@ static void wss_authentication(bool shared) {
       {"localhost", identity, true, false, false},
       {"localhost", "forged", true, true, true}};
   const int required = 1;
-  const int reconnect = -1;
+  const flowmq_reconnect_config_t reconnect = FLOWMQ_RECONNECT_DISABLED;
   const flowmq_tls_identity_binding_t binding = {
       sizeof(binding), "sha256:" FLOWMQ_TLS_TEST_CERTIFICATE_SHA256, identity};
   flowmq_tls_identity_map_config_t policy = FLOWMQ_TLS_IDENTITY_MAP_CONFIG_INIT;
@@ -1261,7 +1261,7 @@ static void wss_authentication(bool shared) {
                                  strlen(rejected[i].name)), SALTS_OK);
     check_equal(flowmq_setsockopt(client, FLOWMQ_IDENTITY, rejected[i].identity,
                                  strlen(rejected[i].identity)), SALTS_OK);
-    check_equal(flowmq_setsockopt(client, FLOWMQ_RECONNECT_IVL, &reconnect,
+    check_equal(flowmq_setsockopt(client, FLOWMQ_RECONNECT, &reconnect,
                                  sizeof(reconnect)), SALTS_OK);
     check_equal(flowmq_connect(client, endpoint), SALTS_OK);
     flowmq_pollitem_t items[] = {
@@ -1313,11 +1313,11 @@ static void check_wrong_route(const char *bind_uri, const char *correct,
   char endpoint[320u];
   char rejected[320u];
   size_t endpoint_size;
-  const int reconnect = -1;
+  const flowmq_reconnect_config_t reconnect = FLOWMQ_RECONNECT_DISABLED;
   check_not_null(server);
   check_not_null(bad);
   check_not_null(good);
-  check_equal(flowmq_setsockopt(bad, FLOWMQ_RECONNECT_IVL, &reconnect,
+  check_equal(flowmq_setsockopt(bad, FLOWMQ_RECONNECT, &reconnect,
                                sizeof(reconnect)), SALTS_OK);
   check_equal(flowmq_bind(server, bind_uri), SALTS_OK);
   check_equal(flowmq_last_endpoint(server, endpoint, sizeof(endpoint), &endpoint_size),
@@ -1347,7 +1347,7 @@ static void check_wrong_route(const char *bind_uri, const char *correct,
 static void reject_kcp_authentication(bool shared) {
   const char uri[] = "kcp://127.0.0.1:0?auth=psk";
   const char psk_query[] = "?auth=psk";
-  const int reconnect = -1;
+  const flowmq_reconnect_config_t reconnect = FLOWMQ_RECONNECT_DISABLED;
   pattern_fixture fixture = {0};
   char endpoint[320u], plain_endpoint[320u];
   size_t endpoint_size, ready;
@@ -1355,7 +1355,7 @@ static void reject_kcp_authentication(bool shared) {
   flowmq_socket_t *server = pattern_socket(&fixture, FLOWMQ_ROUTER, true);
   flowmq_socket_t *bad = pattern_socket(&fixture, FLOWMQ_DEALER, false);
   set_test_kcp_psk(bad, 2u);
-  check_equal(flowmq_setsockopt(bad, FLOWMQ_RECONNECT_IVL, &reconnect,
+  check_equal(flowmq_setsockopt(bad, FLOWMQ_RECONNECT, &reconnect,
                                sizeof(reconnect)), SALTS_OK);
   pattern_bind(&fixture, server, uri);
   check_equal(flowmq_last_endpoint(server, endpoint, sizeof(endpoint), &endpoint_size),
@@ -1494,7 +1494,7 @@ spec("FlowMQ message transports") {
     size_t uri_size;
     size_t ready;
     uint32_t wait_ms = 5000u;
-    const int reconnect = -1;
+    const flowmq_reconnect_config_t reconnect = FLOWMQ_RECONNECT_DISABLED;
     check_not_null(server);
     check_not_null(incomplete);
     check_equal(flowmq_socket_internal_bind_external(server, "ws://127.0.0.1:0/"),
@@ -1504,7 +1504,7 @@ spec("FlowMQ message transports") {
     uri[uri_size - 2u] = '\0'; /* Remove the root path. */
     check_true(snprintf(tcp_uri, sizeof(tcp_uri), "tcp://%s",
                         uri + sizeof("ws://") - 1u) > 0);
-    check_equal(flowmq_setsockopt(incomplete, FLOWMQ_RECONNECT_IVL, &reconnect,
+    check_equal(flowmq_setsockopt(incomplete, FLOWMQ_RECONNECT, &reconnect,
                                  sizeof(reconnect)), SALTS_OK);
     check_equal(flowmq_connect(incomplete, tcp_uri), SALTS_OK);
     flowmq_pollitem_t ws = {.socket = server};
