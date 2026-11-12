@@ -164,6 +164,12 @@ typedef struct flowmq_socket_retained_frame_s {
   size_t payload_size;
 } flowmq_socket_retained_frame_t;
 
+typedef enum flowmq_ws_http_state_e {
+  FLOWMQ_WS_HTTP_READING,
+  FLOWMQ_WS_HTTP_ACCEPTED,
+  FLOWMQ_WS_HTTP_REJECTED
+} flowmq_ws_http_state_t;
+
 typedef struct flowmq_socket_ws_s {
   cnet_websocket_transport link;
   cnet_websocket *session;
@@ -172,9 +178,9 @@ typedef struct flowmq_socket_ws_s {
   size_t upgrade_size;
   char input[FLOWMQ_WS_HEADER_LIMIT + FLOWMQ_SOCKET_WS_RECEIVE_BYTES];
   char accept[FLOWMQ_WS_ACCEPT_CAPACITY];
+  flowmq_ws_http_state_t http_state;
   bool read_pending;
   bool write_pending;
-  bool upgraded;
   bool terminal;
 } flowmq_socket_ws_t;
 
@@ -2381,15 +2387,25 @@ static int flowmq_socket_owned_stream_fallback(
 static int flowmq_socket_rearm_receive(flowmq_socket_peer_t *peer);
 
 static int flowmq_socket_ws_http_send(flowmq_socket_peer_t *peer,
-                                      const char *data, size_t size) {
+                                      const char *data, size_t size, bool close_after_send) {
   flowmq_socket_t *socket = peer->owner;
   mem_buffer_t *buffer = mem_get_buffer(&socket->message_pool, size);
   if (buffer == NULL) return SALTS_ENOMEM;
   memcpy(mem_buffer_data(buffer), data, size);
   mem_set_used(buffer, size);
-  const int status = cnet_send_buffer(&socket->client, peer->connection, buffer);
+  const int status = close_after_send
+      ? cnet_send_buffer_and_close(&socket->client, peer->connection, buffer)
+      : cnet_send_buffer(&socket->client, peer->connection, buffer);
   mem_buffer_release(buffer);
   if (status == SALTS_OK) peer->ws->write_pending = true;
+  return status;
+}
+
+static int flowmq_socket_ws_reject(flowmq_socket_peer_t *peer, int error) {
+  const char *response = flowmq_ws_server_rejection(error);
+  if (response == NULL) return error;
+  const int status = flowmq_socket_ws_http_send(peer, response, strlen(response), true);
+  if (status == SALTS_OK) peer->ws->http_state = FLOWMQ_WS_HTTP_REJECTED;
   return status;
 }
 
@@ -2408,7 +2424,7 @@ static int flowmq_socket_ws_start(flowmq_socket_peer_t *peer) {
     if (status == SALTS_OK)
       status = flowmq_ws_client_request(&parts, request, sizeof(request), &size, ws->accept);
     if (status == SALTS_OK)
-      status = flowmq_socket_ws_http_send(peer, request, size);
+      status = flowmq_socket_ws_http_send(peer, request, size, false);
     if (status != SALTS_OK) return status;
   }
   return flowmq_socket_rearm_receive(peer);
@@ -2807,7 +2823,8 @@ static int flowmq_socket_ws_upgrade(flowmq_socket_peer_t *peer) {
   flowmq_socket_ws_t *ws = peer->ws;
   const bool server = peer->endpoint_index == FLOWMQ_SOCKET_ENDPOINT_NONE;
   if (monotonic_ms() >= ws->deadline_ms) return SALTS_ETIMEDOUT;
-  if (!ws->upgraded) {
+  if (ws->http_state == FLOWMQ_WS_HTTP_REJECTED) return SALTS_OK;
+  if (ws->http_state == FLOWMQ_WS_HTTP_READING) {
     size_t size = 0u;
     for (size_t i = 4u; i <= ws->input_size && i <= FLOWMQ_WS_HEADER_LIMIT; ++i) {
       if (memcmp(ws->input + i - 4u, "\r\n\r\n", 4u) == 0) {
@@ -2816,23 +2833,24 @@ static int flowmq_socket_ws_upgrade(flowmq_socket_peer_t *peer) {
       }
     }
     if (size == 0u) {
-      if (ws->input_size >= FLOWMQ_WS_HEADER_LIMIT) return SALTS_EMSGSIZE;
+      if (ws->input_size >= FLOWMQ_WS_HEADER_LIMIT)
+        return server ? flowmq_socket_ws_reject(peer, SALTS_EMSGSIZE) : SALTS_EMSGSIZE;
       return flowmq_socket_rearm_receive(peer);
     }
     int status = flowmq_ws_upgrade_validate(server, ws->input, size,
                                             socket->ws_path, ws->accept);
-    if (status != SALTS_OK) return status;
+    if (status != SALTS_OK) return server ? flowmq_socket_ws_reject(peer, status) : status;
     if (server) {
       char response[256u];
       size_t response_size;
       status = flowmq_ws_server_response(ws->accept, response, sizeof(response),
                                          &response_size);
       if (status == SALTS_OK)
-        status = flowmq_socket_ws_http_send(peer, response, response_size);
+        status = flowmq_socket_ws_http_send(peer, response, response_size, false);
       if (status != SALTS_OK) return status;
     }
     ws->upgrade_size = size;
-    ws->upgraded = true;
+    ws->http_state = FLOWMQ_WS_HTTP_ACCEPTED;
   }
   if (ws->write_pending) return SALTS_OK;
   return flowmq_socket_ws_attach(peer, server);
@@ -5637,7 +5655,8 @@ static uint32_t flowmq_socket_ws_external_timeout(
     const flowmq_socket_peer_t *peer, uint64_t now_ms, uint32_t max_wait_ms) {
   const flowmq_socket_ws_t *ws = peer->ws;
   if (ws->session == NULL) {
-    const bool wait_for_io = ws->upgraded ? ws->write_pending : ws->read_pending;
+    const bool wait_for_io = ws->http_state == FLOWMQ_WS_HTTP_REJECTED ||
+        (ws->http_state == FLOWMQ_WS_HTTP_ACCEPTED ? ws->write_pending : ws->read_pending);
     return wait_for_io
         ? flowmq_socket_wait_until_ms(now_ms, ws->deadline_ms, max_wait_ms)
         : 0u;
