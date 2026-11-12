@@ -15,6 +15,9 @@
 #include "flowmq_subscription_set.h"
 #include "flowmq_socket_option.h"
 #include "flowmq_socket_external_internal.h"
+#if defined(FLOWMQ_PACKET_TEST)
+#include "flowmq_socket_packet_test.h"
+#endif
 #if defined(FLOWMQ_BATCH_PROBE)
 #include "flowmq_socket_batch_probe.h"
 #endif
@@ -313,6 +316,10 @@ struct flowmq_socket_s {
    * identity is only a routing token, while CNet owns the terminal child. */
   flowmq_socket_peer_t *accept_peer;
   native_io_request accept_request;
+#if defined(FLOWMQ_PACKET_TEST)
+  flowmq_packet_test_observer packet_test_observer;
+  void *packet_test_user;
+#endif
   unsigned runtime_initialized : 1;
   unsigned external_stopping : 1;
   unsigned external_stopped : 1;
@@ -2941,9 +2948,24 @@ static void flowmq_socket_packet_send(void *user, cnet_packet_endpoint *packet,
   (void)packet;
   (void)tag;
   if (peer == NULL) return;
+#if defined(FLOWMQ_PACKET_TEST)
+  if (socket->packet_test_observer != NULL)
+    socket->packet_test_observer(socket->packet_test_user,
+                                 flowmq_socket_peer_index(socket, peer),
+                                 session, size, status, tag);
+#endif
   if (status == SALTS_OK) flowmq_socket_on_send(peer, (cnet_connection){0}, size);
   else flowmq_socket_peer_fail(peer);
 }
+
+#if defined(FLOWMQ_PACKET_TEST)
+cnet_packet_send_terminal_fn flowmq_socket_test_observe_packet_sends(
+    flowmq_socket_t *socket, flowmq_packet_test_observer observer, void *user) {
+  socket->packet_test_observer = observer;
+  socket->packet_test_user = user;
+  return flowmq_socket_packet_send;
+}
+#endif
 
 static int flowmq_socket_packet_init(flowmq_socket_t *socket,
                                     const flowmq_cnet_endpoint_t *parts,
