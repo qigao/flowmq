@@ -233,8 +233,18 @@ loader.
 | --- | --- | --- |
 | [protocol_roundtrip.c](examples/protocol_roundtrip.c) | `flowmq_protocol_roundtrip` | FMQ/6 frame encoding and decoding |
 | [segmented_frame.c](examples/segmented_frame.c) | `flowmq_segmented_frame` | Segmented frame encoding |
-| [security_hello.c](examples/security_hello.c) | `flowmq_security_hello` | FMS/3 security-envelope encoding |
-| [multicore_reqrep.c](examples/multicore_reqrep.c) | `flowmq_multicore_reqrep` | Independent worker contexts and REQ/REP sockets |
+| [security_hello.c](examples/security_hello.c) | `flowmq_security_hello` | FMS/3 security-envelope codec round trip |
+| [multicore_reqrep.c](examples/multicore_reqrep.c) | `flowmq_multicore_reqrep` | TCP loopback REQ/REP with a context and socket per server worker |
+
+Run the TCP REQ/REP example with eight workers and 100 requests per worker.
+
+```sh
+build/flowmq/bin/flowmq_multicore_reqrep 8 100
+```
+
+The example sets `FLOWMQ_RECONNECT_DISABLED` to exercise one connection per
+worker. The FMS/3 example uses the codec directly. Socket identity policies
+use the verified TLS certificate and the FMQ HELLO identity.
 
 With `BUILD_EXAMPLES=ON` and `BUILD_TESTS=ON`, run the multicore example's
 1-, 4-, and 16-worker cases through CTest.
@@ -243,6 +253,10 @@ With `BUILD_EXAMPLES=ON` and `BUILD_TESTS=ON`, run the multicore example's
 ctest --test-dir build/flowmq -R '^test_flowmq_multicore_reqrep_' \
   --no-tests=error --output-on-failure
 ```
+
+See the integration tests for [TLS and reconnect](flowmq/tests/runtime/test_flowmq_socket.c),
+[IPC](flowmq/tests/transport/test_flowmq_ipc.c), and
+[WS/WSS and KCP](flowmq/tests/transport/test_flowmq_message_transport.c).
 
 ## Runtime model
 
@@ -261,9 +275,9 @@ with jittered backoff from a nominal 100 ms up to 1 second.
 | Socket I/O | [flowmq_socket.h](flowmq/include/flowmq_socket.h) | `bind`, `connect`, `send`, `recv`, and `poll` run on the owning thread |
 | Shared completion wait | [flowmq_owner.h](flowmq/include/flowmq_owner.h) | TCP, IPC, WS, WSS and KCP client sockets use `FLOWMQ_DONTWAIT`, `flowmq_owner_poll()`, and `flowmq_owner_close_socket()` |
 | Reuse-port listeners | `FLOWMQ_REUSE_PORT` | Configure independent listener sockets before binding the same numeric TCP endpoint |
-| Peer admission limits | [flowmq_peer_pool.h](flowmq/include/flowmq_peer_pool.h) | Enable bounded connecting/ready peer capacity before starting a socket |
-| Remote endpoint selection | [flowmq_destination.h](flowmq/include/flowmq_destination.h) | Choose an endpoint from a caller-owned snapshot before connecting |
-| TLS routing authorization | [flowmq_tls_identity_map.h](flowmq/include/flowmq_tls_identity_map.h) | Bind verified certificate fingerprints to allowed ROUTER HELLO identities using required client certificates |
+| Peer admission limits | [flowmq_peer_pool.h](flowmq/include/flowmq_peer_pool.h) | Enable bounded connecting/ready peer capacity before starting a TCP or TLS socket |
+| Remote endpoint selection | [flowmq_destination.h](flowmq/include/flowmq_destination.h) | Choose a TCP or TLS endpoint from a caller-owned snapshot before connecting |
+| TLS routing authorization | [flowmq_tls_identity_map.h](flowmq/include/flowmq_tls_identity_map.h) | On TLS and WSS ROUTER sockets, match verified peer certificate fingerprints to HELLO identities. Listeners require client certificates |
 
 ### WebSocket and KCP
 
@@ -315,19 +329,20 @@ Peer pools and retained sends return `SALTS_ENOTSUP` for these transports.
 
 ### Message ownership
 
-IPC supports copied sends via `flowmq_send()`. IPC clients can share a wait
-with TCP clients through `flowmq_owner_poll()`. IPC listeners use standalone
-socket progress. IPC returns `SALTS_ENOTSUP` for retained sends, peer pools,
-and port reuse. Remote destination selection accepts TCP/TLS endpoints. On
-POSIX, bind in an application-controlled directory and remove the socket
-pathname after closing the listener. OS permissions govern endpoint access.
+IPC uses copied sends and supports shared client progress through
+`flowmq_owner_poll()`. Public IPC listeners use standalone progress. IPC
+returns `SALTS_ENOTSUP` for peer pools and port reuse. On POSIX, bind in an
+application-controlled directory and remove the socket pathname after closing
+the listener. OS permissions govern endpoint access.
 
-`flowmq_send()` copies borrowed caller bytes. `flowmq_send_slice()` retains
-canonical slice ownership through transport completion. Keep retained backing
-bytes immutable until completion.
+`flowmq_send()` copies borrowed caller bytes. On TCP and TLS,
+`flowmq_send_slice()` retains canonical slice ownership through transport
+completion. Keep retained backing bytes immutable until completion. CNet
+encrypts the retained plaintext when sending over TLS.
 
-`flowmq_recv()` copies into caller storage. `flowmq_recv_slice()` transfers a
-contiguous slice, and `flowmq_recv_slicev()` transfers a bounded payload vector.
+`flowmq_recv()` copies into caller storage. `flowmq_recv_slice()` returns a
+contiguous slice and coalesces a multi-range payload when needed.
+`flowmq_recv_slicev()` transfers the queued payload ranges.
 Release every returned slice with `mem_slice_release()` before closing the
 socket. Successful dequeue advances multipart state, flow credit, and queue
 occupancy. Public headers specify capacity errors and ownership on failure.

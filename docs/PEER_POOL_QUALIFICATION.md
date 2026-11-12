@@ -7,8 +7,8 @@
 peer pool，本次只扩展正式 benchmark、安装 consumer 和验收流程，没有性能路径修改。
 
 这里的 1/2/4 owners 是独立 progress 线程，每线程独占 context 和 standalone
-sockets，不是显式 `flowmq_owner_t` 的共享 wait。后者当前仅支持 TCP；本次 TLS
-结果不表示新增了共享 Owner TLS 支持。线程未绑核，运行环境未隔离，不能从单机
+sockets。该轮测试的共享 wait 路径只覆盖 TCP。当前共享 Owner 能力见
+[根 README](../README.md#runtime-model)。线程未绑核，运行环境未隔离，不能从单机
 样本推出普遍性能收益。
 
 ## 工作量与测量协议

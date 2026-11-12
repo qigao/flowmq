@@ -14,14 +14,15 @@
 ```text
 FES/1 envelope 或 FMP/1 TBE wire payload
               -> FMQ/6 DATA frame
-              -> Salts CNet TCP 或 verified TLS byte stream
+              -> CNet TCP / TLS / IPC / WS / WSS / KCP
 
-FMS/3 envelope -> FMQ/6 HELLO payload
+FMS/3 codec -> 可独立编码的 FMQ/6 HELLO 安全信封
 ```
 
 FMQ/6 负责 framing、11 种 ZeroMQ pattern、连接协商、receiver-driven credit 与错误边界；
-CNet 负责 TCP/TLS 连接、完整有序写入、receive view 和关闭完成。FES/FMP 不占用 FMQ pattern
-或 frame-kind 空间，TLS 也不改变 FMQ frame 格式。
+CNet 负责传输会话、有序数据交付与关闭完成。FMQ 对各 transport 使用同一帧格式，
+对应封装见 [FMQ/6 传输映射](FMQ_WIRE_PROTOCOL.md#1-分层与版本)。FES/FMP 使用普通 DATA
+payload。
 
 ## 实现映射
 
@@ -32,22 +33,23 @@ CNet 负责 TCP/TLS 连接、完整有序写入、receive view 和关闭完成�
 | FMS/3 | `flowmq/src/protocol/flowmq_security.c` | protocol 与 pattern handshake tests |
 | FES/1 | `flowmq/src/protocol/flowmq_esb.c` | `flowmq/tests/protocol/test_flowmq_esb.c` |
 | FMP/1 | generated header-only TBE wire binding 与 `flowmq/extensions/media_provider/src/flowmq_media_provider.c` | `flowmq/tests/media_provider/test_flowmq_media_provider_schema.c` |
-| TCP/TLS binding | `flowmq/src/runtime/flowmq_socket.c`、`flowmq/src/transport/cnet/flowmq_cnet_transport.c` | `flowmq/tests/runtime/test_flowmq_socket.c`、`flowmq/tests/transport/test_flowmq_transport.c` |
+| TCP/TLS/IPC binding | `flowmq_socket.c`、`flowmq_cnet_transport.c` | `test_flowmq_socket`、`test_flowmq_ipc` |
+| WS/WSS/KCP binding | `flowmq_socket.c`、`flowmq_cnet_transport.c`、`flowmq_cnet_websocket.c` | `test_flowmq_message_transport`、`test_flowmq_kcp_impairment` |
 
 任何 wire、schema 或 socket 行为变更都必须同步更新 catalog、对应规范与测试。FMQ/5、旧 ESB
 transport extension、relaxed ESB decoder 和 `FMS/1` media 旧称均不属于支持面，也没有 fallback。
 
-## 已定义但未接入 socket runtime 的能力
+## 应用协议与 socket runtime 边界
 
-- FMS/3 已有 codec 与语法校验；当前 endpoint fail closed，只接受空 HELLO payload，尚无
-  credential provider、principal/ACL 或 TLS certificate identity binding。
+- FMS/3 提供 codec 与语法校验，socket 握手只接收空 HELLO payload。TLS/WSS ROUTER
+  可通过 `FLOWMQ_TLS_IDENTITY_POLICY` 把已验证证书的指纹与 HELLO identity 匹配。
+  FMS/3 credential provider 与应用 ACL 尚未接入。
 - FES/1 是可装入 DATA payload 的严格应用协议，不声明新的 socket type 或 broker runtime。
   未被 socket/runtime 使用的 scatter/gather、stream partition、saga、priority queue 与 circuit
   breaker helper 已从主库移除。
 - FMP/1 是可装入 DATA payload 的 wire application contract，不提供 dispatcher、worker 或
   durable broker。
-- reconnect policy 与 receive-side heartbeat deadline 已由 socket facade 配置和调用；
-  endpoint 断线后会在后续 caller progress 中创建全新 peer session。socket runtime 使用
-  segmented frame encoder 将 framing/payload 复制到 socket 自有 buffer，再通过
-  `cnet_send_buffer()` 或 `cnet_send_slicev()` 提交；CNet 保留 backing buffer 引用直到完成，
-  调用者输入只在 `flowmq_send()` 调用期间借用。
+- `FLOWMQ_RECONNECT` 由 socket runtime 配置 CNet recovery policy。符合预算的重连
+  创建全新 peer session，成功完成 FMQ HELLO/SETTINGS 后重置预算。
+- `flowmq_send()` 在返回成功前接纳调用者字节的副本。TCP/TLS 的 `flowmq_send_slice()`
+  使用 CNet retained vector，完成前持有 backing。

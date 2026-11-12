@@ -9,16 +9,17 @@ ZeroMQ-style context / socket API
     |
 pattern FSM + routing + bounded message queues
     |
-caller-driven TCP/TLS primitives
+caller-driven transport adapters
     |
-FMQ/6 codec + Salts CNet
+FMQ/6 codec + CNet TCP / TLS / IPC / WS / WSS / KCP
 ```
 
 `FlowMQ::Protocol` 不依赖网络；`FlowMQ::Core` 保存 pattern/session 规则；
 `FlowMQ::Transport` 私有依赖 `Salts::CNet` 与 `Salts::NativeIO`。NativeIO 只作为
 实现细节支撑 ordinary per-socket wait 与 explicit owner-lane shared wait，不进入安装包的
-public CMake dependency surface。当前 transport 只有 TCP/TLS，未实现 transport 会在配置边界
-fail fast。
+public CMake dependency surface。普通 socket 可 bind/connect TCP、TLS、IPC、WS/WSS 和 KCP。
+共享 Owner 的公开入口提供 TCP、IPC、WS/WSS 和 KCP 客户端。各 transport 的发送与监听边界见
+[根 README](../README.md#runtime-model)。
 
 物理目录与上述 target 保持一致：
 
@@ -26,9 +27,9 @@ fail fast。
 flowmq/include/                         installed flat C API
 flowmq/src/protocol/                    FMQ/FMS/FES codec 与 stream decoder
 flowmq/src/core/pattern/                ZeroMQ pattern、FSM 与 subscription state
-flowmq/src/core/session/                credit/HWM 与 reconnect policy
-flowmq/src/runtime/                     context/socket/peer owner 与 caller progress
-flowmq/src/transport/cnet/              CNet TCP/TLS 薄适配
+flowmq/src/core/session/                FMQ flow credit
+flowmq/src/runtime/                     context/socket/peer、HWM 与 CNet recovery policy 接入
+flowmq/src/transport/cnet/              CNet endpoint、stream、WebSocket 与 packet 适配
 flowmq/src/security/                    TLS principal/identity policy
 flowmq/extensions/media_provider/       FMP/1 schema、TBE wire view 与 validator
 flowmq/tests/、flowmq/benchmarks/       按相同责任分组的验证入口
@@ -40,9 +41,9 @@ queue、scatter/gather、stream partition 和 circuit breaker 不再编入主库
 
 ## Acceptor–Connector 接入决策（2026-10-10）
 
-**状态：内部 TCP shared-listener 已接入并进入验证；尚未扩展公开 owner 契约。**
-现有 `flowmq_owner_socket()` 明确排除 listener bind；`flowmq_bind()` 对 external backend
-仍返回 `SALTS_ENOTSUP`。启用服务端能力需要单独审查公开行为及下面的生命周期验证。
+**当前状态：**内部 TCP 和 IPC shared listener 已验收。公开 `flowmq_bind()` 使用普通
+socket，对 `flowmq_owner_socket()` 创建的 socket 返回 `SALTS_ENOTSUP`。
+下面记录 2026-10-10 的 TCP 接纳决策及其验收范围。
 
 **依据（事实，MED）：**[合批后的 progress 实测](FLOWMQ_BATCH_SWEEP.md#合批后的-progress-归因2026-10-10)
 显示，Windows 单 peer 稳态下 manager 空调用约 27 ns；listener 空 readiness 检查约
@@ -79,8 +80,7 @@ queue、scatter/gather、stream partition 和 circuit breaker 不再编入主库
 - FlowMQ socket 继续唯一拥有 peer、decoder、FSM、HWM、credit 和 reconnect 状态；
   manager 负责连接记录及回收。accept 的 request identity 只用于路由，不复制会话事实源。
 - 已有 `cnet_handoff` 是有界连接接纳交接能力，不自带 worker 或唤醒。首版无需跨 owner
-  交接，也不引入逐消息 MPSC 队列。TLS 的 detached adoption 存在，但 FlowMQ external
-  runtime 当前仅支持 TCP；首版范围限定 TCP，不推导为 TLS shared wait 已可用。
+  交接，也不引入逐消息 MPSC 队列。当时的首版只验证 TCP listener 的 shared wait。
 
 ### 内部 progress 与容量协议
 
@@ -727,7 +727,7 @@ caller `mem_slice_release()`。
 runtime 直接拥有 CNet client/listener、peer registry、decoder、pattern FSM 与有界消息队列；
 bind/connect 只决定连接方向，不决定消息模式。每次成功 `flowmq_connect()` 还建立一个固定
 容量的 outbound endpoint 记录；初次 admission 失败会直接返回错误且不保留记录，后续异步
-FAILED/CLOSED 才进入自动重连。
+FAILED/CLOSED 由 CNet recovery policy 按失败类型、次数和截止时间决定是否重连。
 
 ## Shutdown
 
@@ -746,7 +746,8 @@ owner lease。
 
 ## 验证
 
-当前验证覆盖 TCP、verified TLS、FMQ/6 SETTINGS/FLOW_UPDATE、累计 credit 耗尽与恢复、
+当前验证覆盖 TCP、verified TLS、IPC、WS/WSS 和普通及 PSK KCP。FMQ/6 回归覆盖
+SETTINGS/FLOW_UPDATE、累计 credit 耗尽与恢复、
 deadline 更新、ROUTER identity、multipart 接收原子可见性、REQ/REP FSM、
 PUB/SUB filter/fan-out、动态 XPUB/XSUB subscription event 与 reconnect replay、TCP/TLS
 listener restart 后的 caller-driven reconnect、发送/接收 message/byte HWM、

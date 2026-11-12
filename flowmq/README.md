@@ -5,20 +5,20 @@
 
 - `flowmq/include`：独立 C API；聚合头为 `flowmq.h`。
 - `flowmq/src/protocol`：全局协议目录、FMQ/6、FMS/3、FES/1 codec 与 bounded stream decoder。
-- `flowmq/src/core`：pattern FSM、subscription、credit/HWM 与 reconnect policy。
-- `flowmq/src/runtime`：context/socket/peer 状态与 caller-driven progress。
-- `flowmq/src/transport`：CNet TCP/TLS/IPC 薄适配。
+- `flowmq/src/core`：pattern FSM、subscription 与接收端 credit。
+- `flowmq/src/runtime`：context/socket/peer 状态、HWM、有界重连与 caller-driven progress。
+- `flowmq/src/transport`：CNet TCP、TLS、IPC、WS/WSS 与 KCP 适配。
 - `flowmq/src/security`：TLS principal/identity policy。
 - `flowmq/extensions/media_provider`：FMP/1 schema、header-only wire binding 与 view validator。
 - 唯一安装 target：`FlowMQ::FlowMQ`。
 - 公开链接依赖：`Salts::Core`、`Salts::DataBind`。
-- 私有实现依赖：`Salts::CSTL`、`Salts::CMeta`、`Salts::CNet` 与 TLS backend。
+- 私有实现依赖：`CMeta::CSTL`、`CMeta::CMeta`、`Salts::CNet`、`Salts::NativeIO`、llhttp 与 GmSSL。
 
-旧 callback endpoint 已删除。新的公开网络边界是 ZeroMQ 风格 socket facade；CNet 由调用
-`send/recv/poll` 的 owner 线程直接推进连接、重连和 deadline，不创建 worker。构建、使用和部署入口见
+公开网络边界是 ZeroMQ 风格 socket facade。owner 线程通过普通 socket 操作或
+`flowmq_owner_poll()` 推进连接与 deadline。CNet recovery policy 管理重连票据和退避。构建、使用和部署入口见
 [根 README](../README.md)，所有权与数据路径见
 [ARCHITECTURE.md](../docs/ARCHITECTURE.md)。
 
-FES/1、FMP/1 与 FMS/3 中有一部分仅提供 codec、本地状态或 wire contract，并不等于
-socket runtime 已接入；segmented encoder 与 reconnect 已由 socket runtime 调用。准确边界见
+FES/1 与 FMP/1 由应用在 FMQ DATA 中使用。FMS/3 提供安全信封 codec。
+TLS/WSS 的 ROUTER 身份校验直接使用证书指纹与 HELLO identity。协议和运行时的分层见
 [PROTOCOL_SPEC.md](../docs/PROTOCOL_SPEC.md)。
