@@ -15,6 +15,12 @@ if(WIN32)
 endif()
 add_executable(flowmq_delivery_crash_node crash_node.c)
 target_link_libraries(flowmq_delivery_crash_node PRIVATE FlowMQ::Delivery)
+if(APPLE)
+  # The child loads TurboDB's @rpath/libdata_bind.dylib through its own
+  # executable runpath. It only links the Delivery API directly.
+  set_property(TARGET flowmq_delivery_crash_node APPEND PROPERTY BUILD_RPATH
+    "$<TARGET_FILE_DIR:Salts::DataBind>")
+endif()
 add_test(NAME test_flowmq_delivery_crash COMMAND ${CMAKE_COMMAND}
   "-DNODE=$<TARGET_FILE:flowmq_delivery_crash_node>" -P "${CMAKE_CURRENT_SOURCE_DIR}/crash_recovery.cmake")
 set_tests_properties(test_flowmq_delivery test_flowmq_delivery_crash PROPERTIES
