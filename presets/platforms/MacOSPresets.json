@@ -1,0 +1,49 @@
+{
+  "version": 6,
+  "include": [
+    "../BasePresets.json"
+  ],
+  "configurePresets": [
+    {
+      "name": "macos-llvm-native",
+      "hidden": true,
+      "inherits": [
+        "ISMac",
+        "base",
+        "toolkit-llvm-native"
+      ]
+    },
+    {
+      "name": "macos-gcc",
+      "hidden": true,
+      "inherits": [
+        "ISMac",
+        "base",
+        "toolkit-gcc-macos",
+        "flags-gcc-macos"
+      ]
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "build-macos",
+      "hidden": true,
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "test-macos",
+      "hidden": true,
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    }
+  ]
+}

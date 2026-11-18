@@ -1,0 +1,20 @@
+{
+  "version": 6,
+  "include": [
+    "../Platforms.json"
+  ],
+  "configurePresets": [
+    {
+      "name": "toolkit-llvm-native",
+      "hidden": true,
+      "description": "Native LLVM on Linux/macOS; compiler executables are resolved from PATH",
+      "inherits": [
+        "ISPosix"
+      ],
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++"
+      }
+    }
+  ]
+}

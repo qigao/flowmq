@@ -62,7 +62,10 @@ FLOWMQ_C_API int flowmq_protocol_flow_update_decode(vstr payload,
                                                     flowmq_protocol_flow_update_t *update);
 
 /**
- * Decoded FMQ/6 frame. Identity, topic, and single-packet payload are borrowed
+ * Decoded FMQ/6 frame. DATA uses canonical 64 KiB non-final packets and one
+ * final packet containing exactly the remaining bytes; malformed packet
+ * sizes or LAST flags return SALTS_EPROTO without an alternate decode path.
+ * Identity, topic, and single-packet payload are borrowed
  * from the input buffer. Multi-packet payload is owned by this value and must
  * be released with flowmq_protocol_frame_cleanup().
  */

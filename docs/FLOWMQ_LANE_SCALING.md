@@ -181,7 +181,7 @@ CPU。RSS 仍是整个混合实验进程的高水位，不能拿后运行一方�
 的位置，`engine_order` 是组内引擎的先后位置。吞吐和 CPU 采用各自中位数，配对比例则
 先计算同轮 FlowMQ/libzmq 再取中位数，两个统计量不混用。
 
-复现（开启现有 `FLOWMQ_BUILD_ZMQ_BENCHMARK` 配置，MSVC 开发环境）：
+复现（开启现有 `BUILD_ZMQ_BENCHMARK` 配置，MSVC 开发环境）：
 
 ```powershell
 cmake --build --preset win-release-user
@@ -1303,7 +1303,7 @@ ctest --preset bench-win-release-user -R "^bench_flowmq_lane_sg_sweep$" -V
 
 手动运行 `.github/workflows/native-sdk-release.yml`，设置 `run_benchmarks=true`。
 Linux、Windows、macOS 的正式 Release preset 显式开启现有
-`FLOWMQ_BUILD_ZMQ_BENCHMARK`；常规 PR 和发布构建默认仍关闭该对照。
+`BUILD_ZMQ_BENCHMARK`；常规 PR 和发布构建默认仍关闭该对照。
 Unix 静态 vcpkg 包的 `libzmq` 是转发到 `libzmq-static` 的 INTERFACE target，
 Release artifact 校验检查实际 archive；链接继续使用包提供的 `libzmq`。
 

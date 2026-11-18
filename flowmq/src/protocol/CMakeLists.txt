@@ -13,6 +13,7 @@ set(FLOWMQ_PROTOCOL_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/flowmq_protocol_control_schema.h
     ${CMAKE_CURRENT_SOURCE_DIR}/flowmq_protocol_internal.h
     ${CMAKE_CURRENT_SOURCE_DIR}/flowmq_esb.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/stream/flowmq_owned_stream.h
     ${CMAKE_CURRENT_SOURCE_DIR}/stream/flowmq_stream_decoder.c
     ${CMAKE_CURRENT_SOURCE_DIR}/stream/flowmq_stream_decoder.h)
 

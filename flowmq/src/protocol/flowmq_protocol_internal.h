@@ -84,6 +84,20 @@ static inline int flowmq_protocol_decode_packet_header_internal(
       packet->topic_len > FLOWMQ_PROTOCOL_MAX_TOPIC_SIZE ||
       packet->chunk_len > FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE)
     return SALTS_EMSGSIZE;
+  if (packet->kind == FLOWMQ_PROTOCOL_FRAME_DATA) {
+    size_t remaining;
+    size_t expected;
+    if (packet->payload_offset > packet->payload_len) return SALTS_EPROTO;
+    remaining = packet->payload_len - packet->payload_offset;
+    expected = remaining > FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE
+                   ? FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE : remaining;
+    /* Canonical packetization bounds frame overhead and payload vectors;
+     * transport callback fragmentation has no effect on this wire rule. */
+    if (packet->chunk_len != expected ||
+        ((packet->flags & FLOWMQ_PROTOCOL_PACKET_LAST) != 0u) !=
+            (remaining <= FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE))
+      return SALTS_EPROTO;
+  }
   body_len = (size_t)packet->identity_len + packet->topic_len +
              packet->chunk_len;
   if (body_len > SIZE_MAX - FLOWMQ_PROTOCOL_HEADER_SIZE) return SALTS_ERANGE;

@@ -1,37 +1,64 @@
 {
-    "version": 6,
-    "include": [
-        "presets/BuildPresets.json",
-        "presets/TestPresets.json",
-        "presets/AndroidPresets.json"
-    ],
-    "configurePresets": [
-        {
-            "name": "base-win-dev-user",
-            "hidden": true,
-            "displayName": "Developer Build (Windows, Base)",
-            "inherits": [
-                "dev-win-msvc-ninja",
-                "pkg-vcpkg"
-            ]
-        },
-        {
-            "name": "base-win-release-user",
-            "hidden": true,
-            "displayName": "Release Build (Windows, Base)",
-            "inherits": [
-                "release-win-msvc-ninja",
-                "pkg-vcpkg"
-            ]
-        },
-        {
-            "name": "base-linux-dev-user",
-            "hidden": true,
-            "displayName": "Developer Build (Linux, Base)",
-            "inherits": [
-                "dev-linux-ninja",
-                "pkg-vcpkg"
-            ]
-        }
-    ]
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 27,
+    "patch": 0
+  },
+  "include": [
+    "presets/ConfigurePresets.json",
+    "presets/BuildPresets.json",
+    "presets/TestPresets.json"
+  ],
+  "configurePresets": [
+    {
+      "name": "native-runtime",
+      "hidden": true,
+      "environment": {
+        "PATH": "${sourceDir}/build/${presetName}/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{VCPKG_TARGET_TRIPLET}/$env{VCPKG_CONFIGURATION_SUBDIR}bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{VCPKG_TARGET_TRIPLET}/bin${pathListSep}$env{SALTS_CNET_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$env{CMETA_ROOT}/bin${pathListSep}$env{SALTS_BASE_ROOT}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{CHTTP_ROOT}/bin${pathListSep}$env{TURBODB_ROOT}/bin${pathListSep}$penv{PATH}",
+        "LD_LIBRARY_PATH": "${sourceDir}/build/${presetName}/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{VCPKG_TARGET_TRIPLET}/$env{VCPKG_CONFIGURATION_SUBDIR}lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{VCPKG_TARGET_TRIPLET}/lib${pathListSep}$env{SALTS_CNET_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$env{CMETA_ROOT}/lib${pathListSep}$env{SALTS_BASE_ROOT}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{CHTTP_ROOT}/lib${pathListSep}$env{TURBODB_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
+      }
+    },
+    {
+      "name": "full-native",
+      "hidden": true,
+      "inherits": [
+        "ISNative",
+        "base",
+        "release-mode"
+      ],
+      "cacheVariables": {
+        "BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "full-native-asan-ubsan",
+      "hidden": true,
+      "inherits": [
+        "ISLinux",
+        "asan-ubsan-mode",
+        "full-native"
+      ]
+    },
+    {
+      "name": "full-native-tsan",
+      "hidden": true,
+      "inherits": [
+        "ISLinux",
+        "tsan-mode",
+        "full-native"
+      ]
+    },
+    {
+      "name": "android-release",
+      "hidden": true,
+      "inherits": [
+        "android-base",
+        "release-mode"
+      ],
+      "cacheVariables": {
+        "CMAKE_ANDROID_ARCH_ABI": "$env{ANDROID_ABI}"
+      }
+    }
+  ]
 }

@@ -10,7 +10,6 @@ set(FLOWMQ_TRANSPORT_SOURCES
     ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_owner_internal.h
     ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_owner_batch.c
     ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_owner_batch.h
-    ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_owned_stream.h
     ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_peer_state.c
     ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_peer_state.h
     ${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_peer_state_schema.h

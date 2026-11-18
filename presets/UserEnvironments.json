@@ -1,0 +1,46 @@
+{
+  "version": 6,
+  "include": [
+    "../CMakePresets.json"
+  ],
+  "configurePresets": [
+    {
+      "name": "vcpkg-cache",
+      "hidden": true,
+      "environment": {
+        "VCPKG_CACHE_REPOSITORY_ROOT": "$penv{VCPKG_CACHE_REPOSITORY_ROOT}",
+        "VCPKG_INSTALLED_DIR": "$penv{VCPKG_INSTALLED_DIR}",
+        "SALTS_BASE_ROOT": "$penv{SALTS_BASE_ROOT}",
+        "CMETA_ROOT": "$penv{CMETA_ROOT}",
+        "SALTS_CNET_ROOT": "$penv{SALTS_CNET_ROOT}",
+        "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
+        "RE2C_ROOT": "$penv{RE2C_ROOT}",
+        "LEMON_ROOT": "$penv{LEMON_ROOT}",
+        "QIGAO_HOST_RID": "$penv{QIGAO_HOST_RID}",
+        "SALTS_BASE_VERSION": "$penv{SALTS_BASE_VERSION}",
+        "CMETA_VERSION": "$penv{CMETA_VERSION}",
+        "SALTS_UTILS_VERSION": "$penv{SALTS_UTILS_VERSION}",
+        "SALTS_CNET_VERSION": "$penv{SALTS_CNET_VERSION}"
+      },
+      "cacheVariables": {
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/${presetName}/stage",
+        "VCPKG_INSTALLED_DIR": "$env{VCPKG_INSTALLED_DIR}",
+        "VCPKG_TARGET_TRIPLET": "$env{VCPKG_TARGET_TRIPLET}",
+        "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/$env{VCPKG_TARGET_TRIPLET}",
+        "CMAKE_RUNTIME_OUTPUT_DIRECTORY": "${sourceDir}/build/${presetName}/bin",
+        "CMAKE_LIBRARY_OUTPUT_DIRECTORY": "${sourceDir}/build/${presetName}/bin",
+        "CMAKE_ARCHIVE_OUTPUT_DIRECTORY": "${sourceDir}/build/${presetName}/lib"
+      },
+      "description": "Consume preinstalled vcpkg-cache packages without a toolchain or dependency resolver"
+    },
+    {
+      "name": "native-environment",
+      "hidden": true,
+      "description": "Preinstalled vcpkg packages and runtime paths for native compilers",
+      "inherits": [
+        "vcpkg-cache",
+        "native-runtime"
+      ]
+    }
+  ]
+}

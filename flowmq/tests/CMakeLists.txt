@@ -112,7 +112,9 @@ cmake_add_test(
            ${PROJECT_SOURCE_DIR}/flowmq/src/runtime
            ${PROJECT_SOURCE_DIR}/flowmq/src/transport/cnet
   FOLDER "flowmq/tests/transport")
-set_tests_properties(test_flowmq_message_transport PROPERTIES TIMEOUT 30)
+# This suite includes real TLS/WS failures and the five-second KCP handshake
+# expiry in both progress domains; their cumulative budget exceeds 30 seconds.
+set_tests_properties(test_flowmq_message_transport PROPERTIES TIMEOUT 60)
 
 cmake_add_test(
   test_flowmq_kcp_impairment
@@ -134,6 +136,18 @@ cmake_add_test(
   LIBS FlowMQ::Transport Salts::TinyTest
   FOLDER "flowmq/tests/runtime")
 
+foreach(test_suffix IN ITEMS progress progress_pool)
+  cmake_add_test(
+    test_flowmq_${test_suffix}
+    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/test_flowmq_progress.c
+    LIBS FlowMQ::Transport Salts::CNet Salts::TinyTest
+    INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/runtime
+             ${PROJECT_SOURCE_DIR}/flowmq/src/transport/cnet
+    FOLDER "flowmq/tests/runtime")
+  set_tests_properties(test_flowmq_${test_suffix} PROPERTIES TIMEOUT 30)
+endforeach()
+target_compile_definitions(test_flowmq_progress_pool PRIVATE FLOWMQ_TEST_PEER_POOL=1)
+
 cmake_add_test(
   test_flowmq_peer_pool
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/test_flowmq_peer_pool.c
@@ -150,18 +164,11 @@ target_compile_definitions(test_flowmq_socket_pool PRIVATE FLOWMQ_TEST_PEER_POOL
 
 cmake_add_test(
   test_flowmq_owned_stream
-  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/runtime/test_flowmq_owned_stream.c
-  LIBS FlowMQ::Transport Salts::TinyTest
-  INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/runtime
-           ${PROJECT_SOURCE_DIR}/flowmq/src/protocol
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/protocol/test_flowmq_owned_stream.c
+  LIBS FlowMQ::Protocol Salts::TinyTest
+  INCLUDES ${PROJECT_SOURCE_DIR}/flowmq/src/protocol
            ${PROJECT_SOURCE_DIR}/flowmq/src/protocol/stream
-  FOLDER "flowmq/tests/runtime")
-
-add_test(
-  NAME test_flowmq_segmented_receive_contract
-  COMMAND ${CMAKE_COMMAND}
-          "-DFLOWMQ_SOCKET_SOURCE=${PROJECT_SOURCE_DIR}/flowmq/src/runtime/flowmq_socket.c"
-          -P "${CMAKE_CURRENT_SOURCE_DIR}/runtime/flowmq_segmented_receive_contract_test.cmake")
+  FOLDER "flowmq/tests/protocol")
 
 cmake_add_test(
   test_flowmq_owner
@@ -243,7 +250,8 @@ endif()
 set(FLOWMQ_PROTOCOL_TESTS
     test_flowmq_protocol
     test_flowmq_esb
-    test_flowmq_stream_decoder)
+    test_flowmq_stream_decoder
+    test_flowmq_owned_stream)
 set(FLOWMQ_CORE_TESTS
     test_flowmq_core
     test_flowmq_pattern
@@ -253,15 +261,16 @@ set(FLOWMQ_CORE_TESTS
     test_flowmq_tls_identity_map)
 set(FLOWMQ_TRANSPORT_TESTS
     test_flowmq_transport
+    test_flowmq_ipc
     test_flowmq_message_transport
     test_flowmq_kcp_impairment
     test_flowmq_listener_external
     test_flowmq_socket
+    test_flowmq_progress
+    test_flowmq_progress_pool
     test_flowmq_destination
     test_flowmq_peer_pool
     test_flowmq_socket_pool
-    test_flowmq_owned_stream
-    test_flowmq_segmented_receive_contract
     test_flowmq_owner
     test_flowmq_owner_fault
     test_flowmq_owner_fault_pool
@@ -273,28 +282,11 @@ set(FLOWMQ_TRANSPORT_TESTS
     test_flowmq_socket_option
     test_flowmq_peer_state)
 
-# Reuse the installed-package consumers to check the same public C11/C++17
-# calls against the product shared library during normal runtime regression.
-# Installed target/dependency qualification remains in tests/package.
-cmake_add_test(
-  test_flowmq_public_c11
-  SOURCES ${PROJECT_SOURCE_DIR}/tests/package/main.c
-  LIBS FlowMQ::FlowMQ
-  FOLDER "flowmq/tests/runtime")
-target_compile_features(test_flowmq_public_c11 PRIVATE c_std_11)
-cmake_add_test(
-  test_flowmq_public_cpp17
-  SOURCES ${PROJECT_SOURCE_DIR}/tests/package/consumer_cpp.cpp
-  LIBS FlowMQ::FlowMQ
-  FOLDER "flowmq/tests/runtime")
-target_compile_features(test_flowmq_public_cpp17 PRIVATE cxx_std_17)
-list(APPEND FLOWMQ_TRANSPORT_TESTS test_flowmq_public_c11 test_flowmq_public_cpp17)
-
 set_tests_properties(test_flowmq_protocol
                      PROPERTIES LABELS "fmq-release;flowmq-protocol")
 set_tests_properties(test_flowmq_esb
                      PROPERTIES LABELS "fmq-release;flowmq-protocol;flowmq-esb")
-set_tests_properties(test_flowmq_stream_decoder
+set_tests_properties(test_flowmq_stream_decoder test_flowmq_owned_stream
                      PROPERTIES LABELS "flowmq;flowmq-protocol")
 set_tests_properties(${FLOWMQ_CORE_TESTS}
                      PROPERTIES LABELS "flowmq;flowmq-core")

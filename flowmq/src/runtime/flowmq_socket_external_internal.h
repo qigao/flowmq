@@ -73,7 +73,7 @@ int flowmq_socket_internal_progress_local(flowmq_socket_t *socket);
 
 /*
  * Returns the minimum CNet + FlowMQ-local deadline capped by max_wait_ms.
- * This includes reconnect, heartbeat and receiver FLOW_UPDATE timing.
+ * This includes reconnect, FMQ handshake, heartbeat and receiver FLOW_UPDATE timing.
  */
 int flowmq_socket_internal_external_timeout(
     flowmq_socket_t *socket, uint32_t max_wait_ms, uint32_t *wait_ms);

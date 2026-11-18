@@ -1,0 +1,63 @@
+{
+  "version": 6,
+  "include": [
+    "../BasePresets.json"
+  ],
+  "configurePresets": [
+    {
+      "name": "linux-gcc",
+      "hidden": true,
+      "inherits": [
+        "ISLinux",
+        "base",
+        "toolkit-gcc",
+        "flags-gnu"
+      ],
+      "environment": {
+        "VCPKG_TARGET_TRIPLET": "$penv{VCPKG_TARGET_TRIPLET}"
+      }
+    },
+    {
+      "name": "linux-gcc-arm64",
+      "hidden": true,
+      "inherits": [
+        "flags-gnu-arm64",
+        "linux-gcc"
+      ],
+      "environment": {
+        "VCPKG_TARGET_TRIPLET": "$penv{VCPKG_TARGET_TRIPLET}"
+      }
+    },
+    {
+      "name": "linux-llvm-native",
+      "hidden": true,
+      "inherits": [
+        "ISLinux",
+        "base",
+        "toolkit-llvm-native"
+      ]
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "build-linux",
+      "hidden": true,
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "test-linux",
+      "hidden": true,
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "source": {
+    "kind": "github-release",
+    "repository": "qigao/vcpkg-cache",
+    "version_env": "VCPKG_CACHE_VERSION",
+    "asset": "installed-arm64-android.tar.xz"
+  }
+}

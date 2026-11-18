@@ -1,5 +1,9 @@
 # FlowMQ architecture
 
+在现有消息能力之上构建 MDP 与分布式服务的工作顺序、模块边界和验收契约见
+[MDP 与分布式能力建设方案](FLOWMQ_MDP_DISTRIBUTED_DESIGN.md)。该方案描述待实现能力，
+当前公开支持范围以下文和安装头文件为准。
+
 ## 模块与依赖
 
 ```text
@@ -7,17 +11,21 @@ Application
     |
 ZeroMQ-style context / socket API
     |
-pattern FSM + routing + bounded message queues
-    |
-caller-driven transport adapters
-    |
-FMQ/6 codec + CNet TCP / TLS / IPC / WS / WSS / KCP
+runtime: peer lifecycle / bounded queues / progress / deadlines
+    |                       |                         |
+Core: pattern + session     Protocol: FMQ/6 codec     transport adapters
+FSM / routing / credit      frame <-> bytes           CNet I/O / framing
+                                                       |
+                                             TCP / TLS / IPC / WS / WSS / KCP
 ```
 
 `FlowMQ::Protocol` 不依赖网络；`FlowMQ::Core` 保存 pattern/session 规则；
 `FlowMQ::Transport` 私有依赖 `Salts::CNet` 与 `Salts::NativeIO`。NativeIO 只作为
 实现细节支撑 ordinary per-socket wait 与 explicit owner-lane shared wait，不进入安装包的
 public CMake dependency surface。普通 socket 可 bind/connect TCP、TLS、IPC、WS/WSS 和 KCP。
+普通 socket 的 peer 预算默认是 4，部署可在 bind/connect 前通过
+`flowmq_socket_set_peer_capacity` 配置。socket 为每个槽位保存会话代际；
+监听器满员时继续推进既有连接，释放槽位后再接纳新 peer。
 共享 Owner 的公开入口提供 TCP、IPC、WS/WSS 和 KCP 客户端。各 transport 的发送与监听边界见
 [根 README](../README.md#runtime-model)。
 
@@ -38,6 +46,128 @@ flowmq/tests/、flowmq/benchmarks/       按相同责任分组的验证入口
 原顶层 `patterns/` 混合了 ZeroMQ socket pattern、transport 和未接入 runtime 的 ESB helper，
 现已取消。Core 只保留 socket/runtime 实际使用的 pattern 与 session 状态；Saga、通用 priority
 queue、scatter/gather、stream partition 和 circuit breaker 不再编入主库。
+
+## 协议、传输与通信模式的职责（2026-11-17）
+
+下面描述当前实现；后文带日期的接纳与性能记录保留其当时的验收范围。
+
+| 归属 | 输入与输出 | 拥有的状态与边界 |
+| --- | --- | --- |
+| Protocol：FMQ/6 codec、stream decoder | 有界 bytes/segments ↔ HELLO、SETTINGS、DATA、订阅、心跳、FLOW_UPDATE frame | wire 字段、长度校验、FMQ packet 分片与重组；frame view 的借用期受输入存储约束，不拥有连接或业务路由 |
+| Core：pattern | frame 类型、peer pattern、应用收发操作 → pairing、方向、路由策略、FSM 判定 | 提供不可变 pattern 描述符、REQ/REP、multipart 与 subscription set 的类型和迁移规则；状态实例、具体 peer 选择和副作用归 runtime |
+| Core：session credit | SETTINGS、累计 FLOW_UPDATE、DATA admission/consumption → 可发送字节数 | 提供累计 DATA credit 的算法；每代状态实例归 runtime peer；控制帧和本地合成 envelope/event 不占 DATA credit |
+| transport adapter / CNet | endpoint、FMQ 编码结果、I/O completion → 连接事件与接收 bytes/message | TCP/TLS/IPC 的字节流，WS Upgrade/binary message，KCP session/message，TLS 验证、实际读写与物理终态；不决定 FMQ READY、REQ/REP phase 或业务完成 |
+| runtime socket / owner | 上述判定与事件 → 原子接纳、重试、取消、readiness | 唯一 peer/session owner；有界队列、generation、握手截止时间、HWM、decoder/retained 生命周期，以及一个调用者线程上的 progress |
+| 应用协议 | DATA payload → 业务请求、响应与结果 | correlation、业务重试、幂等、确认和持久化；FMQ send 成功及 transport completion 均不能替代这些结果 |
+
+依赖方向为 `Protocol ← Core ← runtime`，runtime 同时调用 transport adapter。FMQ codec
+不依赖 CNet；transport 不根据 payload 选择通信模式。bind/connect 决定建立连接的角色，
+pattern 决定消息方向和路由；例如连接方可以是 PULL，监听方可以是 PUSH。
+同一 socket 的 transport 在 runtime 启动后固定，通信模式不能扩大该 transport 的能力。
+FMQ 是 FlowMQ 自有 wire protocol；ZeroMQ 风格的 socket 名称与 API 不表示 ZMTP wire 互通。
+
+### 传输能力
+
+| 传输 | FMQ frame 边界 | 复制发送 | retained 发送 | owned 接收入口 | 公开 shared-owner connect | peer pool |
+| --- | --- | --- | --- | --- | --- | --- |
+| TCP | decoder 从任意分段的有序字节流还原 | 支持 | 支持 | CNet slice，可保留 backing | 支持 | 支持 |
+| TLS | 同 TCP，CNet 负责加解密和证书校验 | 支持 | 支持，明文保持不可变至完成 | 从借用的解密数据复制 | 不支持 | 支持 |
+| IPC | FMQ 流封装，名称/路径由平台适配 | 支持 | 不支持 | 复制 | 支持 | 不支持 |
+| WS/WSS | Upgrade 选择 `fmq.v6`；每个 binary message 恰好一个完整 FMQ frame | 支持 | 不支持 | 复制 | 支持 | 不支持 |
+| KCP | 每个 KCP 逻辑消息恰好一个完整 FMQ frame；每 DATA part 至多 64 KiB | 支持 | 不支持 | 复制 | 支持 | 不支持 |
+
+各传输均支持普通 socket bind/connect；公开 owner socket 的 bind 仍返回 `SALTS_ENOTSUP`。
+内部 shared-listener qualification 入口的支持范围见后文，不作为公开部署接口。
+TCP 从第一个接收字节起使用 owned stream，不在握手后切换 decoder。完整输入可保留 CNet
+backing；跨 callback 的碎片按固定块组装，contiguous slice 和 caller buffer 按 API 要求复制。
+容量或协议失败时不会切换实现。WS message、KCP message、FMQ packet、FMQ frame、应用 multipart
+分别是不同边界；适配层必须保留 frame 边界，不能把一次 I/O completion 当成一条应用消息。
+
+### 会话、容量与关闭
+
+```text
+transport ready → 双向 HELLO/SETTINGS → FMQ READY → pattern DATA/control
+                       超时/非法 pairing ↓          ↓ 断线或失败
+                                  close → terminal drain → peer release
+```
+
+stream transport 在开始 FMQ HELLO 时启动一次 5 秒的 readiness 预算；WS/WSS 在 Upgrade
+成功后开始。KCP 沿用 session 预留时启动的 5 秒总预算，涵盖 PSK 建立和 FMQ 握手。
+预算不因部分 HELLO/SETTINGS、心跳或重复 progress 延长；完整 READY 才解除。
+outbound endpoint 还受 CNet reconnect episode 截止时间约束，取较早者；accepted peer 没有
+outbound retry episode，但同样必须按时完成 FMQ 握手。到期只关闭对应 peer，继续推进其他
+peer 和 listener。ordinary 与 shared owner 使用同一判定；owner 的等待上限包含该 deadline。
+所有计时由调用方 progress 驱动，应用不推进时不执行超时清理。
+
+socket 最多占用四个 peer slot，退役但仍持有未消费 inbound 数据或 lease 的 slot 继续计入。
+无 slot 时暂停新接纳，将连接留在 CNet/backlog，继续已有连接的读写、关闭和回收；
+有 slot 后分配失败才报告内存错误。pool 的 connecting/physical 配额另外约束接纳，不能
+用 pool snapshot 代替实际 reserve，也不能把容量压力传播为整个 socket 的进度故障。
+
+接收 DATA 与 XPUB 合成事件共用一次 `stage → commit` 事务：输入先复制或取得 retained
+所有权，完整消息才进入 socket FIFO。HWM 满时保存在 peer 的固定 staging 中，标记
+`commit_pending`；源 frame 消费一次，订阅状态更新一次。应用取走消息后由 owner 重试
+commit，处理已有 decoder 数据，再恢复 receive。该暂存仍受 part/byte 硬边界约束；
+XPUB 事件虽然不占远端 DATA credit，仍占本地 receive HWM，应用必须消费。
+
+复制 ROUTER 发送把 identity 和所有 payload parts 视为同一事务。非阻塞最终 admission
+被拒绝时取消路由，允许下一条消息选择其他 peer；阻塞发送保留 route/generation 和已暂存
+parts，在本线程推进到接纳或失败。断线取消时不会把剩余 parts 转给同 identity 的新会话。
+retained 发送的失败保留/释放规则继续遵循公开 slice API，不把复制发送的取消规则套用到它。
+
+关闭按 `停止新接纳/重连 → 请求关闭 → 路由所有物理终态 → 结算队列与引用 → 释放存储`
+执行。CNet 拥有物理 I/O 终态，runtime 拥有协议事务和其内存；到达 deadline 不等于已经
+可以销毁在途 buffer。接收 credit 在应用取走完整消息后归还，与物理发送完成分开结算。
+
+### 本次重构的选择与验证
+
+四个进度缺陷的共同原因是容量和事务状态分别在 listener、DATA/control 接收和 API 重试
+分支中处理。选择在现有 runtime 内复用空闲 slot 查询、完整消息提交与会话握手预算，
+明确 Protocol/Core/Transport 依赖方向；旧 ABI、旧行为和旧协议不构成保留分支的理由。
+背压与 READY 规则只有一个归属；TCP owned 接收与借用入口按传输能力固定选择，
+并共用唯一会话/frame 处理函数。owned 字节流组装和 frame 投影归 Protocol，测试只链接
+`FlowMQ::Protocol`；runtime 持有 decoder 实例并提交状态和消息事务。代价是 socket runtime
+仍是主要集成点，今后按已验证的职责继续拆分，无需新依赖。
+
+payload 发送和 POLLOUT 共用 pattern 的 DATA 方向校验。XSUB 的订阅控制能力由 desired
+subscriptions 同步使用，不能据此允许应用发送 DATA；复制和 retained payload API 都立即
+拒绝该方向，避免进入没有目标路由的等待循环。
+
+不提供旧版本协商、旧语义开关或复制 decoder 降级。未完成握手现在会按预算关闭，应用必须
+持续推进并在预算内回答 HELLO/SETTINGS。DATA 采用唯一的 canonical packetization：非末包
+恰好 64 KiB，末包恰好剩余字节；不接受更小的非末包或错误 LAST。现有 encoder 已按该规则
+输出，手写对端必须同步。XSUB 的错误 DATA 发送直接返回 `SALTS_ENOTSUP`，订阅操作使用
+订阅选项。部署时统一更新 runtime 与手写对端；若撤回实现，须整体重建会话，不能在在途
+消息中切换接收状态。正式回归入口为
+[`test_flowmq_progress.c`](../flowmq/tests/runtime/test_flowmq_progress.c)，同一组真实 loopback
+用例以普通和 peer-pool 两个配置运行，覆盖 backlog、ROUTER multipart、TCP/WS XPUB 背压、
+ordinary/shared-owner 静默握手回收与等待 deadline、READY 后的空闲连接、XSUB DATA 拒绝，
+以及合并 HELLO/SETTINGS/空 DATA/multipart DATA 的处理。协议层
+[`test_flowmq_owned_stream.c`](../flowmq/tests/protocol/test_flowmq_owned_stream.c) 覆盖数千次碎片
+输入组装 1 MiB、跨帧尾块封存、retained 引用释放和容量拒绝。相邻协议、模式、credit、
+owner 与 retained 测试继续保留。
+通信模式的完整 pairing 与使用边界见 [wire 规范第 4 节](FMQ_WIRE_PROTOCOL.md#4-pattern-registry)。
+
+**验证（事实，2026-11-17）：**Windows x64 / MSVC 19.44 Release，使用仓库锁定版本的
+原生 SDK。最初四个 loopback 回归在原实现上全部失败；修复后扩展为七个用例，以普通和
+peer-pool 两种配置运行，14/14 通过。完整构建通过，全部非 benchmark CTest 45/45
+通过，用时 292.33 秒，包含协议、credit、TCP/TLS、IPC、WS/WSS、KCP、owner、公开 C11/C++17
+consumer 与应用 codec 回归。移除了一个依赖源码 marker 的 CTest，并移除 CI 中同类的
+收发行为字符串检查；行为由正式可执行测试验证，模块依赖约束仍单独检查。
+协议目录及链接依赖迁移后重新完成全量构建，最后五项定向 CTest 5/5 通过，包含九个
+owned-stream 用例、严格 packet 校验、stream decoder 和普通/池化运行时回归。
+复现测试命令（先按根 README 配置 SDK 并完成构建）：
+
+```text
+ctest --test-dir build/review-msvc -R "^test_flowmq_(owned_stream|protocol|stream_decoder|progress(_pool)?)$" --output-on-failure -j 1
+ctest --test-dir build/review-msvc -LE benchmark --output-on-failure -j 1
+```
+
+CTest 同时补齐 IPC 测试的 SDK runtime 路径和 transport label；消息传输套件含真实握手
+到期等待，实测约 30.4 秒，将其总上限从 30 秒调整为 60 秒。
+**MED / 验证限制：**并行回归曾出现 TLS 证书文件 I/O 和临时文件清理断言失败，相关测试
+串行复跑与最终完整串行回归均通过；并发隔离问题尚未单独解决。Linux、macOS、Android
+及性能 benchmark 本次未运行。
 
 ## Acceptor–Connector 接入决策（2026-10-10）
 
@@ -277,7 +407,7 @@ for each live socket:
 compute POLLIN/POLLOUT/POLLERR with the same readiness projection as ordinary poll
 ```
 
-FlowMQ-local deadline projection至少包含 reconnect next-attempt、heartbeat ping/dead-peer deadline、
+FlowMQ-local deadline projection至少包含 reconnect next-attempt/episode、FMQ handshake、heartbeat ping/dead-peer deadline、
 receiver FLOW_UPDATE deadline/quantum 与 caller timeout；因此正式 owner API 不依赖 #67
 prototype 的固定 10ms wait。routed completion batch 后不立即执行第二次 CNet advance，
 下一 cycle 才重新 advance，保持 owner-local progress 的单 pass 语义。
@@ -285,7 +415,7 @@ prototype 的固定 10ms wait。routed completion batch 后不立即执行第二
 `flowmq_owner_t` 的 socket registry 与 NativeIO capacities 在创建时按 `socket_capacity`
 硬上界预留；不会依据 CPU 数自动扩容，也不会 live resize。owner-created socket 不能放入
 ordinary `flowmq_poll()`，不能直接 `flowmq_close()`，也不能迁移到另一个 owner。
-该 API 仍只产品化 TCP client-side shared-wait progress。
+该 API 当前提供 TCP、IPC、WS/WSS 和 KCP client-side shared-wait progress。
 
 公开的 listener/same-endpoint multicore 使用独立的 ordinary-socket composition，而不是把 listener
 塞进 `flowmq_owner_t`：
@@ -649,48 +779,46 @@ PUB/XPUB 的 mute peer 按 ZeroMQ 语义丢弃，PUSH/DEALER/REQ 等模式不静
 
 ## Receive 数据路径
 
-接收路径对 plaintext TCP 的 eligible shapes 使用 released CNet producer-owned receive，
-同时保留一个诚实的 copied fallback：
+TCP 接收只有一个 owned stream；其他传输根据其公开接收入口取得所有权，不能在失败时
+把 TCP DATA 重放进 borrowed decoder：
 
 ```text
-CNet owned receive backing
-  -> bounded peer-owned receive stream
-  -> FMQ frame prefix / payload-range projection
-       |
-       +-> complete DATA:
-       |     one canonical owned range
-       |       or
-       |     bounded segmented canonical range vector
-       |
-       +-> non-DATA / projection overflow / out-of-fast-path TCP shape:
-             copied stream-decoder fallback
-  -> per-peer multipart staging
-  -> socket-owned complete message queue
-       |
-       +-> flowmq_recv()
-       |     required copy into caller storage
-       |
-       +-> flowmq_recv_slice()
-       |     one range: direct ownership transfer
-       |     N > 1 ranges: exactly one targeted coalesce before dequeue commit
-       |
-       +-> flowmq_recv_slicev()
-             transfer bounded canonical vector when available
-             explicit copied fallback remains classified as fallback
+TCP CNet owned receive
+  -> complete prefix: retain original backing
+     fragmented prefix: assemble into fixed 128 KiB owned blocks
+  -> owned frame decoder
+       DATA: project retained payload ranges
+       control / empty DATA: decode exact frame metadata
+                                            \
+TLS / IPC / WS / WSS / KCP borrowed receive    -> one session/pattern frame handler
+  -> transport-specific framing             /    -> per-peer multipart staging
+  -> bounded copied stream decoder               -> complete message queue
+                                                      |
+                        +-----------------------------+--------------------+
+                        |                             |                    |
+                  flowmq_recv()                 flowmq_recv_slice()   flowmq_recv_slicev()
+                  copy to caller                contiguous output    move payload ranges
 ```
 
-CNet callback boundaries 并不是 FMQ packet boundaries，因此 FlowMQ 不承诺任意 TCP segmentation/
-coalescing 都进入 owned-vector fast path。完整 post-handshake plaintext DATA 能在 bounded owned
-stream 内完成时，decoder 只消费 framing/header owner，并把 DATA payload owner 投影到 staged/
-inbound storage；non-DATA、projection overflow 或逃逸该 bounded fast path 的形状继续使用 copied
-decoder。这个 fallback 是显式兼容路径，不被统计成 zero-copy。
+接收所有权入口在第一次 read 前按传输能力选择，HELLO/SETTINGS 与 DATA 不切换路径。
+TCP callback 不是 FMQ packet/frame 边界：碎片从进入流时就按固定块组装，不把 callback
+数量作为消息可接收性的条件。原 backing 和 assembly block 都由 peer owned stream 持有；
+只有尚未发布的尾块可以追加。投影或消费前封存尾块，inbound queue 和 caller 保留的 payload
+不可被后续输入修改。peer 关闭释放 stream；应用返回的 slice 仍须在 socket close 前释放。
 
-`flowmq_recv()` 对 segmented DATA 从 retained ranges 直接复制到 caller；不会先把 vector flatten
-到 message-pool buffer。`flowmq_recv_slice()` 必须返回一个 contiguous canonical slice，因此
-multi-range message 在消费 credit/FSM state 前做 exactly one targeted coalesce；allocation/copy
-失败不会改变 queued message。`flowmq_recv_slicev()` 则可以把 inbound queue 已持有的 bounded
-canonical range vector 直接转移给 caller；capacity 不足只报告 required range count，不推进
-pattern/FSM/credit。
+**容量（计算）：**`max_frame_size = 1 MiB`，canonical DATA 最多 16 个 packet，wire 上限为
+`1 MiB + 16 × 32 = 1,049,088 bytes`。owned stream 的未消费 byte 上限为两倍该值，用于
+容纳当前 frame 和同次回调尾部；固定 descriptor 上限为 32。单个最大 frame 的碎片组装
+最多占九个 128 KiB 块，已有尾前缀最多额外一个范围；加上 packet payload 边界后最多
+25 个投影范围，仍小于 32。完整输入也可直接保留一个 producer backing。达到硬边界或
+分配失败就结束该 peer，不切换 decoder、不重放 DATA、不报告伪成功。普通接收 HWM 满
+则保留已接管的事务并暂停 demand，与硬边界错误分开。
+
+`flowmq_recv()` 从 retained ranges 直接复制到 caller，不先 flatten 到中间 buffer。
+`flowmq_recv_slice()` 显式要求一个 contiguous canonical slice，因此多范围消息在消费
+credit/FSM 前合并一次，失败不改变 queued message。`flowmq_recv_slicev()` 直接转移 queue
+持有的范围；capacity 不足只报告 required count，不推进 pattern/FSM/credit。这三种输出
+表达不同的调用方需求，合并输出不作为数据路径失败后的替代策略。
 
 完整 multipart 提交仍同时检查可配置的消息数与 payload byte HWM；容量不足时停止该 peer 的
 receive demand，应用消费并再次 `poll` 后恢复。只有真实 DATA payload 消耗 wire credit；
@@ -752,6 +880,6 @@ deadline 更新、ROUTER identity、multipart 接收原子可见性、REQ/REP FS
 PUB/SUB filter/fan-out、动态 XPUB/XSUB subscription event 与 reconnect replay、TCP/TLS
 listener restart 后的 caller-driven reconnect、发送/接收 message/byte HWM、
 阻塞/DONTWAIT 分流、多 socket timeout poll、RCVMORE、peer failure isolation、session
-generation fencing、owned/segmented receive、`recv_slicev` vector/fallback classification，以及
+generation fencing、owned/segmented receive、`recv_slicev` retained-vector ownership，以及
 current-main retained PUB/XPUB atomic fanout。下一阶段继续覆盖严格 receive fair-queue、
 可配置 shutdown 边界和更多 pattern benchmark。

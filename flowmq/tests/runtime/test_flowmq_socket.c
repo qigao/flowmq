@@ -136,6 +136,97 @@ static void check_copy_burst(flowmq_socket_t *sender, flowmq_socket_t *receiver,
   }
 }
 
+static void wait_for_matches(flowmq_pollitem_t *items, size_t count, const char *topic,
+                             size_t expected) {
+  size_t matches = 0, ready;
+  uint64_t limit = monotonic_ms() + 10000;
+  do {
+    check_equal(flowmq_poll(items, count, 1, &ready), SALTS_OK);
+    check_equal(
+        flowmq_socket_internal_fanout_match_count(items[0].socket, topic, strlen(topic), &matches),
+        SALTS_OK);
+  } while (matches != expected && monotonic_ms() < limit);
+  check_equal(matches, expected);
+}
+
+spec("publication across a configured peer budget") {
+  enum { slots = 33, count = slots + 2 };
+  static flowmq_ctx_t *ctx;
+  static flowmq_pollitem_t items[count];
+  static mem_slice_t retained;
+  after_each() {
+    mem_slice_release(&retained);
+    for (size_t i = count; i > 0; --i)
+      if (items[i - 1].socket) {
+        check_equal(flowmq_close(items[i - 1].socket), SALTS_OK);
+        items[i - 1].socket = NULL;
+      }
+    if (ctx) check_equal(flowmq_ctx_term(ctx), SALTS_OK);
+    ctx = NULL;
+  }
+  it("reuses a full slot without delivering its previous multipart publication to the new peer") {
+    ctx = flowmq_ctx_new();
+    check_not_null(ctx);
+    flowmq_socket_t *publisher = items[0].socket = flowmq_socket(ctx, FLOWMQ_PUB);
+    check_not_null(publisher);
+    check_equal(flowmq_socket_set_peer_capacity(publisher, slots), SALTS_OK);
+#ifdef FLOWMQ_TEST_PEER_POOL
+    flowmq_peer_pool_config_t pool = FLOWMQ_PEER_POOL_CONFIG_INIT;
+    pool.max_peers = pool.max_connecting = slots;
+    check_equal(flowmq_socket_set_peer_pool(publisher, &pool), SALTS_OK);
+#endif
+    check_equal(flowmq_bind(publisher, "tcp://127.0.0.1:0"), SALTS_OK);
+    char address[128];
+    size_t length, ready;
+    check_equal(flowmq_last_endpoint(publisher, address, sizeof(address), &length), SALTS_OK);
+    for (size_t i = 1; i < count; ++i) {
+      flowmq_socket_t *subscriber = items[i].socket = flowmq_socket(ctx, FLOWMQ_SUB);
+      check_not_null(subscriber);
+      items[i].events = FLOWMQ_POLLIN;
+      check_equal(flowmq_setsockopt(subscriber, FLOWMQ_SUBSCRIBE, "t", 1), SALTS_OK);
+      if (i == count - 1) {
+        wait_for_matches(items, i, "t", slots);
+        check_equal(flowmq_setsockopt(subscriber, FLOWMQ_SUBSCRIBE, "new", 3), SALTS_OK);
+      }
+      check_equal(flowmq_connect(subscriber, address), SALTS_OK);
+    }
+    for (size_t i = 0; i < 10; ++i)
+      check_equal(flowmq_poll(items, count, 1, &ready), SALTS_OK);
+    size_t matches;
+    check_equal(flowmq_socket_internal_fanout_match_count(publisher, "new", 3, &matches), SALTS_OK);
+    check_equal(matches, 0u);
+    check_equal(flowmq_send(publisher, "topic", 5, FLOWMQ_SNDMORE | FLOWMQ_DONTWAIT), SALTS_OK);
+    check_equal(flowmq_close(items[1].socket), SALTS_OK);
+    items[1] = items[count - 1];
+    items[count - 1].socket = NULL;
+    wait_for_matches(items, count - 1, "new", 1);
+    wait_for_matches(items, count - 1, "t", slots);
+    check_equal(flowmq_send(publisher, "last", 4, FLOWMQ_DONTWAIT), SALTS_OK);
+    mem_buffer_t *buffer = mem_get_buffer(mem_global(), 5);
+    check_not_null(buffer);
+    memcpy(mem_buffer_data(buffer), "today", 5);
+    mem_set_used(buffer, 5);
+    retained = mem_slice(buffer, 0, 5);
+    mem_buffer_release(buffer);
+    check_equal(flowmq_send_slice(publisher, &retained, FLOWMQ_DONTWAIT), SALTS_OK);
+    for (size_t i = 1; i < count - 1; ++i) {
+      const char *parts[] = {"topic", "last", "today"};
+      for (size_t j = i == 1 ? 2 : 0; j < 3; ++j) {
+        char data[16];
+        int rc = SALTS_EBUSY;
+        uint64_t limit = monotonic_ms() + 10000;
+        while (rc == SALTS_EBUSY && monotonic_ms() < limit) {
+          check_equal(flowmq_poll(items, count - 1, 1, &ready), SALTS_OK);
+          rc = flowmq_recv(items[i].socket, data, sizeof(data), &length, FLOWMQ_DONTWAIT);
+        }
+        check_equal(rc, SALTS_OK);
+        check_equal(length, strlen(parts[j]));
+        check_equal(data, parts[j], length);
+      }
+    }
+  }
+}
+
 spec("flowmq_socket lifecycle and pattern surface") {
   group("protocol recovery across transport generations") {
     static flowmq_ctx_t *ctx;
@@ -194,9 +285,9 @@ spec("flowmq_socket lifecycle and pattern surface") {
       int require_certificate = 1;
       int status = SALTS_EBUSY;
 
-      ca_path = tt_make_temp_file("flowmq-recovery-ca", ".pem");
-      cert_path = tt_make_temp_file("flowmq-recovery-cert", ".pem");
-      key_path = tt_make_temp_file("flowmq-recovery-key", ".pem");
+      ca_path = tt_make_temp_file("flowmq-recovery-ca", NULL);
+      cert_path = tt_make_temp_file("flowmq-recovery-cert", NULL);
+      key_path = tt_make_temp_file("flowmq-recovery-key", NULL);
       check_not_null(ca_path);
       check_not_null(cert_path);
       check_not_null(key_path);
@@ -665,7 +756,7 @@ spec("flowmq_socket lifecycle and pattern surface") {
      * Keep the receiver idle after DATA admission while the sender completes
      * its native write. This makes the qualified class explicit: one complete
      * FMQ packet is available before the receiver arms its owned CNet read.
-     * Arbitrary TCP fragmentation remains on the copied decoder fallback.
+     * Fragmented input uses bounded owned-stream assembly.
      */
     for (size_t i = 0u; i < 8u; ++i) {
       flowmq_pollitem_t item = {.socket = sender};
@@ -889,9 +980,8 @@ spec("flowmq_socket lifecycle and pattern surface") {
 
     /*
      * Query required ownership-vector capacity without assuming one particular
-     * TCP fragmentation shape. A current run may retain multiple packet payload
-     * ranges or legitimately reach the proven contiguous fallback and require
-     * exactly one range.
+     * TCP fragmentation shape. Every protocol packet contributes retained
+     * payload ranges; the DATA path never flattens the frame into a decoder.
      */
     status = SALTS_EBUSY;
     for (size_t i = 0u; i < FLOWMQ_TEST_PROGRESS_LIMIT &&
@@ -902,7 +992,7 @@ spec("flowmq_socket lifecycle and pattern surface") {
                                   FLOWMQ_DONTWAIT);
     }
     check_equal(status, SALTS_ENOBUFS);
-    check_true(required >= 1u);
+    check_true(required >= SLICEV_LARGE_BYTES / FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE);
 
     segments = (mem_slice_t *)calloc(required, sizeof(*segments));
     check_not_null(segments);
@@ -948,7 +1038,7 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(flowmq_ctx_term(ctx), SALTS_OK);
   }
 
-  it("coalesces segmented 1 MiB receive into one legacy slice") {
+  it("coalesces segmented 1 MiB receive into one contiguous slice") {
     enum { SEGMENTED_RECV_BYTES = 1024u * 1024u };
     static unsigned char payload[SEGMENTED_RECV_BYTES];
     char endpoint[128] = {0};
@@ -989,7 +1079,7 @@ spec("flowmq_socket lifecycle and pattern surface") {
     check_equal(memcmp(received.data, payload, sizeof(payload)), 0);
 
     /*
-     * The legacy API promises one contiguous canonical slice. Phase C may
+     * This API requests one contiguous canonical slice. The runtime may
      * assemble it from multiple retained packet payload ranges, but the
      * handed-off owner remains stable across later socket progress.
      */
@@ -3116,9 +3206,9 @@ spec("flowmq_socket lifecycle and pattern surface") {
     char received[64] = {0};
     size_t endpoint_size = 0u;
     size_t received_size = 0u;
-    char *ca_path = tt_make_temp_file("flowmq-socket-ca", ".pem");
-    char *cert_path = tt_make_temp_file("flowmq-socket-cert", ".pem");
-    char *key_path = tt_make_temp_file("flowmq-socket-key", ".pem");
+    char *ca_path = tt_make_temp_file("flowmq-socket-ca", NULL);
+    char *cert_path = tt_make_temp_file("flowmq-socket-cert", NULL);
+    char *key_path = tt_make_temp_file("flowmq-socket-key", NULL);
     flowmq_ctx_t *ctx = flowmq_ctx_new();
     flowmq_socket_t *server = flowmq_socket(ctx, FLOWMQ_PAIR);
     flowmq_socket_t *client = flowmq_socket(ctx, FLOWMQ_PAIR);
@@ -3348,9 +3438,9 @@ spec("flowmq_socket lifecycle and pattern surface") {
         sizeof(binding), fingerprint, identity};
     flowmq_tls_identity_map_config_t policy =
         FLOWMQ_TLS_IDENTITY_MAP_CONFIG_INIT;
-    char *ca_path = tt_make_temp_file("flowmq-policy-ca", ".pem");
-    char *cert_path = tt_make_temp_file("flowmq-policy-cert", ".pem");
-    char *key_path = tt_make_temp_file("flowmq-policy-key", ".pem");
+    char *ca_path = tt_make_temp_file("flowmq-policy-ca", NULL);
+    char *cert_path = tt_make_temp_file("flowmq-policy-cert", NULL);
+    char *key_path = tt_make_temp_file("flowmq-policy-key", NULL);
     flowmq_ctx_t *ctx = flowmq_ctx_new();
     flowmq_socket_t *pair = flowmq_socket(ctx, FLOWMQ_PAIR);
     flowmq_socket_t *tcp_router = flowmq_socket(ctx, FLOWMQ_ROUTER);
@@ -3428,9 +3518,9 @@ spec("flowmq_socket lifecycle and pattern surface") {
     char received[64] = {0};
     size_t endpoint_size = 0u;
     size_t received_size = 0u;
-    char *ca_path = tt_make_temp_file("flowmq-bound-ca", ".pem");
-    char *cert_path = tt_make_temp_file("flowmq-bound-cert", ".pem");
-    char *key_path = tt_make_temp_file("flowmq-bound-key", ".pem");
+    char *ca_path = tt_make_temp_file("flowmq-bound-ca", NULL);
+    char *cert_path = tt_make_temp_file("flowmq-bound-cert", NULL);
+    char *key_path = tt_make_temp_file("flowmq-bound-key", NULL);
     flowmq_ctx_t *ctx = flowmq_ctx_new();
     flowmq_socket_t *router = flowmq_socket(ctx, FLOWMQ_ROUTER);
     flowmq_socket_t *forged = flowmq_socket(ctx, FLOWMQ_DEALER);
@@ -3565,9 +3655,9 @@ spec("flowmq_socket lifecycle and pattern surface") {
         FLOWMQ_TLS_IDENTITY_MAP_CONFIG_INIT;
     char endpoint[128] = {0};
     size_t endpoint_size = 0u;
-    char *ca_path = tt_make_temp_file("flowmq-unlisted-ca", ".pem");
-    char *cert_path = tt_make_temp_file("flowmq-unlisted-cert", ".pem");
-    char *key_path = tt_make_temp_file("flowmq-unlisted-key", ".pem");
+    char *ca_path = tt_make_temp_file("flowmq-unlisted-ca", NULL);
+    char *cert_path = tt_make_temp_file("flowmq-unlisted-cert", NULL);
+    char *key_path = tt_make_temp_file("flowmq-unlisted-key", NULL);
     flowmq_ctx_t *ctx = flowmq_ctx_new();
     flowmq_socket_t *router = flowmq_socket(ctx, FLOWMQ_ROUTER);
     flowmq_socket_t *dealer = flowmq_socket(ctx, FLOWMQ_DEALER);

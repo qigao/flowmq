@@ -188,7 +188,7 @@ retained-SG 所有权契约，并验证跨 peer 公平性、失败回滚、HWM/c
 使用配置好发布 SDK 与 vcpkg cache 的 MSVC 开发环境：
 
 ```powershell
-cmake --preset win-release-user -DBUILD_TESTS=ON -DFLOWMQ_BUILD_ZMQ_BENCHMARK=ON
+cmake --preset win-release-user -DBUILD_TESTS=ON -DBUILD_ZMQ_BENCHMARK=ON
 cmake --build --preset win-release-user
 ctest --preset win-release-user -R "^test_bench_flowmq_batch(_probe|_profile)?$" --output-on-failure
 ctest --preset bench-win-release-user -R "^bench_flowmq_batch_diagnostic$" -V --output-log build/batch-diagnostic.log

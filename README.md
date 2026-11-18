@@ -9,8 +9,8 @@ FlowMQ provides a ZeroMQ-style context/socket API with its own FMQ/6 wire
 protocol. Applications own socket progress through `send`, `recv`, and `poll`,
 with CNet handling connections and transport completion on the calling thread.
 
-This README describes `main`. Build each revision with its accompanying
-[SDK version lock](cmake/sdk-versions.json).
+This README describes `main`. The [releases](https://github.com/qigao/flowmq/releases)
+provide packaged SDKs and exact dependency versions.
 
 ## Contents
 
@@ -60,61 +60,51 @@ This README describes `main`. Build each revision with its accompanying
 
 - A C11 compiler and a C++17 compiler for the test suite. Native CI uses Clang
   on Linux and macOS, and llvm-mingw on Windows.
-- CMake 3.25+, Ninja, Python 3.12+, Git, and curl.
-- The released SDKs selected by the version lock.
+- CMake 3.25+, Ninja, Python 3.12+, Git, GitHub CLI, and curl.
+- The release-qualified SDK versions are listed in [.env.example](.env.example).
+  Set the same version variables in the shell or in the repository CI settings.
 
-| Dependency | Version | Role | SDK root variable |
-| --- | --- | --- | --- |
-| [salts-base](https://github.com/qigao/salts-base) | 0.1.5 | Buffers, strings, clocks, threads, NativeIO, and TinyTest | `SALTS_BASE_ROOT` |
-| [cmeta](https://github.com/qigao/cmeta) | 0.1.5 | Metadata, Schema/Replay, and CSTL | `CMETA_ROOT` |
-| [salts-cnet](https://github.com/qigao/salts-cnet) | 0.1.10 | Stream, WebSocket, and KCP transport engines | `SALTSCORE_ROOT` |
-| [salts-utils](https://github.com/qigao/salts-utils) | 0.1.2 | DataBind and the host `salts-idlc` generator | `SALTS_UTILS_ROOT` |
-| [vcpkg-cache](https://github.com/qigao/vcpkg-cache) | 0.1.3 | Prebuilt dependencies including llhttp and GmSSL, plus Windows compiler setup | — |
+### Upstream dependency versions
 
-The restore script downloads the pinned release archives with curl and checks
-their SHA-256 digests. The salts-cnet SDK publishes the `SaltsCore` CMake package
-and the `Salts::CNet` target.
-
-### Linux x64 quick start
+The build consumes SaltsBase, CMeta, SaltsUtils, SaltsCNet, TurboDB ORM, and
+the vcpkg-cache native dependency bundle. Select exact release versions.
+The restore command verifies SDK digests and source qualification, and
+writes the selected roots for the parent build. For Linux x64:
 
 ```sh
-git clone https://github.com/qigao/flowmq.git
-cd flowmq
+export VCPKG_CACHE_VERSION=0.1.3 SALTS_BASE_VERSION=0.1.8 CMETA_VERSION=0.1.7
+export SALTS_UTILS_VERSION=0.1.5 SALTS_CNET_VERSION=0.1.15 TURBODB_VERSION=0.1.2
+export VCPKG_TARGET_TRIPLET=x64-linux
+export VCPKG_CACHE_REPOSITORY_ROOT="$PWD/build/vcpkg-cache"
+export GH_TOKEN="$(gh auth token)"
+git clone --branch "v$VCPKG_CACHE_VERSION" --depth 1 \
+  https://github.com/qigao/vcpkg-cache.git "$VCPKG_CACHE_REPOSITORY_ROOT"
+mkdir -p build
+export GITHUB_ENV="$PWD/build/flowmq-build.env"
+: > "$GITHUB_ENV"
+python cmake/ci/restore-release-inputs.py \
+  --triplet "$VCPKG_TARGET_TRIPLET" --sdk-profile linux-clang-x64 --cnet-profile linux-x64
+while IFS= read -r field; do export "$field"; done < "$GITHUB_ENV"
 
-python cmake/ci/restore-split-sdks.py --profile linux-clang-x64 \
-  --triplet x64-linux --destination build/dependencies
-
-deps="$PWD/build/dependencies"
-export SALTS_BASE_ROOT="$deps/linux-clang-x64/salts-base"
-export CMETA_ROOT="$deps/linux-clang-x64/cmeta"
-export SALTSCORE_ROOT="$deps/linux-clang-x64/salts-cnet"
-export SALTS_UTILS_ROOT="$deps/linux-clang-x64/salts-utils"
-
-cmake -S . -B build/flowmq -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON \
-  -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-  -DCMAKE_PREFIX_PATH="$deps/vcpkg_installed/x64-linux"
-cmake --build build/flowmq --parallel 2
-ctest --test-dir build/flowmq -LE benchmark --no-tests=error --output-on-failure
+cmake --preset ci-llvm-native-release-user -DBUILD_EXAMPLES=ON
+cmake --build --preset ci-llvm-native-release-user
+ctest --preset ci-llvm-native-release-user -LE benchmark --no-tests=error --output-on-failure
+cmake --build --preset install-ci-llvm-native-release-user
 ```
 
-### Other platforms
-
-| Platform | Restore profile | Dependency triplet | CI qualification |
+| Platform | SDK profile | CNet profile | Dependency triplet |
 | --- | --- | --- | --- |
-| Linux x64 | `linux-clang-x64` | `x64-linux` | Build, CTest, and install |
-| Windows x64 | `windows-llvm-mingw-x64` | `qigao-x64-windows-llvm-mingw` | Build, CTest, and install |
-| macOS arm64 | `macos-clang-arm64` | `arm64-osx` | Build, CTest, and install |
-| Android arm64 | `android-arm64` | `arm64-android` | Cross-build, link, and install |
+| Linux x64 | `linux-clang-x64` | `linux-x64` | `x64-linux` |
+| Windows x64 | `windows-llvm-mingw-x64` | `windows-x64` | `qigao-x64-windows-llvm-mingw` |
+| macOS arm64 | `macos-clang-arm64` | `macos-arm64` | `arm64-osx` |
+| Android arm64 | `android-arm64` | `android-arm64` | `arm64-android` |
 
-Use the matching profile and triplet when restoring dependencies. Windows
-requires the llvm-mingw compiler and SDK runtime directories on `PATH`. Android
-builds also require the NDK and Linux host SDK roots in `SALTS_BASE_HOST_ROOT`,
-`CMETA_HOST_ROOT`, and `SALTS_UTILS_HOST_ROOT` for code generation. The restore
-script downloads those host SDKs when selecting `android-arm64`.
-
-The [native SDK workflow](.github/workflows/native-sdk-release.yml) contains the
-complete compiler, toolchain, and runtime setup for each platform.
+Windows needs llvm-mingw and the installed SDK runtime DLL directories on
+`PATH`. For Android, set the NDK root and add `--host-sdk-profile
+linux-clang-x64` to select the three host generator SDKs. The
+[native SDK workflow](.github/workflows/native-sdk-release.yml) uses runtime
+CTest on Windows, Linux, and macOS and cross-builds and installs on Android.
+The release includes per-platform SDK archives and `SHA256SUMS`.
 
 ### Build options
 
@@ -122,7 +112,7 @@ complete compiler, toolchain, and runtime setup for each platform.
 | --- | --- | --- |
 | `BUILD_EXAMPLES` | `ON` | Build the programs in `examples/` |
 | `BUILD_TESTS` | `OFF` | Build and register the formal CTest suite |
-| `FLOWMQ_BUILD_ZMQ_BENCHMARK` | `OFF` | Enable comparisons with the pinned libzmq dependency |
+| `BUILD_ZMQ_BENCHMARK` | `OFF` | Enable comparisons with the pinned libzmq dependency |
 
 ## Usage
 
@@ -223,9 +213,232 @@ loader.
 | Target | Availability | Purpose |
 | --- | --- | --- |
 | `FlowMQ::FlowMQ` | Installed SDK and build tree | Complete public shared library |
+| `FlowMQ::Delivery` | Installed SDK (Delivery component) and build tree | Transactional SQLite outbox and inbox via TurboDB ORM |
+| `FlowMQ::MDP` | Installed SDK and build tree | Single-node service RPC, bounded worker slots, cancellation and request deadlines |
+| `FlowMQ::RPC` | Installed SDK and build tree | JSON-RPC 2.0 client and worker method dispatch over MDP |
 | `FlowMQ::Protocol` | Build tree | Protocol catalog and wire codecs |
 | `FlowMQ::Core` | Build tree | Pattern/session state and application core |
 | `FlowMQ::Transport` | Build tree | Socket facade and CNet transport adapters |
+
+### Single-node MDP
+
+For service RPC, link `FlowMQ::MDP` and include `flowmq_mdp.h`. The
+[single-node echo example](examples/mdp_echo.c) defaults to TCP. The client
+and worker ROUTER endpoints independently support TCP, WS, plain KCP, or local
+IPC. IPC uses a named pipe on Windows (`ipc://name`) and a Unix-domain socket
+on POSIX (`ipc:///absolute/path`). Use distinct endpoints for the two listeners.
+For example, run the following from the preset's binary directory in the
+configured SDK runtime environment to use a WS client and a KCP worker.
+
+```sh
+flowmq_mdp_echo hello "ws://127.0.0.1:0/fmq" "kcp://127.0.0.1:0?conv=42"
+```
+
+The MDP CTest label covers registration, dispatch and echo replies across all
+sixteen transport pairs. The lifecycle and fault tests run over TCP.
+See the [MDP protocol and lifecycle](docs/FLOWMQ_MDP_DISTRIBUTED_DESIGN.md#51-协议范围).
+
+A single broker can dispatch the same service to local IPC workers and remote
+TCP workers at the same time. Bind one worker ROUTER per endpoint and pass
+both to `flowmq_mdp_broker_open_listeners`. Set each socket's peer budget
+before binding. The default is four for existing callers. The broker's
+`workers` setting limits registrations across all listeners. For example,
+given three ordinary ROUTERs, a bound client frontend and an initialized
+broker configuration, the following admits up to 32 local and 96 TCP peers.
+
+```c
+flowmq_mdp_worker_listener listeners[] = {
+    {local_router, authorize_local_worker, local_acl},
+    {tcp_router, authorize_remote_worker, remote_acl}
+};
+config.workers = 128;
+int rc = flowmq_socket_set_peer_capacity(local_router, 32);
+if (rc == SALTS_OK) rc = flowmq_socket_set_peer_capacity(tcp_router, 96);
+if (rc == SALTS_OK) rc = flowmq_bind(local_router, local_ipc_uri);
+if (rc == SALTS_OK) rc = flowmq_bind(tcp_router, tcp_uri);
+if (rc == SALTS_OK)
+    rc = flowmq_mdp_broker_open_listeners(front, listeners, 2, &config, &broker);
+```
+
+On success, the I/O owner polls all three ROUTERs and steps the broker. Each
+listener supplies its own authorization callback. A reply travels over the
+listener that dispatched the task, including when two listeners see the same
+worker routing identity. The owner keeps the sockets and callbacks alive
+until broker shutdown. The [mixed-listener regression](mdp/tests/test_mdp.c)
+runs both transports concurrently.
+
+On the broker I/O owner, install service placement policies before the first
+`flowmq_mdp_broker_step`. The broker borrows the immutable array, names and
+callback contexts until close. Services omitted from the table use round robin.
+
+```c
+static const flowmq_mdp_service_policy policies[] = {
+    {.service = "quote", .placement = FLOWMQ_MDP_LEAST_LOAD},
+    {.service = "order", .placement = FLOWMQ_MDP_EXCLUSIVE}
+};
+int rc = flowmq_mdp_broker_set_policies(broker, policies, 2);
+```
+
+Least-load placement compares occupied slots divided by registered capacity.
+For cacheable reads, choose `FLOWMQ_MDP_CACHE_RING`, a nonzero load limit
+of up to 100 percent, and a trusted `route_key` callback that validates the
+request and supplies a stable 64-bit hash. The broker tries eligible peers
+clockwise around a ring derived from listener ordinal and worker identity.
+For exclusive services, a second owner is rejected. After retirement the
+service pauses. The deployment calls `flowmq_mdp_broker_resume_service` only
+after confirming that the old owner stopped or fencing its writes.
+
+For an operation addressed to every member, provide a snapshot of member IDs
+and worker sessions to `flowmq_mdp_fanout_start`. Each member registers its
+dedicated service, and the listener ACL binds that service to its authenticated
+identity. Poll the operation for succeeded, failed and missing counts, then
+inspect each member's outcome. A retry after an unknown result needs the
+service's idempotency contract. See the [fanout API and usage example](mdp/include/flowmq_mdp_fanout.h).
+
+### JSON-RPC on a worker
+
+Link `FlowMQ::RPC` and include `flowmq_rpc.h`. The client selects the MDP
+service and supplies the JSON method, optional object or array parameters, and
+an ID to `flowmq_rpc_call`. A null C pointer for the ID sends a notification.
+An explicit JSON null is an ID and receives a reply. Each MDP call carries
+one UTF-8 document of at most 4096 bytes, containing one request or a batch of
+up to 32 requests for the same service.
+
+The broker routes by service. On the worker, register the service's method
+table with `flowmq_rpc_server_open` and call `flowmq_rpc_execute` on a business
+thread. Each invocation claims one available MDP task, runs its methods and
+completes the slot. The I/O owner keeps polling the socket and calling
+`flowmq_mdp_worker_step` while handlers run. A handler borrows its input for
+the callback and transfers ownership of its result or error data to the adapter.
+An actor can drive execution if the application already uses one.
+
+The client takes the MDP result with `flowmq_mdp_take_result`. For
+`FLOWMQ_MDP_RESULT`, call `flowmq_rpc_decode` with the original IDs. It checks
+the IDs, accepts reordered batch replies and returns an owned JSON object or
+array to release with `json_free`. An all-notification completion returns a
+null pointer. Numeric IDs round-trip as exact decimal tokens. Use string IDs
+when another application may reformat numbers. A business error appears in
+the JSON `error` member. A missed deadline after admission can yield
+`FLOWMQ_MDP_UNKNOWN`, even if a handler committed its transaction. For writes,
+the service can store a business idempotency key, its effects and the result
+in one transaction, then look up that key when the outcome is uncertain.
+
+The following invocation runs the client, broker and worker locally and prints
+`hello`. It uses a WebSocket frontend and a KCP worker connection. See the
+[runnable echo example](examples/mdp_echo.c) and the [public C API](rpc/include/flowmq_rpc.h).
+
+```sh
+flowmq_mdp_echo --rpc hello "ws://127.0.0.1:0/fmq" "kcp://127.0.0.1:0?conv=42"
+```
+
+### Deferred RPC workers
+
+The [quote example](examples/rpc_quote.c) starts a broker and three workers.
+Run `flowmq_rpc_quote` in the configured runtime environment. The quote worker
+requests price and delivery concurrently. Each active ticket has its own
+CFlow Statechart instance on a shared serial executor. The RPC owner decodes
+each reply and sends a typed amount event to that instance. The chart handles
+either arrival order and publishes the total, a component failure or
+cancellation. The RPC owner observes that decision and finishes the ticket.
+The example links `CMeta::CFlow` and prints `quote.total = 42`.
+
+Run `flowmq_rpc_quote --concurrent` to exercise two concurrent requests with
+delivery arriving first. A controlled clock expires one request while it
+awaits price. The other request and a new request that reuses the released
+slot both return 42. CTest runs both variants under the `flowmq-rpc` label.
+
+Use `flowmq_rpc_engine_open` when a method can suspend between downstream
+calls. Configure the worker's monotonic clock, the maximum active documents,
+and the deferred method names. A classifier can attach an ordered business key
+and a priority to a validated member. Synchronous methods may share the same
+worker by passing their existing `flowmq_rpc_server` at open. A batch occupies
+one MDP slot until its members settle in order.
+
+For example, this configuration selects a stable logical partition for each
+key and serves three high-priority ready steps per normal-priority step when
+both levels stay busy in that partition. Supply it as the engine's `schedule`
+and set `classify` to derive the canonical key and priority from trusted
+method policy. Set `ordered` on every method that must serialize on that key.
+
+```c
+static const uint32_t partitions[] = {10, 20, 30};
+static const unsigned quotas[] = {3, 1};
+flowmq_rpc_scheduler_config schedule = {
+    .capacity = 32, .per_key_limit = 4,
+    .partitioning = FLOWMQ_RPC_HASH_RING, .partition_count = 3,
+    .partition_ids = partitions, .virtual_nodes = 16,
+    .queue_policy = FLOWMQ_RPC_QUEUE_PRIORITY,
+    .priority_levels = 2, .priority_weights = quotas
+};
+```
+
+An ordered key stays held across downstream waits. Other ready keys can run.
+The default is round robin across ready keys within one partition. Select
+`FLOWMQ_RPC_QUEUE_FIFO` to dispatch by readiness time instead. See the
+[scheduler API](rpc/include/flowmq_rpc_scheduler.h) for capacity and ownership.
+
+Drive the engine and its downstream client on one owner. Keep polling the
+sockets and driving the MDP steps, including while methods are suspended.
+Call `flowmq_rpc_engine_poll` with a bounded turn budget. On
+`FLOWMQ_RPC_START`, retain the ticket and submit independent child calls as
+one `flowmq_rpc_engine_fork` group. A tag identifies each child. Handle each
+`FLOWMQ_RPC_CHILD` by inspecting the MDP outcome, then decoding a successful
+completion with the original child JSON ID. Once the method's join condition
+is satisfied, call `flowmq_rpc_engine_finish` with its owned result or error.
+`FLOWMQ_RPC_PROGRESS` means internal work advanced. `SALTS_EBUSY` means the
+owner can wait for I/O, an external business completion or the next deadline.
+
+An Actor or pool can receive a copied ticket and owned business inputs and
+send the result back to the engine owner. On `FLOWMQ_RPC_CANCEL`, quiesce
+external work and finish the ticket to acknowledge cancellation and release
+its ordered key. Use `flowmq_rpc_engine_drain` to let admitted methods finish
+while rejecting new work. At a shutdown deadline use `flowmq_rpc_engine_stop`,
+drain cancellation events and close after outstanding tickets are acknowledged.
+Allocate independent downstream execution capacity when all parent slots can
+wait on the same dependency. The [RPC integration tests](rpc/tests/test_rpc.c)
+show a parent joining two out-of-order child RPCs, another order completing
+concurrently, and a suspended batch resuming its remaining members.
+
+### Persistent one-way messages
+
+Use `find_package(FlowMQ CONFIG REQUIRED COMPONENTS Delivery)` and link
+`FlowMQ::Delivery`. Configure TurboDB through `TURBODB_ROOT` when building
+FlowMQ. Deploy the matching SQLite driver, ORM and their runtime libraries.
+The host loads the trusted SQLite plugin into its ORM runtime before opening
+a store. On Windows the plugin loader searches the application directory for
+dependent DLLs. See [the delivery API](delivery/include/flowmq_delivery.h).
+
+Provision a separate database for each producer/inbox stream and role with
+`flowmq_delivery_open(..., 1, ...)`. Use `create=0` on restart. Persist the
+assigned positive 63-bit stream ID in deployment configuration. A replacement
+inbox must recover the original database, including its receive watermark.
+The record and byte limits bound pending encoded data. Budget SQLite file,
+index, WAL and checkpoint overhead separately. Operators must provision enough
+disk space for commits and reclamation.
+
+1. The producer calls `flowmq_delivery_enqueue`. Success means the entire
+   multipart payload and its sequence have committed to the WAL.
+2. The storage owner reads the first pending item with `flowmq_delivery_peek`.
+   The socket owner sends its frame as one FlowMQ DATA part and retries that
+   same record after a bounded retry interval until the inbox acknowledges it.
+   Release the item after use. A successful socket send leaves the record pending.
+3. After authenticating and authorizing the remote endpoint for this stream,
+   pass the complete frame to `flowmq_delivery_accept`. Send the returned ACK
+   only on success. On the sender, pass that authorized ACK to
+   `flowmq_delivery_settle`. Stop on a protocol, identity or storage error.
+4. Consume the inbox head with `flowmq_delivery_consume_apply` for changes in
+   the same database. Its callback uses the supplied ORM transaction. For an
+   external service use an idempotency key and call `flowmq_delivery_consume`
+   after successful processing. A crash between those operations permits redelivery.
+
+The complete DATA envelope is `FMD1`, an eight-byte stream ID, an eight-byte
+sequence and one to 64 parts. Each part has a four-byte length followed by its
+bytes. Empty parts are valid. Integers use network byte order. The encoded
+envelope is limited to 1 MiB and must fit the socket's configured byte limits.
+An ACK is exactly `FMA1` plus the same stream ID and sequence. These are
+application envelopes carried over FMQ/6. Keep database operations on the
+storage owner and socket calls on its I/O owner. A delivery item owns its
+buffer and may move between owners. Its part views expire on release.
 
 ## Examples
 
@@ -357,7 +570,8 @@ own delivery retry and idempotency policies.
 | Guide | Topics |
 | --- | --- |
 | [Implementation layout](flowmq/README.md) | Source directories and module boundaries |
-| [Architecture](docs/ARCHITECTURE.md) | Ownership, shutdown, and runtime design |
+| [Architecture](docs/ARCHITECTURE.md) | Protocol/transport/pattern responsibilities, capability matrix, ownership and shutdown |
+| [MDP and distributed capabilities](docs/FLOWMQ_MDP_DISTRIBUTED_DESIGN.md) | Planned prerequisites, module boundaries, delivery stages, and acceptance criteria |
 | [TCP/TLS transport](docs/CNET_TCP_TLS_ARCHITECTURE.md) | Pattern semantics, CNet integration, and peer pools |
 | [Protocol index](docs/PROTOCOL_SPEC.md) | Protocol families and implementation mapping |
 | [FMQ/6 wire protocol](docs/FMQ_WIRE_PROTOCOL.md) | Frames, negotiation, multipart, credit, and heartbeats |

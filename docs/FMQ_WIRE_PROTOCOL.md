@@ -28,6 +28,13 @@ FMQ/6 帧格式。
 pattern pairing 合法后才能接受 `DATA`。当前 socket runtime 的 HELLO payload 为空。
 TLS/WSS 的证书身份校验使用 HELLO 的 identity 字段。
 
+transport 建立成功与 FMQ READY 是两个状态。runtime 从开始 FMQ 握手起设置一次 5 秒预算，
+WS/WSS 从 Upgrade 成功后开始；KCP 保留从 session 预留起计算的 5 秒总预算。双方完整
+HELLO/SETTINGS 交换才能解除预算，局部收发不延长。outbound reconnect episode 可设置更早
+截止时间。accepted peer 超时同样关闭并在物理终态后回收，由 caller/owner progress 推进；
+这不是新的 wire 字段或可协商参数。分工与传输能力见
+[架构说明](ARCHITECTURE.md#协议传输与通信模式的职责2026-11-17)。
+
 ## 2. Frame layout
 
 每个 packet 为 32-byte header 加 identity、topic 和 packet payload：
@@ -48,8 +55,10 @@ TLS/WSS 的证书身份校验使用 HELLO 的 identity 字段。
 | 32 | variable | fields | identity、topic、packet payload |
 
 `max_frame_size` 限制完整 identity + topic + payload，不替代单 packet 上限。DATA
-payload 超过 64 KiB 时必须按连续 offset 分片；identity 和 topic 只能出现在 FIRST
-packet，后续 packet 必须为零长度。最后一个 packet 必须设置 LAST。空 payload 的
+payload 超过 64 KiB 时必须按连续 offset 分片。DATA 的非末包 payload 必须恰好 64 KiB，
+末包必须恰好包含剩余字节，并且只有末包设置 LAST；空 DATA 使用 payload 长度为零的
+FIRST|LAST 单包。更小的非末包或不匹配的 LAST 直接返回协议错误，不协商替代分片方式。
+identity 和 topic 只能出现在 FIRST packet，后续 packet 必须为零长度。空 payload 的
 单 packet DATA 仍必须满足完整 frame 规则。
 
 HELLO、PING、PONG、SUBSCRIBE、UNSUBSCRIBE、SETTINGS 和 FLOW_UPDATE 必须是单 packet。PING/PONG 不携带
@@ -140,15 +149,31 @@ SHA-256 指纹与 HELLO identity 匹配。配置该策略的 listener 必须要�
 | ---: | --- | --- | --- |
 | 1 | PUB | SUB、XSUB | topic prefix fan-out |
 | 2 | SUB | PUB、XPUB | subscription receive |
-| 3 | PUSH | PULL | 单 peer work distribution |
-| 4 | PULL | PUSH | 单 peer receive |
+| 3 | PUSH | PULL | 向可写 peer round-robin 分配完整消息 |
+| 4 | PULL | PUSH | 从多个 PUSH 接收，每会话保持 FIFO |
 | 5 | ROUTER | DEALER、REQ、ROUTER | identity route、异步 reply |
 | 6 | DEALER | ROUTER、REP、DEALER | 异步 request/reply |
 | 7 | PAIR | PAIR | 一对一双向 |
 | 8 | REQ | REP、ROUTER | 一个 outstanding request |
-| 9 | REP | REQ、DEALER | reply 绑定最后一个 requester |
+| 9 | REP | REQ、DEALER | reply 绑定当前已接收 request 的 peer/generation |
 | 10 | XPUB | SUB、XSUB | 显式 subscription event |
-| 11 | XSUB | PUB、XPUB | subscription control/data |
+| 11 | XSUB | PUB、XPUB | desired subscription control 与 DATA 接收 |
+
+通信模式与 bind/connect 角色独立，在各 transport 上使用相同 pairing 和 FSM；传输能力、
+part 大小与 retained 限制仍以相应适配层为准。各模式的应用边界如下：
+
+| 模式 | 功能 | 边界 |
+| --- | --- | --- |
+| PAIR | 一个活动 peer 的双向消息 | 额外连接不会成为第二个活动 peer；无负载分配和请求/响应关联 |
+| PUSH / PULL | PUSH 在当前可写 PULL 中选一个；PULL 可汇入多个 PUSH | 无处理完成确认、持久队列或失败后的透明改投；跨 peer 无全局顺序 |
+| REQ / REP | REQ 一次一个 outstanding request；REP 收到完整请求后向同会话回复 | 严格收发交替，完整 multipart 才推进 phase；不提供业务超时重试和自动 correlation |
+| DEALER / ROUTER | DEALER 异步轮询发送；ROUTER 用首个 identity part 指定目的 peer，并在接收时合成 identity | 无 REQ/REP 交替限制；identity 是当前 live session 的键，跨消息需要应用 correlation；不是通用 broker 或持久路由表 |
+| PUB / SUB | 按首个 DATA part 的 topic prefix 匹配并广播到当前订阅 peer | 无匹配或慢 peer 被跳过时发布仍可成功；无历史重放、持久订阅或交付确认 |
+| XPUB / XSUB | 保留 PUB/SUB 数据方向；XPUB 可接收 `0/1 + topic` 订阅变化事件，XSUB 保存和同步 desired subscriptions | 通过 `FLOWMQ_SUBSCRIBE` / `FLOWMQ_UNSUBSCRIBE` 更新订阅；XPUB 事件不是业务 DATA，也不是发布确认；不承诺 libzmq 的全部扩展选项或代理语义 |
+
+公开 payload send API 在 XSUB 上返回 `SALTS_ENOTSUP`，不能将 `0/1 + topic` 当作 DATA
+发送来替代订阅选项。XSUB 的控制发送能力由 runtime 同步 desired subscriptions 使用；
+非法 DATA 方向不会进入等待路由的阻塞循环。
 
 不兼容 pairing 必须在 HELLO 阶段失败。PUB/XPUB 无匹配 subscription 时成功丢弃；
 已经接纳的 fan-out 不得隐式重播。PUSH 选定 eligible peer 后，
@@ -170,10 +195,17 @@ outbound multipart 会 pin 到该 session generation；该 peer 中途断线时�
 在 payload 内携带并校验 correlation，不能只持久化 routing identity。当前 API 不提供
 detached route handle。
 
+复制发送的 ROUTER 最终 part 若以 `FLOWMQ_DONTWAIT` 返回容量拒绝，整条路由事务取消，
+下一次发送必须重新提供 identity。阻塞最终 part 保留同一 identity、generation 和已暂存
+payload，推进当前 socket 至接纳或错误；等待本身不记录为一次拒绝。retained slice 的失败
+保留规则以公开 API 为准。每个 peer 保持自己的发送 FIFO，不能绕过已接纳消息来换取跨 peer 公平性。
+
 XPUB/XSUB subscription snapshot 属于 peer session；XSUB desired subscriptions 属于 socket。
 新 session 完成 HELLO/SETTINGS 后从 socket 状态重放 desired subscriptions；`flowmq_close()`
 清除该状态。空 subscription prefix 匹配全部 topic，
 session 断开会产生相应 UNSUBSCRIBE。
+XPUB 事件计入本地接收消息/字节 HWM；队列满时暂存完整事件，源订阅 frame 只消费一次。
+应用取走事件后恢复提交与接收，不重复应用订阅变化，也不把事件计入 DATA credit。
 
 ### 4.1 Reconnect session boundary
 

@@ -3,6 +3,11 @@ name: FlowMQ native SDK package
 on:
   workflow_dispatch:
     inputs:
+      publish_release:
+        description: Publish the qualified main commit as the source version
+        type: boolean
+        required: false
+        default: false
       run_benchmarks:
         description: Run opt-in host ZMQ comparisons and Linux performance evidence (never on PR or release)
         type: boolean
@@ -25,6 +30,14 @@ on:
 permissions:
   contents: read
 
+env:
+  VCPKG_CACHE_VERSION: ${{ vars.VCPKG_CACHE_VERSION }}
+  SALTS_BASE_VERSION: ${{ vars.SALTS_BASE_VERSION }}
+  CMETA_VERSION: ${{ vars.CMETA_VERSION }}
+  SALTS_UTILS_VERSION: ${{ vars.SALTS_UTILS_VERSION }}
+  SALTS_CNET_VERSION: ${{ vars.SALTS_CNET_VERSION }}
+  TURBODB_VERSION: ${{ vars.TURBODB_VERSION }}
+
 concurrency:
   group: flowmq-sdk-${{ github.event.pull_request.number || github.ref }}
   # Superseded PR qualification should release scarce platform runners, while
@@ -46,10 +59,13 @@ jobs:
       - name: Resolve source and package version
         id: meta
         shell: bash
+        env:
+          PUBLISH_RELEASE: ${{ inputs.publish_release }}
         run: |
           set -euo pipefail
           source_version="$(awk '/^[[:space:]]*VERSION[[:space:]]+[0-9]/{print $2; exit}' CMakeLists.txt)"
           [[ "$source_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$source_version" = "$(jq -r '."version-semver"' vcpkg.json)"
           source_commit="$(git rev-parse HEAD)"
           if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
             expected_tag="v$source_version"
@@ -57,6 +73,9 @@ jobs:
               echo "release tag mismatch: pushed=$GITHUB_REF_NAME expected=$expected_tag" >&2
               exit 1
             fi
+            version="$source_version"
+          elif [[ "$PUBLISH_RELEASE" == true ]]; then
+            test "$GITHUB_REF" = refs/heads/main
             version="$source_version"
           else
             version="$source_version-ci.$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT"
@@ -73,13 +92,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: linux, runner: ubuntu-24.04, rid: linux-x64, triplet: x64-linux, profile: linux-clang-x64 }
-          - { os: windows, runner: windows-2025, rid: windows-x64, triplet: qigao-x64-windows-llvm-mingw, profile: windows-llvm-mingw-x64 }
-          - { os: macos, runner: macos-15, rid: macos-arm64, triplet: arm64-osx, profile: macos-clang-arm64 }
-          - { os: android, runner: ubuntu-24.04, rid: android-arm64-v8a, triplet: arm64-android, profile: android-arm64 }
+          - { os: linux, runner: ubuntu-24.04, rid: linux-x64, triplet: x64-linux, profile: linux-clang-x64, cnet: linux-x64, preset: ci-llvm-native-release-user }
+          - { os: windows, runner: windows-2025, rid: windows-x64, triplet: qigao-x64-windows-llvm-mingw, profile: windows-llvm-mingw-x64, cnet: windows-x64, preset: ci-llvm-mingw-x64-release-user }
+          - { os: macos, runner: macos-15, rid: macos-arm64, triplet: arm64-osx, profile: macos-clang-arm64, cnet: macos-arm64, preset: ci-llvm-native-release-user }
+          - { os: android, runner: ubuntu-24.04, rid: android-arm64-v8a, triplet: arm64-android, profile: android-arm64, cnet: android-arm64, preset: ci-android-arm64-release-user }
     env:
       FLOWMQ_RID: ${{ matrix.rid }}
-      FLOWMQ_TRIPLET: ${{ matrix.triplet }}
+      VCPKG_TARGET_TRIPLET: ${{ matrix.triplet }}
+      VCPKG_CACHE_REPOSITORY_ROOT: ${{ github.workspace }}/build/ci-infrastructure/vcpkg-cache
       FLOWMQ_ZMQ_BENCHMARK: ${{ github.event_name == 'workflow_dispatch' && (inputs.run_benchmarks || inputs.run_diagnostics) && 'ON' || 'OFF' }}
       CCACHE_DIR: ${{ github.workspace }}/build/ccache
       CCACHE_BASEDIR: ${{ github.workspace }}
@@ -97,8 +117,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: build/ccache
-          key: flowmq-ccache-split-${{ matrix.rid }}-${{ hashFiles('cmake/sdk-versions.json') }}-${{ github.sha }}
-          restore-keys: flowmq-ccache-split-${{ matrix.rid }}-${{ hashFiles('cmake/sdk-versions.json') }}-
+          key: flowmq-ccache-${{ matrix.rid }}-${{ hashFiles('.env.example', 'cmake/dependencies/*.json') }}-${{ github.sha }}
+          restore-keys: flowmq-ccache-${{ matrix.rid }}-${{ hashFiles('.env.example', 'cmake/dependencies/*.json') }}-
       - name: Set up llvm-mingw
         if: matrix.os == 'windows'
         id: mingw
@@ -109,61 +129,65 @@ jobs:
       - name: Set up native ccache
         if: matrix.os != 'windows'
         uses: qigao/vcpkg-cache/.github/actions/setup-ccache@v0.1.3
-      - name: Restore pinned SDKs
+      - uses: actions/checkout@v4
+        with:
+          repository: qigao/vcpkg-cache
+          ref: refs/tags/v${{ env.VCPKG_CACHE_VERSION }}
+          path: build/ci-infrastructure/vcpkg-cache
+          persist-credentials: false
+      - name: Restore release-qualified inputs
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          python cmake/ci/restore-split-sdks.py --profile "${{ matrix.profile }}" \
-            --triplet "$FLOWMQ_TRIPLET" --destination build/dependencies
+          set -euo pipefail
+          host=()
+          if [[ "${{ matrix.os }}" == android ]]; then
+            host=(--host-sdk-profile linux-clang-x64)
+          fi
+          python cmake/ci/restore-release-inputs.py \
+            --triplet "$VCPKG_TARGET_TRIPLET" --sdk-profile "${{ matrix.profile }}" \
+            --cnet-profile "${{ matrix.cnet }}" "${host[@]}"
       - name: Configure, build, test and install
         shell: bash
         env:
-          MINGW_ROOT: ${{ steps.mingw.outputs.root }}
-          MINGW_CC: ${{ steps.mingw.outputs.cc }}
-          MINGW_CXX: ${{ steps.mingw.outputs.cxx }}
+          LLVM_MINGW_ROOT: ${{ steps.mingw.outputs.root }}
           SOURCE_VERSION: ${{ needs.metadata.outputs.source_version }}
           SOURCE_COMMIT: ${{ needs.metadata.outputs.source_commit }}
           PACKAGE_VERSION: ${{ needs.metadata.outputs.version }}
         run: |
           set -euo pipefail
           prefix="stage/sdk/$FLOWMQ_RID"
-          args=(-DCMAKE_PREFIX_PATH="$FLOWMQ_DEPENDENCY_PREFIX"
-                -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PWD/$prefix"
-                -DFLOWMQ_BUILD_ZMQ_BENCHMARK="$FLOWMQ_ZMQ_BENCHMARK")
+          args=(-DCMAKE_INSTALL_PREFIX="$PWD/$prefix"
+                -DBUILD_ZMQ_BENCHMARK="$FLOWMQ_ZMQ_BENCHMARK")
           qualification=runtime
           case "${{ matrix.os }}" in
             windows)
-              runtime_dirs=("$MINGW_ROOT/bin" "$MINGW_ROOT/x86_64-w64-mingw32/bin"
-                            "$SALTS_BASE_ROOT/bin" "$SALTSCORE_ROOT/bin" "$SALTS_UTILS_ROOT/bin"
-                            "$FLOWMQ_DEPENDENCY_PREFIX/bin")
+              runtime_dirs=("$LLVM_MINGW_ROOT/bin" "$LLVM_MINGW_ROOT/x86_64-w64-mingw32/bin"
+                            "$SALTS_BASE_ROOT/bin" "$SALTS_CNET_ROOT/bin" "$SALTS_UTILS_ROOT/bin"
+                            "$TURBODB_ROOT/bin" "$VCPKG_INSTALLED_DIR/$VCPKG_TARGET_TRIPLET/bin")
               for dir in "${runtime_dirs[@]}"; do
                 export PATH="$(cygpath -u "$dir"):$PATH"
                 cygpath -w "$dir" >> "$GITHUB_PATH"
               done
-              args+=(-DCMAKE_C_COMPILER="$MINGW_CC" -DCMAKE_CXX_COMPILER="$MINGW_CXX")
               ;;
             linux|macos)
-              args+=(-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
-                     -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
+              args+=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
               ;;
             android)
-              args+=(-DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"
-                     -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-26 -DANDROID_STL=c++_shared
-                     -DCMAKE_FIND_ROOT_PATH="$FLOWMQ_DEPENDENCY_PREFIX"
-                     -DCMAKE_C_COMPILER_LAUNCHER=ccache -DFLOWMQ_BUILD_ZMQ_BENCHMARK=OFF)
+              args+=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DBUILD_ZMQ_BENCHMARK=OFF)
               qualification=compile-link
               ;;
           esac
           if [[ "$qualification" == runtime ]]; then
-            args+=(-DBUILD_TESTS=ON)
-          else
-            args+=(-DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF)
+            args+=(-DBUILD_EXAMPLES=ON)
           fi
-          cmake -S . -B build/flowmq -G Ninja "${args[@]}"
-          cmake --build build/flowmq --parallel 2
+          cmake --preset "${{ matrix.preset }}" "${args[@]}"
+          cmake --build --preset "${{ matrix.preset }}"
           if [[ "$qualification" == runtime ]]; then
-            ctest --test-dir build/flowmq -LE benchmark --no-tests=error --output-on-failure
+            ctest --preset "${{ matrix.preset }}" -LE benchmark --no-tests=error --output-on-failure
           fi
-          cmake --install build/flowmq
+          cmake --build --preset "install-${{ matrix.preset }}"
           cat > "$prefix/flowmq-sdk-manifest.txt" <<EOF
           version=$PACKAGE_VERSION
           source_version=$SOURCE_VERSION
@@ -172,8 +196,10 @@ jobs:
           commit=$SOURCE_COMMIT
           salts_base=$SALTS_BASE_VERSION
           cmeta=$CMETA_VERSION
-          salts_cnet=$SALTSCORE_VERSION
+          salts_cnet=$SALTS_CNET_VERSION
           salts_utils=$SALTS_UTILS_VERSION
+          turbodb=$TURBODB_VERSION
+          vcpkg_cache=$VCPKG_CACHE_VERSION
           rid=$FLOWMQ_RID
           build_type=Release
           qualification=$qualification
@@ -186,7 +212,7 @@ jobs:
             source_commit = '${{ needs.metadata.outputs.source_commit }}'
             salts_base = $env:SALTS_BASE_VERSION
             cmeta = $env:CMETA_VERSION
-            salts_cnet = $env:SALTSCORE_VERSION
+            salts_cnet = $env:SALTS_CNET_VERSION
             salts_utils = $env:SALTS_UTILS_VERSION
             rid = $env:FLOWMQ_RID
             runner_os = '${{ runner.os }}'
@@ -208,12 +234,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ctest --test-dir build/flowmq --no-tests=error -R '^bench_flowmq_wake$' -V --output-log build/flowmq-wake.log
+          ctest --preset "${{ matrix.preset }}" --no-tests=error -R '^bench_flowmq_wake$' -V --output-log build/flowmq-wake.log
       - name: Compare incoming wake latency on Windows
         if: matrix.os == 'windows' && github.event_name == 'workflow_dispatch' && inputs.run_wake_benchmark
         shell: cmd
         run: |
-          ctest --test-dir build/flowmq --no-tests=error -R "^bench_flowmq_wake$" -V --output-log build/flowmq-wake.log
+          ctest --preset "${{ matrix.preset }}" --no-tests=error -R "^bench_flowmq_wake$" -V --output-log build/flowmq-wake.log
           if errorlevel 1 exit /b 1
       - name: Upload host wake evidence
         if: always() && matrix.os != 'android' && github.event_name == 'workflow_dispatch' && inputs.run_wake_benchmark
@@ -229,13 +255,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ctest --test-dir build/flowmq --no-tests=error -R '^bench_flowmq_(wait_policy|progress_phases|progress_ablation|lane_sg_sweep)$' \
+          ctest --preset "${{ matrix.preset }}" --no-tests=error -R '^bench_flowmq_(wait_policy|progress_phases|progress_ablation|lane_sg_sweep)$' \
             -V --output-log build/flowmq-diagnostics.log
       - name: Attribute progress and retained costs on Windows
         if: matrix.os == 'windows' && github.event_name == 'workflow_dispatch' && inputs.run_diagnostics
         shell: cmd
         run: |
-          ctest --test-dir build/flowmq --no-tests=error -R "^bench_flowmq_(wait_policy|progress_phases|progress_ablation|lane_sg_sweep)$" -V --output-log build/flowmq-diagnostics.log
+          ctest --preset "${{ matrix.preset }}" --no-tests=error -R "^bench_flowmq_(wait_policy|progress_phases|progress_ablation|lane_sg_sweep)$" -V --output-log build/flowmq-diagnostics.log
           if errorlevel 1 exit /b 1
       - name: Upload host diagnostic evidence
         if: always() && matrix.os != 'android' && github.event_name == 'workflow_dispatch' && inputs.run_diagnostics
@@ -251,17 +277,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ctest --test-dir build/flowmq --no-tests=error -R '^bench_flowmq_zmq_comparison$' \
+          ctest --preset "${{ matrix.preset }}" --no-tests=error -R '^bench_flowmq_zmq_comparison$' \
             --repeat until-fail:5 -V --output-log build/flowmq-zmq-paired.log
-          ctest --test-dir build/flowmq --no-tests=error -R '^bench_flowmq_lane_handoff$' \
+          ctest --preset "${{ matrix.preset }}" --no-tests=error -R '^bench_flowmq_lane_handoff$' \
             -V --output-log build/flowmq-zmq-lanes.log
       - name: Compare FlowMQ and ZMQ on Windows
         if: matrix.os == 'windows' && github.event_name == 'workflow_dispatch' && inputs.run_benchmarks
         shell: cmd
         run: |
-          ctest --test-dir build/flowmq --no-tests=error -R "^bench_flowmq_zmq_comparison$" --repeat until-fail:5 -V --output-log build/flowmq-zmq-paired.log
+          ctest --preset "${{ matrix.preset }}" --no-tests=error -R "^bench_flowmq_zmq_comparison$" --repeat until-fail:5 -V --output-log build/flowmq-zmq-paired.log
           if errorlevel 1 exit /b 1
-          ctest --test-dir build/flowmq --no-tests=error -R "^bench_flowmq_lane_handoff$" -V --output-log build/flowmq-zmq-lanes.log
+          ctest --preset "${{ matrix.preset }}" --no-tests=error -R "^bench_flowmq_lane_handoff$" -V --output-log build/flowmq-zmq-lanes.log
           if errorlevel 1 exit /b 1
       - name: Upload host ZMQ comparison evidence
         if: always() && matrix.os != 'android' && github.event_name == 'workflow_dispatch' && inputs.run_benchmarks
@@ -278,13 +304,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ctest --test-dir build/flowmq -R '^bench_flowmq_peer_pool_' -V \
+          ctest --preset "${{ matrix.preset }}" -R '^bench_flowmq_peer_pool_' -V \
             --output-log build/peer-pool-comparison.log
       - name: Compare peer pool on Windows owners
         if: matrix.os == 'windows' && github.event_name == 'workflow_dispatch' && inputs.run_benchmarks
         shell: cmd
         run: |
-          ctest --test-dir build/flowmq -R "^bench_flowmq_peer_pool_" -V --output-log build/peer-pool-comparison.log
+          ctest --preset "${{ matrix.preset }}" -R "^bench_flowmq_peer_pool_" -V --output-log build/peer-pool-comparison.log
           if errorlevel 1 exit /b 1
       - name: Upload peer pool comparison
         if: always() && matrix.os != 'android' && github.event_name == 'workflow_dispatch' && inputs.run_benchmarks
@@ -298,9 +324,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_BASE_ROOT/lib:$SALTSCORE_ROOT/lib:$FLOWMQ_DEPENDENCY_PREFIX/lib"
+          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_BASE_ROOT/lib:$SALTS_CNET_ROOT/lib:$VCPKG_INSTALLED_DIR/$VCPKG_TARGET_TRIPLET/lib"
           result_dir="$GITHUB_WORKSPACE/flowmq-benchmark-results"
-          benchmark="$GITHUB_WORKSPACE/build/flowmq/bin/bench_flowmq_owner_parallel"
+          benchmark="$GITHUB_WORKSPACE/build/${{ matrix.preset }}/bin/bench_flowmq_owner_parallel"
           mkdir -p "$result_dir"
           if [[ ! -x "$benchmark" ]]; then
             echo "FlowMQ owner-parallel benchmark executable not found: $benchmark" >&2
@@ -397,7 +423,7 @@ jobs:
           export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_BASE_ROOT/lib:$SALTSCORE_ROOT/lib:$FLOWMQ_DEPENDENCY_PREFIX/lib"
           source "$GITHUB_WORKSPACE/flowmq-benchmark-results/cpu-set.txt"
           result_dir="$GITHUB_WORKSPACE/flowmq-shared-wait-results"
-          benchmark="$GITHUB_WORKSPACE/build/flowmq/bin/bench_flowmq_owner_shared_wait"
+          benchmark="$GITHUB_WORKSPACE/build/${{ matrix.preset }}/bin/bench_flowmq_owner_shared_wait"
           mkdir -p "$result_dir"
           if [[ ! -x "$benchmark" ]]; then
             echo "FlowMQ shared-wait benchmark executable not found: $benchmark" >&2
@@ -420,7 +446,7 @@ jobs:
           export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_BASE_ROOT/lib:$SALTSCORE_ROOT/lib:$FLOWMQ_DEPENDENCY_PREFIX/lib"
           source "$GITHUB_WORKSPACE/flowmq-benchmark-results/cpu-set.txt"
           result_dir="$GITHUB_WORKSPACE/flowmq-reuse-port-results"
-          benchmark="$GITHUB_WORKSPACE/build/flowmq/bin/bench_flowmq_reuse_port_multicore"
+          benchmark="$GITHUB_WORKSPACE/build/${{ matrix.preset }}/bin/bench_flowmq_reuse_port_multicore"
           mkdir -p "$result_dir"
           if [[ ! -x "$benchmark" ]]; then
             echo "FlowMQ reuse-port benchmark executable not found: $benchmark" >&2
@@ -451,7 +477,7 @@ jobs:
           set -euo pipefail
           export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_BASE_ROOT/lib:$SALTSCORE_ROOT/lib:$FLOWMQ_DEPENDENCY_PREFIX/lib"
           result_dir="$GITHUB_WORKSPACE/flowmq-retained-tls-results"
-          benchmark="$GITHUB_WORKSPACE/build/flowmq/bin/bench_flowmq_socket"
+          benchmark="$GITHUB_WORKSPACE/build/${{ matrix.preset }}/bin/bench_flowmq_socket"
           mkdir -p "$result_dir"
           if [[ ! -x "$benchmark" ]]; then
             echo "FlowMQ socket benchmark executable not found: $benchmark" >&2
@@ -498,7 +524,7 @@ jobs:
           set -euo pipefail
           export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_BASE_ROOT/lib:$SALTSCORE_ROOT/lib:$FLOWMQ_DEPENDENCY_PREFIX/lib"
           result_dir="$GITHUB_WORKSPACE/flowmq-fanout-results"
-          benchmark="$GITHUB_WORKSPACE/build/flowmq/bin/bench_flowmq_retained_fanout"
+          benchmark="$GITHUB_WORKSPACE/build/${{ matrix.preset }}/bin/bench_flowmq_retained_fanout"
           mkdir -p "$result_dir"
           if [[ ! -x "$benchmark" ]]; then
             echo "FlowMQ retained fanout benchmark executable not found: $benchmark" >&2
@@ -558,81 +584,70 @@ jobs:
         if: always() && matrix.os != 'windows'
         shell: bash
         run: ccache --show-stats
+      - name: Archive the installed SDK
+        shell: bash
+        env:
+          PACKAGE_VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          test -f "stage/sdk/$FLOWMQ_RID/lib/cmake/FlowMQ/FlowMQConfig.cmake"
+          mkdir -p dist
+          tar -C stage/sdk -czf "dist/flowmq-$PACKAGE_VERSION-$FLOWMQ_RID.tar.gz" "$FLOWMQ_RID"
       - uses: actions/upload-artifact@v4
         with:
           name: flowmq-sdk-${{ matrix.rid }}
-          path: stage/sdk
+          path: dist/*.tar.gz
           if-no-files-found: error
-          compression-level: 9
+          compression-level: 0
 
   pack:
-    name: Pack FlowMQ.Native
+    name: Verify SDK archives
     needs: [metadata, build]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
           pattern: flowmq-sdk-*
-          path: package/sdk
+          path: dist
           merge-multiple: true
-      - name: Verify combined SDK payload
+      - name: Verify installed SDK layout and record checksums
         shell: bash
+        env:
+          PACKAGE_VERSION: ${{ needs.metadata.outputs.version }}
         run: |
           set -euo pipefail
-          test -f package/sdk/linux-x64/lib/cmake/FlowMQ/FlowMQConfig.cmake
-          test -f package/sdk/windows-x64/lib/cmake/FlowMQ/FlowMQConfig.cmake
-          test -f package/sdk/android-arm64-v8a/lib/cmake/FlowMQ/FlowMQConfig.cmake
-          mapfile -t mac_dirs < <(find package/sdk -mindepth 1 -maxdepth 1 -type d -name 'macos-*' -print)
-          test "${#mac_dirs[@]}" -eq 1
-          test -f "${mac_dirs[0]}/lib/cmake/FlowMQ/FlowMQConfig.cmake"
-          test "$(find package/sdk -maxdepth 2 -name flowmq-sdk-manifest.txt | wc -l)" -eq 4
-          find package/sdk -maxdepth 2 -name flowmq-sdk-manifest.txt -print
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "8.0.x"
-      - name: Pack multi-platform NuGet
-        shell: bash
-        run: |
-          dotnet pack packaging/nuget/FlowMQ.Native.csproj \
-            --configuration Release --output dist \
-            -p:PackageVersion="${{ needs.metadata.outputs.version }}" \
-            -p:PackageRoot="$GITHUB_WORKSPACE/package"
+          cd dist
+          for rid in linux-x64 windows-x64 macos-arm64 android-arm64-v8a; do
+            asset="flowmq-$PACKAGE_VERSION-$rid.tar.gz"
+            tar -tzf "$asset" > "$RUNNER_TEMP/$rid.txt"
+            for file in lib/cmake/FlowMQ/FlowMQConfig.cmake include/flowmq_mdp.h \
+                        include/flowmq_rpc.h include/flowmq_delivery.h flowmq-sdk-manifest.txt; do
+              grep -Fxq "$rid/$file" "$RUNNER_TEMP/$rid.txt"
+            done
+          done
+          sha256sum -- *.tar.gz > SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
-          name: flowmq-native-nuget
-          path: dist/*.nupkg
+          name: flowmq-release-assets
+          path: dist
           if-no-files-found: error
+          compression-level: 0
 
   publish:
     needs: [metadata, pack]
-    if: github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/v')
+    if: (github.event_name == 'push' && github.ref_type == 'tag') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
     runs-on: ubuntu-24.04
     permissions:
       contents: write
-      packages: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.metadata.outputs.source_commit }}
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
-          name: flowmq-native-nuget
+          name: flowmq-release-assets
           path: dist
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "8.0.x"
-      - name: Publish qualified package
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PACKAGE_VERSION: ${{ needs.metadata.outputs.version }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json \
-            --name github --username qigao --password "$GITHUB_TOKEN" --store-password-in-clear-text
-          dotnet nuget push "dist/FlowMQ.Native.$PACKAGE_VERSION.nupkg" \
-            --api-key "$GITHUB_TOKEN" --source github --skip-duplicate
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -642,10 +657,18 @@ jobs:
         run: |
           set -euo pipefail
           tag="v$PACKAGE_VERSION"
-          pkg="dist/FlowMQ.Native.$PACKAGE_VERSION.nupkg"
-          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$tag" "$pkg" --repo "$GITHUB_REPOSITORY" --clobber
+          (cd dist && sha256sum -c SHA256SUMS)
+          notes="docs/releases/$PACKAGE_VERSION.md"
+          flags=(--generate-notes)
+          if [[ -f "$notes" ]]; then flags=(--notes-file "$notes"); fi
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            flags+=(--verify-tag)
           else
-            gh release create "$tag" "$pkg" --repo "$GITHUB_REPOSITORY" \
-              --target "$SOURCE_COMMIT" --title "FlowMQ $PACKAGE_VERSION" --generate-notes
+            remote_tag="$(git ls-remote --tags origin "refs/tags/$tag")"
+            if [[ -n "$remote_tag" ]]; then
+              echo "Release tag already exists: $tag" >&2
+              exit 1
+            fi
           fi
+          gh release create "$tag" dist/*.tar.gz dist/SHA256SUMS \
+            --target "$SOURCE_COMMIT" --title "FlowMQ $PACKAGE_VERSION" "${flags[@]}"

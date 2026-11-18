@@ -1,0 +1,110 @@
+{
+  "version": 6,
+  "include": [
+    "../BasePresets.json"
+  ],
+  "configurePresets": [
+    {
+      "name": "android-base",
+      "hidden": true,
+      "inherits": [
+        "base",
+        "toolkit-android-ndk",
+        "flags-android"
+      ],
+      "description": "Android API/ABI policy; target tests require an explicit device runner",
+      "cacheVariables": {
+        "BUILD_TESTS": "OFF",
+        "CMAKE_SYSTEM_VERSION": "26",
+        "CMAKE_FIND_ROOT_PATH": "$env{VCPKG_INSTALLED_DIR}/$env{VCPKG_TARGET_TRIPLET}"
+      }
+    },
+    {
+      "name": "android-arm64-v8a",
+      "hidden": true,
+      "inherits": [
+        "android-base"
+      ],
+      "cacheVariables": {
+        "CMAKE_ANDROID_ARCH_ABI": "arm64-v8a"
+      },
+      "environment": {
+        "VCPKG_TARGET_TRIPLET": "$penv{VCPKG_TARGET_TRIPLET}"
+      }
+    },
+    {
+      "name": "android-arm64-v8a-debug",
+      "hidden": true,
+      "inherits": [
+        "android-arm64-v8a",
+        "developer-mode"
+      ]
+    },
+    {
+      "name": "android-arm64-v8a-release",
+      "hidden": true,
+      "inherits": [
+        "android-arm64-v8a",
+        "release-mode"
+      ]
+    },
+    {
+      "name": "android-x86_64",
+      "hidden": true,
+      "inherits": [
+        "android-base"
+      ],
+      "cacheVariables": {
+        "CMAKE_ANDROID_ARCH_ABI": "x86_64"
+      },
+      "environment": {
+        "VCPKG_TARGET_TRIPLET": "$penv{VCPKG_TARGET_TRIPLET}"
+      }
+    },
+    {
+      "name": "android-x86_64-debug",
+      "hidden": true,
+      "inherits": [
+        "android-x86_64",
+        "developer-mode"
+      ]
+    },
+    {
+      "name": "android-x86_64-release",
+      "hidden": true,
+      "inherits": [
+        "android-x86_64",
+        "release-mode"
+      ]
+    },
+    {
+      "name": "android-x86",
+      "hidden": true,
+      "inherits": [
+        "android-base"
+      ],
+      "cacheVariables": {
+        "CMAKE_ANDROID_ARCH_ABI": "x86"
+      },
+      "environment": {
+        "VCPKG_TARGET_TRIPLET": "$penv{VCPKG_TARGET_TRIPLET}"
+      }
+    },
+    {
+      "name": "android-x86-debug",
+      "hidden": true,
+      "inherits": [
+        "android-x86",
+        "developer-mode"
+      ]
+    },
+    {
+      "name": "android-x86-release",
+      "hidden": true,
+      "inherits": [
+        "android-x86",
+        "release-mode"
+      ]
+    }
+  ]
+}

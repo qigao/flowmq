@@ -8,7 +8,10 @@ extern "C" {
 #endif
 
 #define FLOWMQ_PEER_POOL_VERSION 1u
-#define FLOWMQ_PEER_POOL_MAX_PEERS 4u
+#define FLOWMQ_PEER_POOL_DEFAULT_PEERS 4u
+/* Historical spelling retained for source compatibility. The socket's
+ * configured peer capacity is the upper bound for max_peers. */
+#define FLOWMQ_PEER_POOL_MAX_PEERS FLOWMQ_PEER_POOL_DEFAULT_PEERS
 
 typedef struct flowmq_peer_pool_config_s {
   size_t size;
@@ -19,7 +22,7 @@ typedef struct flowmq_peer_pool_config_s {
 
 #define FLOWMQ_PEER_POOL_CONFIG_INIT \
   { sizeof(flowmq_peer_pool_config_t), FLOWMQ_PEER_POOL_VERSION, \
-    FLOWMQ_PEER_POOL_MAX_PEERS, FLOWMQ_PEER_POOL_MAX_PEERS }
+    FLOWMQ_PEER_POOL_DEFAULT_PEERS, FLOWMQ_PEER_POOL_DEFAULT_PEERS }
 
 typedef struct flowmq_peer_pool_snapshot_s {
   size_t size;

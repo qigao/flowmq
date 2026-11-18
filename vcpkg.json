@@ -1,9 +1,7 @@
 {
   "name": "flowmq",
-  "version-semver": "1.3.1",
+  "version-semver": "1.5.0",
   "dependencies": [
-    "lua",
-    "quickjs-ng",
     {
       "name": "zeromq",
       "default-features": false

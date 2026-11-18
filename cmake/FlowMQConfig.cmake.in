@@ -1,15 +1,10 @@
 @PACKAGE_INIT@
 
 include(CMakeFindDependencyMacro)
-find_dependency(SaltsBase @FLOWMQ_BASE_VERSION@ EXACT CONFIG
-                PATHS "$ENV{SALTS_BASE_ROOT}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
-find_dependency(CMeta @FLOWMQ_CMETA_VERSION@ EXACT CONFIG
-                PATHS "$ENV{CMETA_ROOT}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
-find_dependency(SaltsCore @FLOWMQ_CNET_VERSION@ EXACT CONFIG
-                PATHS "$ENV{SALTSCORE_ROOT}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
-find_dependency(SaltsUtils @FLOWMQ_UTILS_VERSION@ EXACT CONFIG
-                PATHS "$ENV{SALTS_UTILS_ROOT}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
-
+find_dependency(SaltsBase @SaltsBase_VERSION@ EXACT CONFIG HINTS ENV SALTS_BASE_ROOT)
+find_dependency(CMeta @CMeta_VERSION@ EXACT CONFIG HINTS ENV CMETA_ROOT)
+find_dependency(SaltsUtils @SaltsUtils_VERSION@ EXACT CONFIG HINTS ENV SALTS_UTILS_ROOT)
+find_dependency(SaltsCNet @SaltsCNet_VERSION@ EXACT CONFIG HINTS ENV SALTS_CNET_ROOT)
 include("${CMAKE_CURRENT_LIST_DIR}/FlowMQTargets.cmake")
 # Let linkers resolve FlowMQ's private shared-library dependency without
 # propagating CNet's headers or compile options to FlowMQ callers.
@@ -17,4 +12,11 @@ set_property(TARGET FlowMQ::FlowMQ PROPERTY IMPORTED_LINK_DEPENDENT_LIBRARIES
              Salts::CNet)
 
 set(FlowMQ_FlowMQ_FOUND TRUE)
+set(FlowMQ_MDP_FOUND TRUE)
+set(FlowMQ_RPC_FOUND TRUE)
+if("Delivery" IN_LIST FlowMQ_FIND_COMPONENTS)
+  find_dependency(TurboDB CONFIG HINTS ENV TURBODB_ROOT)
+  include("${CMAKE_CURRENT_LIST_DIR}/FlowMQDeliveryTargets.cmake")
+  set(FlowMQ_Delivery_FOUND TRUE)
+endif()
 check_required_components(FlowMQ)

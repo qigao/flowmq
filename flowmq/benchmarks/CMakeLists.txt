@@ -322,7 +322,7 @@ if(BUILD_TESTS)
   endif()
 endif()
 
-if(FLOWMQ_BUILD_ZMQ_BENCHMARK)
+if(BUILD_ZMQ_BENCHMARK)
   find_package(ZeroMQ CONFIG REQUIRED)
   # The locked Windows profile supplies a DLL. Unix profiles supply an archive.
   if(WIN32)

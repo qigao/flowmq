@@ -1,0 +1,12 @@
+file(GLOB rpc_sources CONFIGURE_DEPENDS src/*.c)
+source_group("Source" FILES ${rpc_sources})
+add_library(flowmq_rpc STATIC ${rpc_sources})
+cmake_config_target(flowmq_rpc ALIAS FlowMQ::RPC EXPORT_NAME RPC FOLDER flowmq)
+target_include_directories(flowmq_rpc PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include> $<INSTALL_INTERFACE:include>)
+target_link_libraries(flowmq_rpc PUBLIC FlowMQ::MDP Salts::JsonParser)
+install(TARGETS flowmq_rpc EXPORT FlowMQTargets ARCHIVE DESTINATION lib COMPONENT FlowMQDevelopment)
+install(FILES include/flowmq_rpc.h include/flowmq_rpc_scheduler.h DESTINATION include COMPONENT FlowMQDevelopment)
+if(BUILD_TESTS)
+  add_subdirectory(tests)
+endif()

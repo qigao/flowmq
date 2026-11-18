@@ -479,6 +479,31 @@ spec("flowmq_protocol") {
     tstr_free(encoded);
   }
 
+  it("rejects noncanonical DATA packet lengths and LAST flags") {
+    enum { PAYLOAD_BYTES = FLOWMQ_PROTOCOL_PACKET_PAYLOAD_SIZE + 1u };
+    static char payload[PAYLOAD_BYTES];
+    flowmq_protocol_frame_t input = {0};
+    flowmq_protocol_frame_t output = {0};
+    tstr encoded = NULL;
+    size_t consumed = 0u;
+    input.kind = FLOWMQ_PROTOCOL_FRAME_DATA;
+    input.pattern = FLOWMQ_PROTOCOL_PUSH;
+    input.message_id = UINT64_C(17);
+    input.payload = vstr_from_buf(payload, sizeof(payload));
+    check_equal(flowmq_protocol_encode_frame(&input, sizeof(payload), &encoded), SALTS_OK);
+    /* The first packet must carry 64 KiB, regardless of transport splits. */
+    encoded[12] = 0; encoded[13] = 0; encoded[14] = (char)0xff; encoded[15] = (char)0xff;
+    check_equal(flowmq_protocol_decode_frame(encoded, tstr_len(encoded), sizeof(payload),
+                                             &output, &consumed), SALTS_EPROTO);
+    check_equal(consumed, 0u);
+    encoded[13] = 1; encoded[14] = 0; encoded[15] = 0;
+    encoded[7] |= FLOWMQ_PROTOCOL_PACKET_LAST;
+    check_equal(flowmq_protocol_decode_frame(encoded, tstr_len(encoded), sizeof(payload),
+                                             &output, &consumed), SALTS_EPROTO);
+    check_equal(consumed, 0u);
+    tstr_free(encoded);
+  }
+
   it("encodes and decodes FMS/3 HELLO security with optional transport binding") {
     static const char binding[FLOWMQ_SECURITY_CHANNEL_BINDING_SIZE] = {1};
     flowmq_security_t input = {0};

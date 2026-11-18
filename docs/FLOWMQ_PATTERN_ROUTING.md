@@ -165,7 +165,7 @@ DATA 接纳数、字节数、range 计数与消息内容检查。下表耗时为
   3/3 通过。生产 runtime 未修改，没有重复上一轮 30 项 core/transport 测试。
 - 三轮 counter/profile：6 次 CTest 测试运行、54 场景全部通过；普通无探针 benchmark
   另通过。最终四轮 listener 配对：8 次 CTest 运行、72 场景全部通过。
-- `FLOWMQ_BUILD_ZMQ_BENCHMARK=OFF` 下重新 configure/build，四个 pattern benchmark
+- `BUILD_ZMQ_BENCHMARK=OFF` 下重新 configure/build，四个 pattern benchmark
   入口 4/4 通过；诊断库已从 ZMQ 条件块移出，不依赖 libzmq。随后恢复 ON 并完整构建，
   原有三个 batch correctness 再次 3/3 通过。
 - 完整日志：`build/pattern-attribution-{1,2,3}.log`、
@@ -346,7 +346,7 @@ PUB 广播对忙轮询的优势较小且有一轮反转；PUSH 则在 5/6 轮落
   `build/pattern-zmq-qualification.log`、`build/pattern-vs-zmq-{1..6}-{variant}.log`。
   runtime 未改，本轮未重复全部 core/transport 回归，未验证 Linux/macOS。
 
-在已有 Release preset 开启 `FLOWMQ_BUILD_ZMQ_BENCHMARK=ON`，VS developer environment：
+在已有 Release preset 开启 `BUILD_ZMQ_BENCHMARK=ON`，VS developer environment：
 
 ```powershell
 cmake --build --preset win-release-user

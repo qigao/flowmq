@@ -1,0 +1,23 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "toolkit-msvc",
+      "hidden": true,
+      "description": "MSVC compiler and SDK from the active VsDevCmd environment",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "cl",
+        "CMAKE_CXX_COMPILER": "cl"
+      }
+    },
+    {
+      "name": "flags-msvc",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_C_FLAGS": "/utf-8 /D_WIN32 /D_WINDOWS /diagnostics:caret /W4 /wd4996 /wd4324 /wd4245 /wd4100 /wd4200 /wd4267 /wd4244",
+        "CMAKE_CXX_FLAGS": "/utf-8 /D_WIN32 /D_WINDOWS /diagnostics:caret /W4 /wd4996 /wd4324 /wd4245 /wd4100 /permissive- /volatile:iso /Zc:inline /Zc:preprocessor /Zc:enumTypes /Zc:lambda /Zc:__cplusplus /Zc:externConstexpr /Zc:throwingNew /EHsc",
+        "CMAKE_EXE_LINKER_FLAGS": "/guard:cf"
+      }
+    }
+  ]
+}

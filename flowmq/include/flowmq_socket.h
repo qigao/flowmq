@@ -130,6 +130,13 @@ FLOWMQ_C_API int flowmq_ctx_term(flowmq_ctx_t *ctx);
 /** Create one caller-owned classic socket. */
 FLOWMQ_C_API flowmq_socket_t *flowmq_socket(flowmq_ctx_t *ctx, int type);
 
+/** Set the peer-slot budget of an ordinary socket before bind/connect. Four
+ * slots are provisioned by default. On failure the previous budget survives.
+ * Returns EINVAL for zero or a conflicting pool limit, ERANGE for size
+ * overflow, ENOMEM for allocation failure and EBUSY after owner attachment
+ * or transport startup. Limits simultaneous peers, independent of send HWM. */
+FLOWMQ_C_API int flowmq_socket_set_peer_capacity(flowmq_socket_t *socket, size_t capacity);
+
 /** Close and release one socket on its owner thread. */
 FLOWMQ_C_API int flowmq_close(flowmq_socket_t *socket);
 
@@ -144,6 +151,9 @@ FLOWMQ_C_API int flowmq_close(flowmq_socket_t *socket);
  * Public bind requires a standalone socket. IPC, WS/WSS and KCP use copied
  * sends and return SALTS_ENOTSUP for peer pools. Port reuse also returns
  * SALTS_ENOTSUP for IPC listeners.
+ * Accepted peers must complete FMQ HELLO/SETTINGS within the caller-driven
+ * five-second handshake budget. Full peer capacity pauses admission while
+ * existing peers continue progressing; it is not a socket-wide poll error.
  */
 FLOWMQ_C_API int flowmq_bind(flowmq_socket_t *socket, const char *endpoint);
 
@@ -154,6 +164,9 @@ FLOWMQ_C_API int flowmq_bind(flowmq_socket_t *socket, const char *endpoint);
  * Transient failures retry within FLOWMQ_RECONNECT's attempt and time limits
  * as the socket's owner advances it. Reported certificate and FMQ identity
  * rejections end recovery for the endpoint.
+ * Transport connect alone is not FMQ readiness: a five-second FMQ handshake
+ * budget (including KCP session establishment) and the reconnect episode
+ * deadline both apply. Progress and deadline enforcement run on the caller.
  */
 FLOWMQ_C_API int flowmq_connect(flowmq_socket_t *socket, const char *endpoint);
 
@@ -231,9 +244,22 @@ FLOWMQ_C_API int flowmq_router_peer_status(
  * instead of retrying the cancelled transaction. An operation forbidden by
  * the pattern or multipart FSM returns SALTS_EPROTO without blocking. Returns
  * a Turbo status.
+ * For copied ROUTER multipart sends, a nonblocking final-part HWM rejection
+ * cancels the selected route and staged parts; a new message must supply its
+ * routing identity again. A blocking final part preserves that transaction
+ * while driving admission retries.
+ * XSUB sends subscription control through FLOWMQ_SUBSCRIBE/UNSUBSCRIBE socket
+ * options; payload send APIs return SALTS_ENOTSUP on XSUB.
  */
 FLOWMQ_C_API int flowmq_send(flowmq_socket_t *socket, const void *data,
                              size_t size, int flags);
+
+/** Atomically select a ROUTER identity and copy one complete data part.
+ * Owner-only and nonblocking. Returns EBUSY if a multipart send is already
+ * open, ENOENT for a missing peer, or the normal send error. A rejected
+ * attempt leaves no new routing transaction. Success is local admission. */
+FLOWMQ_C_API int flowmq_router_try_send(flowmq_socket_t *socket,
+    const void *identity, size_t identity_size, const void *data, size_t size);
 
 /**
  * Admit one canonical non-empty Salts Core slice through the TCP or TLS

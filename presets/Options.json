@@ -1,65 +1,63 @@
 {
-    "version": 6,
-    "configurePresets": [
-        {
-            "name": "default-options",
-            "hidden": true,
-            "cacheVariables": {
-                "ENABLE_CLANG_TIDY_DEFAULT": false,
-                "ENABLE_CPPCHECK_DEFAULT": false,
-                "ENABLE_TESTS": true
-            }
-        },
-        {
-            "name": "pkg-conan",
-            "hidden": true,
-            "cacheVariables": {
-                "CMAKE_TOOLCHAIN_FILE": "$env{CONAN_INSTALL_ROOT}/conan_toolchain.cmake"
-            }
-        },
-        {
-            "name": "pkg-vcpkg",
-            "hidden": true,
-            "cacheVariables": {
-                "VCPKG_MANIFEST_MODE": true
-            }
-        },
-        {
-            "name": "cppcheck",
-            "hidden": true,
-            "cacheVariables": {
-                "CMAKE_CXX_CPPCHECK": "cppcheck;--inline-suppr"
-            }
-        },
-        {
-            "name": "clang-tidy",
-            "hidden": true,
-            "cacheVariables": {
-                "CMAKE_CXX_CLANG_TIDY": "clang-tidy;--header-filter=^${sourceDir}/"
-            }
-        },
-        {
-            "name": "developer-mode",
-            "hidden": true,
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug",
-                "ENABLE_SANITIZER_ADDRESS": true,
-                "ENABLE_TESTS": true
-            },
-            "inherits": [
-                "default-options"
-            ]
-        },
-        {
-            "name": "release-mode",
-            "hidden": true,
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release",
-                "ENABLE_TESTS": false
-            },
-            "inherits": [
-                "default-options"
-            ]
-        }
-    ]
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "default-options",
+      "hidden": true,
+      "cacheVariables": {
+        "BUILD_TESTS": "OFF",
+        "ENABLE_SANITIZER_ADDRESS": "OFF",
+        "ENABLE_SANITIZER_UNDEFINED": "OFF",
+        "ENABLE_SANITIZER_THREAD": "OFF"
+      }
+    },
+    {
+      "name": "developer-mode",
+      "hidden": true,
+      "inherits": [
+        "default-options"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "BUILD_TESTS": "ON"
+      },
+      "environment": {
+        "VCPKG_CONFIGURATION_SUBDIR": "debug/"
+      }
+    },
+    {
+      "name": "release-mode",
+      "hidden": true,
+      "inherits": [
+        "default-options"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      },
+      "environment": {
+        "VCPKG_CONFIGURATION_SUBDIR": ""
+      }
+    },
+    {
+      "name": "asan-ubsan-mode",
+      "hidden": true,
+      "inherits": [
+        "developer-mode"
+      ],
+      "cacheVariables": {
+        "ENABLE_SANITIZER_ADDRESS": "ON",
+        "ENABLE_SANITIZER_UNDEFINED": "ON"
+      }
+    },
+    {
+      "name": "tsan-mode",
+      "hidden": true,
+      "inherits": [
+        "developer-mode"
+      ],
+      "cacheVariables": {
+        "ENABLE_SANITIZER_THREAD": "ON"
+      }
+    }
+  ]
 }
